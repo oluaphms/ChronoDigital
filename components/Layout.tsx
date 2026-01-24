@@ -146,7 +146,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
              >
                 <Menu size={24} />
              </button>
-             <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">Chronos</span>
+             <span className="text-lg font-bold text-indigo-600 dark:text-indigo-400">SmartPonto</span>
           </div>
           
           <div className="hidden lg:flex flex-1 max-w-md">

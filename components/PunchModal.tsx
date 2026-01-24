@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { LogType, PunchMethod, User, Company } from '../types';
 import { Camera, MapPin, Keyboard, X, Check, AlertTriangle, ShieldCheck, RefreshCw, Settings2, HelpCircle, Loader2, AlertCircle } from 'lucide-react';
 import { Button, LoadingState, Badge } from './UI';
@@ -73,16 +73,45 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
 
   const startCamera = async () => {
     setError(null);
+    setIsCapturing(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } 
+        video: { 
+          facingMode: 'user', 
+          width: { ideal: 640 }, 
+          height: { ideal: 640 } 
+        } 
       });
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        setIsCapturing(true);
+        
+        // Aguardar o vídeo estar pronto antes de marcar como capturando
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play()
+              .then(() => {
+                setIsCapturing(true);
+                setError(null);
+              })
+              .catch((err) => {
+                console.error('Erro ao reproduzir vídeo:', err);
+                setError("Erro ao iniciar a câmera. Tente novamente.");
+                setIsCapturing(false);
+              });
+          }
+        };
       }
-    } catch (err) {
-      setError("Câmera bloqueada. Permita o acesso para realizar a biometria.");
+    } catch (err: any) {
+      console.error('Erro ao acessar câmera:', err);
+      setIsCapturing(false);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setError("Câmera bloqueada. Permita o acesso para realizar a biometria.");
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setError("Nenhuma câmera encontrada. Verifique se há uma câmera conectada.");
+      } else {
+        setError("Erro ao acessar a câmera. Verifique as permissões e tente novamente.");
+      }
       setShowTroubleshoot(true);
     }
   };
@@ -97,7 +126,14 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
 
   useEffect(() => {
     if (method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
-      startCamera();
+      // Pequeno delay para garantir que o componente está montado
+      const timer = setTimeout(() => {
+        startCamera();
+      }, 100);
+      return () => {
+        clearTimeout(timer);
+        stopCamera();
+      };
     } else {
       stopCamera();
     }
@@ -105,17 +141,49 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
   }, [method, photo, showTroubleshoot]);
 
   const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const context = canvasRef.current.getContext('2d');
-      if (context) {
-        canvasRef.current.width = videoRef.current.videoWidth;
-        canvasRef.current.height = videoRef.current.videoHeight;
-        context.drawImage(videoRef.current, 0, 0);
-        const data = canvasRef.current.toDataURL('image/jpeg', 0.8);
-        setPhoto(data);
-        stopCamera();
-        setError(null);
+    try {
+      if (!videoRef.current || !canvasRef.current) {
+        setError("Câmera não está pronta. Aguarde um momento e tente novamente.");
+        return;
       }
+
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+
+      // Verificar se o vídeo está pronto e tem dimensões válidas
+      if (video.readyState !== video.HAVE_ENOUGH_DATA || video.videoWidth === 0 || video.videoHeight === 0) {
+        setError("Aguarde a câmera inicializar completamente.");
+        return;
+      }
+
+      const context = canvas.getContext('2d');
+      if (!context) {
+        setError("Erro ao acessar o canvas. Tente novamente.");
+        return;
+      }
+
+      // Definir dimensões do canvas baseado no vídeo
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Capturar frame do vídeo
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Converter para base64
+      const data = canvas.toDataURL('image/jpeg', 0.8);
+      
+      if (!data || data.length < 100) {
+        setError("Erro ao capturar foto. Tente novamente.");
+        return;
+      }
+
+      // Salvar foto e parar câmera
+      setPhoto(data);
+      stopCamera();
+      setError(null);
+    } catch (err) {
+      console.error('Erro ao capturar foto:', err);
+      setError("Erro ao capturar foto. Verifique as permissões da câmera.");
     }
   };
 
@@ -235,11 +303,26 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
                     <div className="w-full h-full">
                       {!photo ? (
                         <>
-                          <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
+                          <video 
+                            ref={videoRef} 
+                            autoPlay 
+                            playsInline 
+                            className="w-full h-full object-cover scale-x-[-1]" 
+                            onLoadedMetadata={() => {
+                              // Garantir que o vídeo está pronto
+                              if (videoRef.current) {
+                                videoRef.current.play().catch(err => {
+                                  console.error('Erro ao reproduzir vídeo:', err);
+                                });
+                              }
+                            }}
+                          />
                           <button 
                             onClick={capturePhoto}
-                            className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105"
+                            disabled={!isCapturing || !videoRef.current}
+                            className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                             aria-label="Capturar foto"
+                            type="button"
                           >
                             <div className="w-16 h-16 border-[6px] border-indigo-600 rounded-full group-hover:scale-110 transition-transform flex items-center justify-center">
                               <Camera size={24} className="text-indigo-600" />
