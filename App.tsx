@@ -134,35 +134,101 @@ const AppMain: React.FC = () => {
   const { records, isLoading: isPunching, error, setError, addRecord } = useRecords(user?.id, user?.companyId);
 
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    let isMounted = true;
+    
     const initApp = async () => {
-      // Tentar obter usuário do Firebase Auth
-      const currentUser = await authService.getCurrentUser();
-      if (currentUser) {
-        setUser(currentUser);
-        const comp = await PontoService.getCompany(currentUser.companyId);
-        if (comp) setCompany(comp);
+      try {
+        // Timeout de segurança: máximo 5 segundos para inicializar
+        timeoutId = setTimeout(() => {
+          if (isMounted) {
+            console.warn('Initialization timeout - forcing app to load');
+            setIsInitialLoading(false);
+          }
+        }, 5000);
 
-        const hasSeenOnboarding = localStorage.getItem(`onboarding_${currentUser.id}`);
-        if (!hasSeenOnboarding) setShowOnboarding(true);
+        // Verificar se Supabase está configurado
+        if (!isSupabaseConfigured) {
+          console.warn('Supabase not configured - app will show login screen');
+          if (isMounted) {
+            clearTimeout(timeoutId);
+            setIsInitialLoading(false);
+          }
+          return;
+        }
+
+        // Tentar obter usuário do Supabase Auth com timeout
+        const userPromise = authService.getCurrentUser();
+        const timeoutPromise = new Promise<User | null>((resolve) => {
+          setTimeout(() => resolve(null), 3000);
+        });
+        
+        const currentUser = await Promise.race([userPromise, timeoutPromise]).catch((error) => {
+          console.error('Error getting current user:', error);
+          return null;
+        });
+        
+        if (isMounted && currentUser) {
+          setUser(currentUser);
+          try {
+            const comp = await Promise.race([
+              PontoService.getCompany(currentUser.companyId),
+              new Promise<Company | null>((resolve) => setTimeout(() => resolve(null), 2000))
+            ]).catch(() => null);
+            
+            if (comp && isMounted) setCompany(comp);
+          } catch (error) {
+            console.error('Error loading company:', error);
+          }
+
+          const hasSeenOnboarding = localStorage.getItem(`onboarding_${currentUser.id}`);
+          if (!hasSeenOnboarding && isMounted) setShowOnboarding(true);
+        }
+        
+        if (isMounted) {
+          clearTimeout(timeoutId);
+          setIsInitialLoading(false);
+        }
+      } catch (error) {
+        console.error('Error initializing app:', error);
+        if (isMounted) {
+          clearTimeout(timeoutId);
+          setIsInitialLoading(false);
+        }
       }
-      setIsInitialLoading(false);
     };
+    
     initApp();
     
-    // Observar mudanças no estado de autenticação
-    const unsubscribe = authService.onAuthStateChanged((user) => {
-      if (user) {
-        setUser(user);
-        PontoService.getCompany(user.companyId).then(comp => {
-          if (comp) setCompany(comp);
+    // Observar mudanças no estado de autenticação (apenas se Supabase configurado)
+    let unsubscribe: (() => void) | null = null;
+    if (isSupabaseConfigured) {
+      try {
+        unsubscribe = authService.onAuthStateChanged((user) => {
+          if (!isMounted) return;
+          
+          if (user) {
+            setUser(user);
+            PontoService.getCompany(user.companyId).then(comp => {
+              if (isMounted && comp) setCompany(comp);
+            }).catch(error => {
+              console.error('Error loading company in auth state change:', error);
+            });
+          } else {
+            setUser(null);
+            setCompany(null);
+          }
         });
-      } else {
-        setUser(null);
-        setCompany(null);
+      } catch (error) {
+        console.error('Error setting up auth state listener:', error);
       }
-    });
+    }
     
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      clearTimeout(timeoutId);
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   const fetchInsights = useCallback(async () => {
@@ -323,6 +389,16 @@ const AppMain: React.FC = () => {
   }, [theme]);
 
   if (isInitialLoading) {
+    // Timeout de segurança adicional no render
+    useEffect(() => {
+      const safetyTimeout = setTimeout(() => {
+        console.error('Safety timeout triggered - forcing app to load');
+        setIsInitialLoading(false);
+      }, 6000);
+      
+      return () => clearTimeout(safetyTimeout);
+    }, []);
+    
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><LoadingState message="Protegendo sua conexão..." /></div>;
   }
 

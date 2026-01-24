@@ -40,10 +40,19 @@ export const supabase = client;
 const stubAuth = {
   signIn: async () => notConfigured(),
   signUp: async () => notConfigured(),
-  signOut: async () => notConfigured(),
-  getUser: async () => null as any,
-  getSession: async () => null as any,
-  onAuthStateChange: (_cb: (event: string, session: any) => void) => () => {},
+  signOut: async () => {
+    // Não fazer nada se não configurado
+    console.warn('Supabase not configured - signOut ignored');
+  },
+  getUser: async () => {
+    // Retornar null imediatamente se não configurado
+    return Promise.resolve(null);
+  },
+  getSession: async () => Promise.resolve(null),
+  onAuthStateChange: (_cb: (event: string, session: any) => void) => {
+    // Retornar função no-op que não faz nada
+    return () => {};
+  },
   resetPassword: async () => notConfigured(),
   updatePassword: async () => notConfigured(),
   signInWithOAuth: async () => notConfigured(),

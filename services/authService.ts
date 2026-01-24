@@ -4,7 +4,7 @@
  * Gerencia autenticação de usuários usando Supabase Auth
  */
 
-import { auth, db } from './supabase';
+import { auth, db, isSupabaseConfigured } from './supabase';
 import { User } from '../types';
 
 export interface AuthResult {
@@ -264,13 +264,29 @@ class AuthService {
    */
   async getCurrentUser(): Promise<User | null> {
     try {
-      const supabaseUser = await auth.getUser();
+      // Verificar se Supabase está configurado antes de tentar
+      if (!isSupabaseConfigured) {
+        console.warn('Supabase not configured - returning null user');
+        return null;
+      }
+
+      // Timeout de segurança para evitar travamento
+      const getUserPromise = auth.getUser();
+      const timeoutPromise = new Promise<any>((resolve) => {
+        setTimeout(() => resolve(null), 3000);
+      });
+      
+      const supabaseUser = await Promise.race([getUserPromise, timeoutPromise]);
       
       if (!supabaseUser) {
         // Tentar recuperar do localStorage como fallback
         const saved = localStorage.getItem('current_user');
         if (saved) {
-          return JSON.parse(saved);
+          try {
+            return JSON.parse(saved);
+          } catch {
+            return null;
+          }
         }
         return null;
       }
@@ -281,7 +297,11 @@ class AuthService {
       // Tentar recuperar do localStorage como fallback
       const saved = localStorage.getItem('current_user');
       if (saved) {
-        return JSON.parse(saved);
+        try {
+          return JSON.parse(saved);
+        } catch {
+          return null;
+        }
       }
       return null;
     }
