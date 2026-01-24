@@ -39,6 +39,7 @@ import {
   Moon,
   Monitor,
   Camera,
+  Keyboard,
 } from 'lucide-react';
 
 // Lazy loading of complex views
@@ -101,6 +102,9 @@ const AppMain: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [insights, setInsights] = useState<{insight: string, score: number} | null>(null);
   const [punchType, setPunchType] = useState<LogType | null>(null);
+  const [showMethodSelection, setShowMethodSelection] = useState(false);
+  const [pendingPunchType, setPendingPunchType] = useState<LogType | null>(null);
+  const [selectedMethod, setSelectedMethod] = useState<PunchMethod | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -212,7 +216,16 @@ const AppMain: React.FC = () => {
 
   const handlePunchStart = (type: LogType) => {
     setError(null);
-    setPunchType(type);
+    setPendingPunchType(type);
+    setShowMethodSelection(true);
+  };
+
+  const handleMethodSelection = (method: 'photo' | 'manual') => {
+    setShowMethodSelection(false);
+    if (pendingPunchType) {
+      setSelectedMethod(method === 'photo' ? PunchMethod.PHOTO : PunchMethod.MANUAL);
+      setPunchType(pendingPunchType);
+    }
   };
 
   const onConfirmPunch = async (method: PunchMethod, data: { photo?: string, justification?: string, location?: any }) => {
@@ -564,7 +577,83 @@ const AppMain: React.FC = () => {
         {activeTab === 'settings' && <ProfileView user={user} />}
       </Suspense>
       
-      {punchType && <PunchModal user={user} type={punchType} onClose={() => setPunchType(null)} onConfirm={onConfirmPunch} />}
+      {/* Diálogo de seleção de método de registro */}
+      {showMethodSelection && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 border border-white/10">
+            <div className="p-10 text-center">
+              <div className="w-20 h-20 bg-indigo-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Camera size={40} className="text-white" />
+              </div>
+              <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-2">
+                Como deseja registrar?
+              </h3>
+              <p className="text-slate-600 dark:text-slate-400 text-sm mb-8">
+                Escolha o método de validação para seu registro de ponto
+              </p>
+              
+              <div className="space-y-4">
+                <button
+                  onClick={() => {
+                    setShowMethodSelection(false);
+                    if (pendingPunchType) {
+                      setPunchType(pendingPunchType);
+                    }
+                  }}
+                  className="w-full p-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-600/20 active:scale-95"
+                >
+                  <Camera size={24} />
+                  Registro por Foto
+                </button>
+                
+                <button
+                  onClick={() => {
+                    setShowMethodSelection(false);
+                    if (pendingPunchType) {
+                      setPunchType(pendingPunchType);
+                      // O modal já tem a opção manual, vamos garantir que ela apareça
+                    }
+                  }}
+                  className="w-full p-6 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all border-2 border-slate-200 dark:border-slate-700 active:scale-95"
+                >
+                  <Keyboard size={24} />
+                  Ponto Manual
+                </button>
+              </div>
+              
+              <button
+                onClick={() => {
+                  setShowMethodSelection(false);
+                  setPendingPunchType(null);
+                  setSelectedMethod(null);
+                }}
+                className="mt-6 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 text-sm font-bold transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {punchType && (
+        <PunchModal 
+          user={user} 
+          type={punchType} 
+          initialMethod={selectedMethod || undefined}
+          onClose={() => {
+            setPunchType(null);
+            setPendingPunchType(null);
+            setSelectedMethod(null);
+          }} 
+          onConfirm={async (method, data) => {
+            await onConfirmPunch(method, data);
+            setPunchType(null);
+            setPendingPunchType(null);
+            setSelectedMethod(null);
+          }} 
+        />
+      )}
     </Layout>
   );
 };

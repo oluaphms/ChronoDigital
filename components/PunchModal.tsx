@@ -10,11 +10,12 @@ interface PunchModalProps {
   type: LogType;
   onClose: () => void;
   onConfirm: (method: PunchMethod, data: { photo?: string, justification?: string, location?: any }) => void;
+  initialMethod?: PunchMethod;
 }
 
-const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm }) => {
+const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm, initialMethod }) => {
   const [company, setCompany] = useState<Company | null>(null);
-  const [method, setMethod] = useState<PunchMethod>(PunchMethod.PHOTO);
+  const [method, setMethod] = useState<PunchMethod>(initialMethod || PunchMethod.PHOTO);
   const [photo, setPhoto] = useState<string | null>(null);
   const [justification, setJustification] = useState('');
   const [location, setLocation] = useState<any>(null);
@@ -31,15 +32,18 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
     PontoService.getCompany(user.companyId).then(comp => {
       if (comp) {
         setCompany(comp);
-        // Prioritize PHOTO method if mandatory, otherwise default to GPS for convenience
-        if (comp.settings.requirePhoto) {
+        // Se houver método inicial definido, usar ele
+        if (initialMethod) {
+          setMethod(initialMethod);
+        } else if (comp.settings.requirePhoto) {
+          // Prioritize PHOTO method if mandatory, otherwise default to GPS for convenience
           setMethod(PunchMethod.PHOTO);
         } else {
           setMethod(PunchMethod.GPS);
         }
       }
     });
-  }, [user.companyId]);
+  }, [user.companyId, initialMethod]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
