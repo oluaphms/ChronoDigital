@@ -54,6 +54,7 @@ const realAuth = configured
       signIn: async (email: string, password: string) => {
         const { data, error } = await client!.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        if (!data) throw new Error('Erro ao fazer login: dados não retornados');
         return data;
       },
       signUp: async (email: string, password: string, metadata?: any) => {
@@ -63,6 +64,7 @@ const realAuth = configured
           options: { data: metadata },
         });
         if (error) throw error;
+        if (!data) throw new Error('Erro ao criar conta: dados não retornados');
         return data;
       },
       signOut: async () => {

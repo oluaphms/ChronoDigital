@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { LogType, PunchMethod, User, Company } from '../types';
-import { Camera, MapPin, Keyboard, X, Check, AlertTriangle, ShieldCheck, RefreshCw, Settings2, HelpCircle, Loader2, CameraIcon, AlertCircle } from 'lucide-react';
+import { Camera, MapPin, Keyboard, X, Check, AlertTriangle, ShieldCheck, RefreshCw, Settings2, HelpCircle, Loader2, AlertCircle } from 'lucide-react';
 import { Button, LoadingState, Badge } from './UI';
 import { PontoService } from '../services/pontoService';
 
@@ -192,16 +192,16 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
         <div className="p-10">
           <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-[1.5rem] mb-8">
             {[
-              { id: PunchMethod.PHOTO, icon: Camera, label: company.settings.requirePhoto ? 'Biometria *' : 'Foto' },
-              { id: PunchMethod.GPS, icon: MapPin, label: 'GPS' },
-              ...(company.settings.allowManualPunch ? [{ id: PunchMethod.MANUAL, icon: Keyboard, label: 'Manual' }] : [])
+              { id: PunchMethod.PHOTO, icon: Camera, label: company.settings.requirePhoto ? 'Biometria *' : 'Foto', color: 'indigo' },
+              { id: PunchMethod.GPS, icon: MapPin, label: 'GPS', color: 'blue' },
+              ...(company.settings.allowManualPunch ? [{ id: PunchMethod.MANUAL, icon: Keyboard, label: 'Manual', color: 'slate' }] : [])
             ].map((m) => (
               <button 
                 key={m.id}
                 onClick={() => { setMethod(m.id as PunchMethod); setError(null); }}
                 className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${method === m.id ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
               >
-                <m.icon size={16} /> {m.label}
+                <m.icon size={18} className={method === m.id ? 'text-indigo-600 dark:text-indigo-400' : ''} /> {m.label}
               </button>
             ))}
           </div>
@@ -220,12 +220,14 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
                   {/* Photo Requirement Nudge when in other tabs */}
                   {photoRequired && !isPhotoValid && method !== PunchMethod.PHOTO && (
                     <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-30 flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
-                        <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mb-4">
-                           <CameraIcon size={32} />
+                        <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                           <Camera size={32} />
                         </div>
-                        <p className="text-white font-black text-sm uppercase tracking-widest">Biometria Obrigatória</p>
-                        <p className="text-slate-400 text-xs mt-2 mb-6 leading-relaxed">Sua empresa exige validação facial para todo registro de ponto.</p>
-                        <Button onClick={() => setMethod(PunchMethod.PHOTO)} size="sm" className="rounded-xl px-8">Capturar Agora</Button>
+                        <p className="text-white font-black text-sm uppercase tracking-widest mb-2">Biometria Obrigatória</p>
+                        <p className="text-slate-400 text-xs mb-6 leading-relaxed">Sua empresa exige validação facial para todo registro de ponto.</p>
+                        <Button onClick={() => setMethod(PunchMethod.PHOTO)} size="sm" className="rounded-xl px-8 flex items-center gap-2">
+                          <Camera size={18} /> Capturar Foto Agora
+                        </Button>
                     </div>
                   )}
 
@@ -236,12 +238,15 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm 
                           <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
                           <button 
                             onClick={capturePhoto}
-                            className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group"
+                            className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105"
+                            aria-label="Capturar foto"
                           >
-                            <div className="w-16 h-16 border-[6px] border-indigo-600 rounded-full group-hover:scale-110 transition-transform"></div>
+                            <div className="w-16 h-16 border-[6px] border-indigo-600 rounded-full group-hover:scale-110 transition-transform flex items-center justify-center">
+                              <Camera size={24} className="text-indigo-600" />
+                            </div>
                           </button>
-                          <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black text-white uppercase tracking-widest pointer-events-none">
-                             Posicione seu rosto
+                          <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black text-white uppercase tracking-widest pointer-events-none flex items-center gap-2">
+                             <Camera size={12} /> Posicione seu rosto
                           </div>
                         </>
                       ) : (

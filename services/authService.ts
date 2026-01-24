@@ -56,7 +56,8 @@ class AuthService {
           preferences: {
             notifications: true,
             theme: 'light',
-            allowManualPunch: true
+            allowManualPunch: true,
+            language: 'pt-BR'
           }
         };
         
@@ -86,9 +87,11 @@ class AuthService {
    */
   async signInWithEmail(email: string, password: string): Promise<AuthResult> {
     try {
-      const { data, error } = await auth.signIn(email, password);
+      const data = await auth.signIn(email, password);
       
-      if (error) throw error;
+      if (!data || !data.user) {
+        return { user: null, error: 'Erro ao fazer login. Tente novamente.' };
+      }
       
       if (data.user) {
         const appUser = await this.supabaseUserToAppUser(data.user);
@@ -128,12 +131,14 @@ class AuthService {
     companyId: string
   ): Promise<AuthResult> {
     try {
-      const { data, error } = await auth.signUp(email, password, {
+      const data = await auth.signUp(email, password, {
         nome,
         company_id: companyId
       });
       
-      if (error) throw error;
+      if (!data || !data.user) {
+        return { user: null, error: 'Erro ao criar conta. Tente novamente.' };
+      }
       
       if (data.user) {
         // Criar usuário no banco de dados
@@ -150,7 +155,8 @@ class AuthService {
           preferences: {
             notifications: true,
             theme: 'light',
-            allowManualPunch: true
+            allowManualPunch: true,
+            language: 'pt-BR'
           }
         };
         
@@ -194,9 +200,7 @@ class AuthService {
    */
   async signInWithGoogle(): Promise<AuthResult> {
     try {
-      const { data, error } = await auth.signInWithOAuth('google');
-      
-      if (error) throw error;
+      const result = await auth.signInWithOAuth('google');
       
       // OAuth redireciona, então retornamos sucesso
       // O callback será tratado no componente
@@ -219,6 +223,17 @@ class AuthService {
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Alterar senha do usuário atual
+   */
+  async updatePassword(newPassword: string): Promise<void> {
+    try {
+      await auth.updatePassword(newPassword);
+    } catch (error: any) {
+      throw new Error(error.message || 'Erro ao alterar senha');
     }
   }
 

@@ -74,6 +74,33 @@ export const PontoService = {
     return company;
   },
 
+  async updateUserProfile(userId: string, data: { nome?: string; cargo?: string; preferences?: any }): Promise<void> {
+    try {
+      const updateData: any = {
+        updated_at: new Date().toISOString(),
+      };
+      
+      if (data.nome) updateData.nome = data.nome;
+      if (data.cargo) updateData.cargo = data.cargo;
+      if (data.preferences) updateData.preferences = data.preferences;
+      
+      await firestoreService.db.update('users', userId, updateData);
+      
+      // Atualizar cache local se existir
+      const stored = localStorage.getItem(`current_user`);
+      if (stored) {
+        const currentUser = JSON.parse(stored);
+        if (currentUser.id === userId) {
+          const updatedUser = { ...currentUser, ...data };
+          localStorage.setItem('current_user', JSON.stringify(updatedUser));
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar perfil:', error);
+      throw error;
+    }
+  },
+
   async updateCompanySettings(companyId: string, settings: Company['settings']): Promise<void> {
     const company = await this.getCompany(companyId);
     if (!company) throw new Error("Empresa não encontrada");

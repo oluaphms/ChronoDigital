@@ -12,12 +12,14 @@ import { useRecords } from './hooks/useRecords';
 import { authService } from './services/authService';
 import { isSupabaseConfigured } from './services/supabase';
 import { validateLogin } from './lib/validationSchemas';
+import ProfileView from './components/ProfileView';
 import {
   requestNotificationPermission,
   startReminderCheck,
   stopReminderCheck,
   getReminderConfig,
 } from './services/pushReminderService';
+import { ThemeService } from './services/themeService';
 import {
   Fingerprint,
   ShieldCheck,
@@ -33,6 +35,10 @@ import {
   ChevronRight,
   Settings,
   ExternalLink,
+  Sun,
+  Moon,
+  Monitor,
+  Camera,
 } from 'lucide-react';
 
 // Lazy loading of complex views
@@ -106,6 +112,20 @@ const AppMain: React.FC = () => {
   const [loginData, setLoginData] = useState({ identifier: '', password: '' });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  
+  // Theme State (para tela de login)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('smartponto_theme');
+      // Se for 'auto' ou não existir, converte para o tema do sistema
+      if (saved === 'auto' || !saved || (saved !== 'light' && saved !== 'dark')) {
+        const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        return systemTheme;
+      }
+      return saved as 'light' | 'dark';
+    }
+    return 'dark';
+  });
 
   const { records, isLoading: isPunching, error, setError, addRecord } = useRecords(user?.id, user?.companyId);
 
@@ -171,6 +191,24 @@ const AppMain: React.FC = () => {
     });
     return () => stopReminderCheck();
   }, [user?.id, user?.preferences?.notifications]);
+
+  // Theme effect (aplicar tema quando mudar)
+  useEffect(() => {
+    try {
+      // Aplicar tema diretamente (sem modo auto)
+      if (typeof window !== 'undefined') {
+        const root = document.documentElement;
+        if (theme === 'dark') {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+        localStorage.setItem('smartponto_theme', theme);
+      }
+    } catch (error) {
+      console.error('Erro ao aplicar tema:', error);
+    }
+  }, [theme]);
 
   const handlePunchStart = (type: LogType) => {
     setError(null);
@@ -253,73 +291,104 @@ const AppMain: React.FC = () => {
     setLoginData({ identifier: '', password: '' });
   };
 
+  // Theme functions (ANTES de qualquer return condicional)
+  const toggleTheme = useCallback(() => {
+    try {
+      const nextTheme = theme === 'light' ? 'dark' : 'light';
+      setTheme(nextTheme);
+    } catch (error) {
+      console.error('Erro ao alternar tema:', error);
+    }
+  }, [theme]);
+
+  const getThemeIcon = useCallback(() => {
+    return theme === 'light' ? <Sun size={20} /> : <Moon size={20} />;
+  }, [theme]);
+
+  const getThemeLabel = useCallback(() => {
+    return theme === 'light' ? 'Modo claro' : 'Modo escuro';
+  }, [theme]);
+
   if (isInitialLoading) {
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><LoadingState message="Protegendo sua conexão..." /></div>;
   }
 
   if (!user) {
+
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 overflow-hidden relative font-sans">
+      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-950 overflow-hidden relative font-sans transition-colors duration-300">
+        {/* Botão de modo escuro - canto superior direito */}
+        <button
+          onClick={toggleTheme}
+          className="absolute top-6 right-6 z-20 p-3 bg-slate-200 dark:bg-slate-900/10 hover:bg-slate-300 dark:hover:bg-slate-900/20 backdrop-blur-md rounded-xl border border-slate-300 dark:border-slate-800/50 transition-all group"
+          aria-label={getThemeLabel()}
+          title={getThemeLabel()}
+        >
+          <div className="text-slate-700 dark:text-white group-hover:scale-110 transition-transform">
+            {getThemeIcon()}
+          </div>
+        </button>
+
         {/* Decorative elements */}
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/10 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/10 rounded-full blur-[120px]"></div>
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/5 dark:bg-indigo-600/10 rounded-full blur-[120px]"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/5 dark:bg-blue-600/10 rounded-full blur-[120px]"></div>
 
         <div className="w-full max-w-md relative z-10">
           <div className="text-center mb-10">
             <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-600 rounded-3xl text-white shadow-2xl shadow-indigo-500/40 mb-6 animate-in zoom-in duration-700">
               <Fingerprint size={40} />
             </div>
-            <h1 className="text-4xl font-black text-white tracking-tight">Smart<span className="text-indigo-500">Ponto</span></h1>
-            <p className="text-slate-500 text-sm mt-2 font-medium">Gestão de Ponto de Nova Geração</p>
+            <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight transition-colors">Smart<span className="text-indigo-600 dark:text-indigo-500">Ponto</span></h1>
+            <p className="text-slate-600 dark:text-slate-500 text-sm mt-2 font-medium transition-colors">Gestão de Ponto de Nova Geração</p>
           </div>
 
-          <div className="bg-white/5 backdrop-blur-3xl p-2 rounded-[2.5rem] border border-white/10 shadow-2xl overflow-hidden">
+          <div className="bg-white dark:bg-slate-900/50 backdrop-blur-3xl p-2 rounded-[2.5rem] border border-slate-200 dark:border-slate-800/50 shadow-2xl overflow-hidden transition-colors">
             {loginStep === 'choice' ? (
               <div className="p-8 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <button 
                   onClick={() => { setLoginRole('employee'); setLoginStep('form'); }}
-                  className="w-full group p-6 bg-white/5 hover:bg-indigo-600 rounded-[2rem] border border-white/5 transition-all flex items-center justify-between text-left outline-none focus:ring-4 focus:ring-indigo-500/30"
+                  className="w-full group p-6 bg-slate-50 dark:bg-white/5 hover:bg-indigo-600 dark:hover:bg-indigo-600 rounded-[2rem] border border-slate-200 dark:border-white/5 transition-all flex items-center justify-between text-left outline-none focus:ring-4 focus:ring-indigo-500/30"
                 >
                   <div className="flex items-center gap-5">
-                    <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white group-hover:bg-white/20 transition-colors">
+                    <div className="w-12 h-12 bg-indigo-100 dark:bg-white/10 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-white group-hover:bg-white/20 transition-colors">
                       <UserIcon size={24} />
                     </div>
                     <div>
-                      <p className="text-white font-bold text-lg">Acesso Funcionário</p>
-                      <p className="text-slate-400 text-xs group-hover:text-indigo-100 transition-colors">Bater ponto e ver histórico</p>
+                      <p className="text-slate-900 dark:text-white font-bold text-lg transition-colors group-hover:text-white">Acesso Funcionário</p>
+                      <p className="text-slate-600 dark:text-slate-400 text-xs group-hover:text-indigo-100 dark:group-hover:text-indigo-100 transition-colors">Bater ponto e ver histórico</p>
                     </div>
                   </div>
-                  <ChevronRight size={20} className="text-slate-600 group-hover:text-white transition-colors" />
+                  <ChevronRight size={20} className="text-slate-400 dark:text-slate-600 group-hover:text-white transition-colors" />
                 </button>
 
                 <button 
                   onClick={() => { setLoginRole('admin'); setLoginStep('form'); }}
-                  className="w-full group p-6 bg-white/5 hover:bg-slate-800 rounded-[2rem] border border-white/5 transition-all flex items-center justify-between text-left outline-none focus:ring-4 focus:ring-slate-500/30"
+                  className="w-full group p-6 bg-slate-50 dark:bg-white/5 hover:bg-slate-800 dark:hover:bg-slate-800 rounded-[2rem] border border-slate-200 dark:border-white/5 transition-all flex items-center justify-between text-left outline-none focus:ring-4 focus:ring-slate-500/30"
                 >
                   <div className="flex items-center gap-5">
-                    <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center text-white group-hover:bg-white/20 transition-colors">
+                    <div className="w-12 h-12 bg-slate-100 dark:bg-white/10 rounded-2xl flex items-center justify-center text-slate-700 dark:text-white group-hover:bg-white/20 transition-colors">
                       <ShieldCheck size={24} />
                     </div>
                     <div>
-                      <p className="text-white font-bold text-lg">Painel Gestor</p>
-                      <p className="text-slate-400 text-xs group-hover:text-slate-200 transition-colors">Gestão de equipe e relatórios</p>
+                      <p className="text-slate-900 dark:text-white font-bold text-lg transition-colors group-hover:text-white">Painel Gestor</p>
+                      <p className="text-slate-600 dark:text-slate-400 text-xs group-hover:text-slate-200 dark:group-hover:text-slate-200 transition-colors">Gestão de equipe e relatórios</p>
                     </div>
                   </div>
-                  <ChevronRight size={20} className="text-slate-600 group-hover:text-white transition-colors" />
+                  <ChevronRight size={20} className="text-slate-400 dark:text-slate-600 group-hover:text-white transition-colors" />
                 </button>
               </div>
             ) : (
               <div className="p-8 animate-in fade-in slide-in-from-right-4 duration-500">
                 <button 
                   onClick={() => setLoginStep('choice')}
-                  className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-[10px] font-bold uppercase tracking-widest mb-8"
+                  className="flex items-center gap-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors text-[10px] font-bold uppercase tracking-widest mb-8"
                 >
                   <ArrowLeft size={14} /> Voltar para seleção
                 </button>
 
                 <div className="mb-8">
-                  <h2 className="text-2xl font-bold text-white">Login</h2>
-                  <p className="text-slate-400 text-sm">Entre como {loginRole === 'admin' ? 'Administrador' : 'Colaborador'}</p>
+                  <h2 className="text-2xl font-bold text-slate-900 dark:text-white transition-colors">Login</h2>
+                  <p className="text-slate-600 dark:text-slate-400 text-sm transition-colors">Entre como {loginRole === 'admin' ? 'Administrador' : 'Colaborador'}</p>
                 </div>
 
                 <form onSubmit={handleLoginSubmit} className="space-y-6">
@@ -331,7 +400,7 @@ const AppMain: React.FC = () => {
                         placeholder="Nome de usuário ou Email" 
                         value={loginData.identifier}
                         onChange={e => setLoginData({...loginData, identifier: e.target.value})}
-                        className="w-full pl-12 pr-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
                     </div>
                     <div className="relative">
@@ -341,7 +410,7 @@ const AppMain: React.FC = () => {
                         placeholder="Senha de acesso" 
                         value={loginData.password}
                         onChange={e => setLoginData({...loginData, password: e.target.value})}
-                        className="w-full pl-12 pr-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
                     </div>
                   </div>
@@ -364,7 +433,7 @@ const AppMain: React.FC = () => {
             )}
           </div>
           
-          <p className="text-center text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-8">
+          <p className="text-center text-slate-500 dark:text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-8 transition-colors">
             © 2024 SmartPonto Software • v1.4.0
           </p>
         </div>
@@ -408,12 +477,24 @@ const AppMain: React.FC = () => {
                   <Clock />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-14">
                      {!isWorking ? (
-                       <Button loading={isPunching} onClick={() => handlePunchStart(LogType.IN)} size="xl">Entrada</Button>
+                       <Button loading={isPunching} onClick={() => handlePunchStart(LogType.IN)} size="xl" className="flex items-center justify-center gap-3">
+                         <Camera size={24} /> Entrada
+                       </Button>
                      ) : (
-                       <Button loading={isPunching} onClick={() => handlePunchStart(LogType.OUT)} variant="secondary" size="xl">Saída</Button>
+                       <Button loading={isPunching} onClick={() => handlePunchStart(LogType.OUT)} variant="secondary" size="xl" className="flex items-center justify-center gap-3">
+                         <Camera size={24} /> Saída
+                       </Button>
                      )}
-                     <Button disabled={isPunching || !isWorking} onClick={() => handlePunchStart(LogType.BREAK)} variant="outline" size="xl">Pausa</Button>
+                     <Button disabled={isPunching || !isWorking} onClick={() => handlePunchStart(LogType.BREAK)} variant="outline" size="xl" className="flex items-center justify-center gap-3">
+                       <Camera size={24} /> Pausa
+                     </Button>
                   </div>
+                  {company?.settings.requirePhoto && (
+                    <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                      <Camera size={16} className="text-indigo-600 dark:text-indigo-400" />
+                      <span className="font-bold">Foto obrigatória para registro</span>
+                    </div>
+                  )}
                   {error && (
                     <div className="mt-10 p-5 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex items-center gap-4 text-red-600 text-sm font-bold animate-in shake duration-500">
                       <AlertTriangle size={20} /> <span>{error}</span>
@@ -479,6 +560,8 @@ const AppMain: React.FC = () => {
         )}
 
         {activeTab === 'admin' && user.role === 'admin' && <AdminView admin={user} />}
+        
+        {activeTab === 'settings' && <ProfileView user={user} />}
       </Suspense>
       
       {punchType && <PunchModal user={user} type={punchType} onClose={() => setPunchType(null)} onConfirm={onConfirmPunch} />}

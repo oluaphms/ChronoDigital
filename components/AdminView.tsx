@@ -3,7 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { PontoService } from '../services/pontoService';
 import { LoggingService } from '../services/loggingService';
 import { PermissionService } from '../services/permissionService';
-import { EmployeeSummary, TimeRecord, User, PunchMethod, LogType, LogSeverity, AuditLog } from '../types';
+import { adminUserService } from '../services/adminUserService';
+import { EmployeeSummary, TimeRecord, User, PunchMethod, LogType, LogSeverity, AuditLog, UserRole } from '../types';
 import { Button, Input, Badge, LoadingState } from './UI';
 import ReportsView from './ReportsView';
 import AnalyticsView from './AnalyticsView';
@@ -39,7 +40,11 @@ import {
   Radio,
   BellRing,
   AlertTriangle,
-  Map // Import Map icon
+  Map, // Import Map icon
+  UserPlus,
+  Upload,
+  Download,
+  FileSpreadsheet
 } from 'lucide-react';
 
 interface AdminViewProps {
@@ -63,6 +68,24 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
 
   const notifyTimeoutRef = useRef<any>(null);
   const [criticalNotify, setCriticalNotify] = useState<AuditLog | null>(null);
+
+  // Cadastro de funcionários
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    nome: '',
+    email: '',
+    password: '',
+    cargo: '',
+    departmentId: '',
+    role: 'employee' as UserRole,
+  });
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createSuccess, setCreateSuccess] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
 
   useEffect(() => {
     const unsubscribe = LoggingService.subscribe((log) => {
@@ -115,6 +138,67 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
     PontoService.getAllEmployees(admin.companyId).then(setEmployees);
     PontoService.getCompany(admin.companyId).then(setCompany);
   }, [admin.companyId]);
+
+  const handleCreateEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCreating(true);
+    setCreateError(null);
+    setCreateSuccess(false);
+
+    try {
+      const result = await adminUserService.createEmployee(admin, createForm);
+      if (result.success) {
+        setCreateSuccess(true);
+        setCreateForm({
+          nome: '',
+          email: '',
+          password: '',
+          cargo: '',
+          departmentId: '',
+          role: 'employee',
+        });
+        // Recarregar lista de funcionários
+        PontoService.getAllEmployees(admin.companyId).then(setEmployees);
+        setTimeout(() => {
+          setShowCreateModal(false);
+          setCreateSuccess(false);
+        }, 2000);
+      } else {
+        setCreateError(result.error || 'Erro ao criar funcionário');
+      }
+    } catch (error: any) {
+      setCreateError(error.message || 'Erro ao criar funcionário');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleImportEmployees = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFile) return;
+
+    setIsImporting(true);
+    setImportResult(null);
+
+    try {
+      const result = await adminUserService.importEmployees(admin, importFile);
+      setImportResult(result);
+      // Recarregar lista de funcionários
+      PontoService.getAllEmployees(admin.companyId).then(setEmployees);
+    } catch (error: any) {
+      setImportResult({
+        total: 0,
+        success: 0,
+        errors: [{ row: 0, email: '', error: error.message || 'Erro ao importar planilha' }],
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    await adminUserService.downloadTemplate();
+  };
 
   const handleSelectEmployee = async (emp: EmployeeSummary) => {
     setSelectedEmployee(emp);
@@ -235,6 +319,20 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
       {adminTab === 'employees' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           <div className="lg:col-span-4 space-y-4">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold text-sm transition-all shadow-lg shadow-indigo-600/20"
+              >
+                <UserPlus size={18} /> Cadastrar
+              </button>
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 rounded-2xl font-bold text-sm transition-all shadow-lg"
+              >
+                <Upload size={18} /> Importar
+              </button>
+            </div>
             <div className="relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
               <input type="text" placeholder="Buscar colaborador..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-11 pr-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-100 transition-all dark:text-white" />
@@ -344,6 +442,188 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
               <header className="px-10 py-8 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between"><h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none">Ajustar Registro</h3><button onClick={() => setAdjustingRecord(null)} className="p-3 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all"><X size={24}/></button></header>
               <form onSubmit={handleConfirmAdjustment} className="p-10 space-y-8"><Input label="Novo Horário" type="time" value={adjustmentForm.time} onChange={e => setAdjustmentForm({...adjustmentForm, time: e.target.value})} /><textarea required value={adjustmentForm.reason} onChange={e => setAdjustmentForm({...adjustmentForm, reason: e.target.value})} placeholder="Motivo do ajuste..." className="w-full p-6 bg-slate-50 dark:bg-slate-800 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-indigo-100 h-32 resize-none" /><div className="flex gap-4"><Button onClick={() => setAdjustingRecord(null)} type="button" variant="outline" className="flex-1 h-16">Cancelar</Button><Button loading={isAdjusting} type="submit" className="flex-2 h-16">Confirmar Ajuste</Button></div></form>
            </div>
+        </div>
+      )}
+
+      {/* Modal Cadastro Manual */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[3rem] shadow-2xl overflow-hidden border border-white/10 animate-in zoom-in-95 duration-300 max-h-[90vh] overflow-y-auto">
+            <header className="px-10 py-8 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none">Cadastrar Funcionário</h3>
+              <button onClick={() => { setShowCreateModal(false); setCreateError(null); setCreateSuccess(false); }} className="p-3 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all">
+                <X size={24} />
+              </button>
+            </header>
+            <form onSubmit={handleCreateEmployee} className="p-10 space-y-6">
+              {createSuccess && (
+                <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center gap-3 text-green-600 dark:text-green-400 text-sm font-bold">
+                  <CheckCircle2 size={20} /> Funcionário criado com sucesso!
+                </div>
+              )}
+              {createError && (
+                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-600 dark:text-red-400 text-sm font-bold">
+                  <AlertTriangle size={20} /> {createError}
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Nome Completo *</label>
+                  <Input
+                    type="text"
+                    value={createForm.nome}
+                    onChange={e => setCreateForm({...createForm, nome: e.target.value})}
+                    required
+                    placeholder="João Silva"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Email *</label>
+                  <Input
+                    type="email"
+                    value={createForm.email}
+                    onChange={e => setCreateForm({...createForm, email: e.target.value})}
+                    required
+                    placeholder="joao@empresa.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Senha *</label>
+                  <Input
+                    type="password"
+                    value={createForm.password}
+                    onChange={e => setCreateForm({...createForm, password: e.target.value})}
+                    required
+                    placeholder="Mínimo 6 caracteres"
+                    minLength={6}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Cargo *</label>
+                  <Input
+                    type="text"
+                    value={createForm.cargo}
+                    onChange={e => setCreateForm({...createForm, cargo: e.target.value})}
+                    required
+                    placeholder="Desenvolvedor"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Departamento</label>
+                  <Input
+                    type="text"
+                    value={createForm.departmentId}
+                    onChange={e => setCreateForm({...createForm, departmentId: e.target.value})}
+                    placeholder="TI (opcional)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Role</label>
+                  <select
+                    value={createForm.role}
+                    onChange={e => setCreateForm({...createForm, role: e.target.value as UserRole})}
+                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
+                  >
+                    <option value="employee">Funcionário</option>
+                    <option value="supervisor">Supervisor</option>
+                    <option value="hr">RH</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-4 pt-4">
+                <Button onClick={() => { setShowCreateModal(false); setCreateError(null); setCreateSuccess(false); }} type="button" variant="outline" className="flex-1 h-14">
+                  Cancelar
+                </Button>
+                <Button loading={isCreating} type="submit" className="flex-2 h-14">
+                  Criar Funcionário
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Importação */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-[3rem] shadow-2xl overflow-hidden border border-white/10 animate-in zoom-in-95 duration-300 max-h-[90vh] overflow-y-auto">
+            <header className="px-10 py-8 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight leading-none">Importar Funcionários</h3>
+              <button onClick={() => { setShowImportModal(false); setImportFile(null); setImportResult(null); }} className="p-3 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-all">
+                <X size={24} />
+              </button>
+            </header>
+            <form onSubmit={handleImportEmployees} className="p-10 space-y-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Planilha (Excel ou CSV) *</label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="file"
+                      accept=".xlsx,.csv"
+                      onChange={e => setImportFile(e.target.files?.[0] || null)}
+                      required
+                      className="block w-full text-sm text-slate-500 dark:text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-2xl file:border-0 file:text-sm file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-200 dark:border-indigo-800">
+                  <div className="flex items-start gap-3">
+                    <FileSpreadsheet className="text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" size={20} />
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">Formato da Planilha</p>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">
+                        Colunas obrigatórias: <strong>Nome</strong>, <strong>Email</strong>, <strong>Senha</strong>, <strong>Cargo</strong>
+                      </p>
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        Colunas opcionais: <strong>Departamento</strong>, <strong>Role</strong> (employee, supervisor, hr, admin)
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadTemplate}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-sm transition-all"
+                >
+                  <Download size={18} /> Baixar Modelo de Planilha
+                </button>
+              </div>
+
+              {importResult && (
+                <div className="space-y-4">
+                  <div className={`p-4 rounded-xl border ${importResult.errors.length === 0 ? 'bg-green-500/10 border-green-500/20' : 'bg-amber-500/10 border-amber-500/20'}`}>
+                    <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">
+                      Importação concluída: {importResult.success} de {importResult.total} funcionários criados
+                    </p>
+                    {importResult.errors.length > 0 && (
+                      <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+                        <p className="text-xs font-bold text-amber-600 dark:text-amber-400">Erros encontrados:</p>
+                        {importResult.errors.slice(0, 10).map((err: any, idx: number) => (
+                          <p key={idx} className="text-xs text-slate-600 dark:text-slate-400">
+                            Linha {err.row} ({err.email}): {err.error}
+                          </p>
+                        ))}
+                        {importResult.errors.length > 10 && (
+                          <p className="text-xs text-slate-500 dark:text-slate-500">... e mais {importResult.errors.length - 10} erros</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-4 pt-4">
+                <Button onClick={() => { setShowImportModal(false); setImportFile(null); setImportResult(null); }} type="button" variant="outline" className="flex-1 h-14">
+                  Fechar
+                </Button>
+                <Button loading={isImporting} type="submit" disabled={!importFile} className="flex-2 h-14">
+                  Importar Funcionários
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
