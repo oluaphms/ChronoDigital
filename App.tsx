@@ -134,7 +134,7 @@ const AppMain: React.FC = () => {
   const { records, isLoading: isPunching, error, setError, addRecord } = useRecords(user?.id, user?.companyId);
 
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout>;
     let isMounted = true;
     
     const initApp = async () => {

@@ -33,8 +33,9 @@ export default defineConfig(({ mode }) => {
       publicDir: 'public',
       build: {
         outDir: 'dist',
-        sourcemap: mode === 'development',
+        sourcemap: false,
         emptyOutDir: true,
+        minify: 'esbuild',
         rollupOptions: {
           output: {
             entryFileNames: 'assets/[name]-[hash].js',
