@@ -4,8 +4,8 @@
  * Gerencia cache offline e sincronização em background
  */
 
-const CACHE_NAME = 'smartponto-v1';
-const RUNTIME_CACHE = 'smartponto-runtime-v1';
+const CACHE_NAME = 'smartponto-v2';
+const RUNTIME_CACHE = 'smartponto-runtime-v2';
 
 // Assets para cache estático
 const STATIC_ASSETS = [
@@ -24,7 +24,15 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME)
       .then((cache) => {
         console.log('[SW] Caching static assets');
-        return cache.addAll(STATIC_ASSETS);
+        // Tentar adicionar assets, mas não falhar se algum não existir
+        return Promise.allSettled(
+          STATIC_ASSETS.map(asset => 
+            cache.add(asset).catch(err => {
+              console.warn(`[SW] Failed to cache ${asset}:`, err);
+              return null;
+            })
+          )
+        );
       })
       .then(() => self.skipWaiting())
   );
@@ -79,6 +87,11 @@ self.addEventListener('fetch', (event) => {
           .then((response) => {
             // Não cachear se não for sucesso
             if (!response || response.status !== 200 || response.type !== 'basic') {
+              // Se for 404, não cachear e não propagar erro
+              if (response && response.status === 404) {
+                console.warn(`[SW] 404 for ${request.url}`);
+                return response;
+              }
               return response;
             }
 
@@ -89,23 +102,30 @@ self.addEventListener('fetch', (event) => {
             if (STATIC_ASSETS.some(asset => url.pathname.includes(asset))) {
               caches.open(CACHE_NAME)
                 .then((cache) => {
-                  cache.put(request, responseToCache);
+                  cache.put(request, responseToCache).catch(err => {
+                    console.warn(`[SW] Failed to cache ${request.url}:`, err);
+                  });
                 });
             } else {
               // Cachear outras requisições no runtime cache
               caches.open(RUNTIME_CACHE)
                 .then((cache) => {
-                  cache.put(request, responseToCache);
+                  cache.put(request, responseToCache).catch(err => {
+                    console.warn(`[SW] Failed to cache ${request.url}:`, err);
+                  });
                 });
             }
 
             return response;
           })
-          .catch(() => {
+          .catch((error) => {
+            console.warn(`[SW] Fetch failed for ${request.url}:`, error);
             // Se offline e for uma página, retornar index.html
             if (request.mode === 'navigate') {
               return caches.match('/index.html');
             }
+            // Para outros recursos, retornar erro silenciosamente
+            return new Response('', { status: 404, statusText: 'Not Found' });
           });
       })
   );
@@ -136,7 +156,7 @@ async function syncPunchRecords() {
         // await fetch('/api/punch', { method: 'POST', body: JSON.stringify(record) });
         
         // Remover do array de pendentes após sucesso
-        const updated = pendingRecords.filter((r: any) => r.id !== record.id);
+        const updated = pendingRecords.filter((r) => r.id !== record.id);
         localStorage.setItem('pending_punch_records', JSON.stringify(updated));
       } catch (error) {
         console.error('[SW] Erro ao sincronizar registro:', error);

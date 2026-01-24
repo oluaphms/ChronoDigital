@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug 404 - SmartPonto</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .error { color: red; }
+        .success { color: green; }
+        .warning { color: orange; }
+    </style>
+</head>
+<body>
+    <h1>Debug 404 - SmartPonto</h1>
+    <div id="results"></div>
+    
+    <script>
+        const resources = [
+            '/',
+            '/index.html',
+            '/index.tsx',
+            '/sw.js',
+            '/manifest.json',
+            '/favicon.ico',
+            '/favicon.svg',
+            '/1024.png',
+            '/index.css'
+        ];
+        
+        const results = document.getElementById('results');
+        
+        async function checkResource(url) {
+            try {
+                const response = await fetch(url, { method: 'HEAD' });
+                const status = response.status;
+                const div = document.createElement('div');
+                
+                if (status === 200 || status === 304) {
+                    div.className = 'success';
+                    div.textContent = `✅ ${url} - ${status}`;
+                } else if (status === 404) {
+                    div.className = 'error';
+                    div.textContent = `❌ ${url} - 404 NOT FOUND`;
+                } else {
+                    div.className = 'warning';
+                    div.textContent = `⚠️ ${url} - ${status}`;
+                }
+                
+                results.appendChild(div);
+            } catch (error) {
+                const div = document.createElement('div');
+                div.className = 'error';
+                div.textContent = `❌ ${url} - ERROR: ${error.message}`;
+                results.appendChild(div);
+            }
+        }
+        
+        // Verificar todos os recursos
+        resources.forEach(url => checkResource(url));
+        
+        // Monitorar requisições em tempo real
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            const url = args[0];
+            const result = originalFetch.apply(this, args);
+            
+            result.then(response => {
+                if (response.status === 404) {
+                    const div = document.createElement('div');
+                    div.className = 'error';
+                    div.textContent = `🔍 404 detectado: ${url}`;
+                    div.style.marginTop = '10px';
+                    results.appendChild(div);
+                }
+            }).catch(() => {});
+            
+            return result;
+        };
+        
+        console.log('Monitoramento de 404 ativado. Abra o console do navegador para mais detalhes.');
+    </script>
+</body>
+</html>
