@@ -2,6 +2,10 @@
    CHRONOS PREMIUM - Global Styles
    ============================================ */
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* Reset e Base */
 * {
   margin: 0;
