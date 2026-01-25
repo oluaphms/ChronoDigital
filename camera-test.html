@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Câmera</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        video {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border-radius: 10px;
+            background: #000;
+            margin: 20px 0;
+        }
+        button {
+            background: #4f46e5;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #4338ca;
+        }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+        .info {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #93c5fd;
+        }
+        #diagnostics {
+            background: #f3f4f6;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Teste de Câmera - Smart Ponto</h1>
+        
+        <div class="info status">
+            <strong>Informações do Navegador:</strong>
+            <div id="browserInfo"></div>
+        </div>
+
+        <video id="video" autoplay playsinline muted style="display: none;"></video>
+        
+        <div>
+            <button id="startBtn">Iniciar Câmera</button>
+            <button id="stopBtn" disabled>Parar Câmera</button>
+            <button id="captureBtn" disabled>Capturar Foto</button>
+            <button id="diagnoseBtn">Diagnóstico Completo</button>
+        </div>
+
+        <canvas id="canvas" style="display: none;"></canvas>
+        <img id="photo" style="display: none; width: 100%; max-width: 640px; border-radius: 10px; margin: 20px 0;">
+        
+        <div id="status"></div>
+        <div id="diagnostics" style="display: none;"></div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const photo = document.getElementById('photo');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const captureBtn = document.getElementById('captureBtn');
+        const diagnoseBtn = document.getElementById('diagnoseBtn');
+        const status = document.getElementById('status');
+        const diagnostics = document.getElementById('diagnostics');
+        const browserInfo = document.getElementById('browserInfo');
+
+        let stream = null;
+
+        // Mostrar informações do navegador
+        browserInfo.innerHTML = `
+            User Agent: ${navigator.userAgent}<br>
+            Protocolo: ${window.location.protocol}<br>
+            Hostname: ${window.location.hostname}<br>
+            HTTPS: ${window.location.protocol === 'https:' ? 'Sim' : 'Não'}<br>
+            getUserMedia disponível: ${!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) ? 'Sim' : 'Não'}
+        `;
+
+        function showStatus(message, type = 'info') {
+            status.innerHTML = `<div class="${type} status">${message}</div>`;
+        }
+
+        function showDiagnostics(data) {
+            diagnostics.textContent = JSON.stringify(data, null, 2);
+            diagnostics.style.display = 'block';
+        }
+
+        async function startCamera() {
+            try {
+                showStatus('Iniciando câmera...', 'info');
+                
+                // Verificar HTTPS
+                if (window.location.protocol !== 'https:' && 
+                    window.location.hostname !== 'localhost' && 
+                    window.location.hostname !== '127.0.0.1') {
+                    throw new Error('Acesso à câmera requer HTTPS em produção');
+                }
+
+                // Parar stream existente
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+
+                // Tentar obter stream com diferentes configurações
+                const constraints = [
+                    { video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } } },
+                    { video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 480 } } },
+                    { video: { facingMode: 'user' } },
+                    { video: true }
+                ];
+
+                let lastError = null;
+                for (const constraint of constraints) {
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia(constraint);
+                        showStatus(`Câmera iniciada com sucesso! Configuração: ${JSON.stringify(constraint)}`, 'success');
+                        break;
+                    } catch (err) {
+                        lastError = err;
+                        console.log(`Falha com configuração ${JSON.stringify(constraint)}:`, err);
+                    }
+                }
+
+                if (!stream) {
+                    throw lastError || new Error('Não foi possível acessar a câmera');
+                }
+
+                video.srcObject = stream;
+                video.style.display = 'block';
+                
+                video.onloadedmetadata = () => {
+                    video.play();
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    captureBtn.disabled = false;
+                };
+
+            } catch (error) {
+                console.error('Erro ao iniciar câmera:', error);
+                let errorMessage = 'Erro ao acessar a câmera: ';
+                
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMessage += 'Permissão negada. Verifique as configurações do navegador.';
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    errorMessage += 'Nenhuma câmera encontrada.';
+                } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                    errorMessage += 'Câmera já está em uso por outro aplicativo.';
+                } else {
+                    errorMessage += error.message;
+                }
+                
+                showStatus(errorMessage, 'error');
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            video.srcObject = null;
+            video.style.display = 'none';
+            photo.style.display = 'none';
+            
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            captureBtn.disabled = true;
+            
+            showStatus('Câmera parada', 'info');
+        }
+
+        function capturePhoto() {
+            if (!stream) {
+                showStatus('Câmera não está ativa', 'error');
+                return;
+            }
+
+            const context = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const data = canvas.toDataURL('image/jpeg', 0.85);
+            photo.src = data;
+            photo.style.display = 'block';
+            
+            showStatus(`Foto capturada com sucesso! Tamanho: ${data.length} bytes`, 'success');
+        }
+
+        async function diagnose() {
+            const diag = {
+                timestamp: new Date().toISOString(),
+                browser: {
+                    userAgent: navigator.userAgent,
+                    language: navigator.language,
+                    platform: navigator.platform,
+                    cookieEnabled: navigator.cookieEnabled,
+                    onLine: navigator.onLine
+                },
+                security: {
+                    protocol: window.location.protocol,
+                    hostname: window.location.hostname,
+                    port: window.location.port,
+                    href: window.location.href,
+                    isSecure: window.isSecureContext,
+                    isLocalhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                },
+                capabilities: {
+                    getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+                    permissions: !!(navigator.permissions && navigator.permissions.query),
+                    fullscreen: !!document.fullscreenEnabled,
+                    webgl: !!(() => {
+                        try {
+                            return !!window.WebGLRenderingContext;
+                        } catch(e) { return false; }
+                    })()
+                },
+                media: {
+                    streamActive: !!stream,
+                    videoElement: !!video,
+                    videoSrcObject: !!video.srcObject,
+                    videoReadyState: video.readyState,
+                    videoWidth: video.videoWidth,
+                    videoHeight: video.videoHeight,
+                    canvasElement: !!canvas
+                },
+                permissions: {}
+            };
+
+            // Tentar verificar permissões
+            try {
+                const cameraPermission = await navigator.permissions.query({ name: 'camera' });
+                diag.permissions.camera = cameraPermission.state;
+            } catch (e) {
+                diag.permissions.camera = 'unsupported';
+            }
+
+            try {
+                const geolocationPermission = await navigator.permissions.query({ name: 'geolocation' });
+                diag.permissions.geolocation = geolocationPermission.state;
+            } catch (e) {
+                diag.permissions.geolocation = 'unsupported';
+            }
+
+            // Tentar listar dispositivos
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                diag.devices = devices.map(device => ({
+                    kind: device.kind,
+                    label: device.label || 'Anônimo (permissão não concedida)',
+                    deviceId: device.deviceId
+                }));
+            } catch (e) {
+                diag.devices = `Erro: ${e.message}`;
+            }
+
+            showDiagnostics(diag);
+            showStatus('Diagnóstico completo! Verifique os detalhes abaixo.', 'info');
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', startCamera);
+        stopBtn.addEventListener('click', stopCamera);
+        captureBtn.addEventListener('click', capturePhoto);
+        diagnoseBtn.addEventListener('click', diagnose);
+
+        // Limpar ao sair da página
+        window.addEventListener('beforeunload', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        });
+    </script>
+</body>
+</html>

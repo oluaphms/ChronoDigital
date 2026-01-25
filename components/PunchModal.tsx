@@ -87,28 +87,64 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     }
 
     // Verificar se está em HTTPS (requerido para getUserMedia em produção)
-    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    const currentLocation = window.location;
+    if (currentLocation.protocol !== 'https:' && currentLocation.hostname !== 'localhost' && currentLocation.hostname !== '127.0.0.1') {
       setError("Acesso à câmera requer conexão segura (HTTPS). Certifique-se de estar usando HTTPS.");
       setShowTroubleshoot(true);
       return;
     }
+
+    // Aguardar um pouco para garantir que o elemento de vídeo está no DOM
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
       // Parar qualquer stream existente primeiro
       if (videoRef.current?.srcObject) {
         const existingStream = videoRef.current.srcObject as MediaStream;
         existingStream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
       }
 
       console.log('Solicitando acesso à câmera...');
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: 'user', 
-          width: { ideal: 640 }, 
-          height: { ideal: 640 } 
-        } 
-      });
-      console.log('Acesso à câmera concedido');
+      
+      // Tentar com configurações progressivas
+      let stream: MediaStream | null = null;
+      const videoConstraints = [
+        { 
+          video: { 
+            facingMode: 'user', 
+            width: { ideal: 640 }, 
+            height: { ideal: 640 } 
+          } 
+        },
+        { 
+          video: { 
+            facingMode: 'user', 
+            width: { ideal: 480 }, 
+            height: { ideal: 480 } 
+          } 
+        },
+        { video: { facingMode: 'user' } },
+        { video: true }
+      ];
+
+      for (const constraints of videoConstraints) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          console.log('Acesso à câmera concedido com configurações:', constraints);
+          break;
+        } catch (err) {
+          console.log('Falha com configurações:', constraints, err);
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+          }
+        }
+      }
+
+      if (!stream) {
+        throw new Error('Não foi possível acessar a câmera com nenhuma configuração');
+      }
       
       if (!videoRef.current) {
         console.warn('Elemento de vídeo não encontrado após obter stream');
@@ -119,7 +155,29 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
 
       videoRef.current.srcObject = stream;
       
-      // Tentar reproduzir imediatamente
+      // Aguardar o vídeo estar pronto
+      await new Promise((resolve, reject) => {
+        if (!videoRef.current) {
+          reject(new Error('Elemento de vídeo perdido'));
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          reject(new Error('Timeout ao carregar vídeo'));
+        }, 10000);
+
+        videoRef.current.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          resolve(void 0);
+        };
+
+        videoRef.current.onerror = (e) => {
+          clearTimeout(timeout);
+          reject(e);
+        };
+      });
+      
+      // Tentar reproduzir
       try {
         await videoRef.current.play();
         setIsCapturing(true);
@@ -127,7 +185,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
         console.log('Vídeo iniciado com sucesso');
       } catch (playErr) {
         console.error('Erro ao reproduzir vídeo:', playErr);
-        setError("Erro ao iniciar a visualização da câmera.");
+        setError("Erro ao iniciar a visualização da câmera. Tente recarregar a página.");
       }
 
     } catch (err: any) {
@@ -168,7 +226,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       }
       setShowTroubleshoot(true);
     }
-  }, [location]);
+  }, []);
 
   const stopCamera = useCallback(() => {
     if (videoRef.current?.srcObject) {
@@ -181,24 +239,35 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
 
   useEffect(() => {
     let mounted = true;
+    let cameraTimeout: NodeJS.Timeout;
+
+    const initializeCamera = async () => {
+      if (!mounted) return;
+      
+      // Aguardar um pouco para garantir que o DOM está pronto
+      cameraTimeout = setTimeout(async () => {
+        if (mounted && method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
+          await startCamera();
+        }
+      }, 200);
+    };
 
     if (method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
-      // Pequeno delay apenas para garantir que o modal renderizou o elemento video
-      // Mas usando uma flag mounted para evitar race conditions
-      if (mounted) {
-        startCamera();
-      }
+      initializeCamera();
     } else {
       stopCamera();
     }
     
     return () => {
       mounted = false;
+      if (cameraTimeout) {
+        clearTimeout(cameraTimeout);
+      }
       stopCamera();
     };
   }, [method, photo, showTroubleshoot, startCamera, stopCamera]);
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     try {
       if (!videoRef.current || !canvasRef.current) {
         setError("Câmera não está pronta. Aguarde um momento e tente novamente.");
@@ -208,9 +277,25 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       const video = videoRef.current;
       const canvas = canvasRef.current;
 
-      // Verificar se o vídeo está pronto e tem dimensões válidas
-      if (video.readyState !== video.HAVE_ENOUGH_DATA || video.videoWidth === 0 || video.videoHeight === 0) {
-        setError("Aguarde a câmera inicializar completamente.");
+      // Aguardar um pouco para garantir que o vídeo está pronto
+      let attempts = 0;
+      const maxAttempts = 10;
+      
+      while (attempts < maxAttempts) {
+        if (video.readyState === video.HAVE_ENOUGH_DATA && 
+            video.videoWidth > 0 && 
+            video.videoHeight > 0) {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      // Verificação final
+      if (video.readyState !== video.HAVE_ENOUGH_DATA || 
+          video.videoWidth === 0 || 
+          video.videoHeight === 0) {
+        setError("A câmera não está pronta. Aguarde a inicialização completa e tente novamente.");
         return;
       }
 
@@ -224,14 +309,24 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
+      // Limpar canvas antes de desenhar
+      context.clearRect(0, 0, canvas.width, canvas.height);
+
       // Capturar frame do vídeo
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // Converter para base64
-      const data = canvas.toDataURL('image/jpeg', 0.8);
+      // Converter para base64 com qualidade razoável
+      const data = canvas.toDataURL('image/jpeg', 0.85);
       
-      if (!data || data.length < 100) {
-        setError("Erro ao capturar foto. Tente novamente.");
+      // Validação mais rigorosa
+      if (!data || data.length < 1000) {
+        setError("Erro ao capturar foto. A imagem capturada é muito pequena. Tente novamente.");
+        return;
+      }
+
+      // Verificar se é uma imagem válida
+      if (!data.startsWith('data:image/')) {
+        setError("Formato de imagem inválido. Tente novamente.");
         return;
       }
 
@@ -239,10 +334,40 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       setPhoto(data);
       stopCamera();
       setError(null);
+      console.log('Foto capturada com sucesso, tamanho:', data.length, 'bytes');
     } catch (err) {
       console.error('Erro ao capturar foto:', err);
-      setError("Erro ao capturar foto. Verifique as permissões da câmera.");
+      setError("Erro ao capturar foto. Verifique as permissões da câmera e tente novamente.");
     }
+  };
+
+  const diagnoseCamera = async () => {
+    const diagnostics = {
+      userAgent: navigator.userAgent,
+      https: window.location.protocol === 'https:',
+      hostname: window.location.hostname,
+      getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+      videoElement: !!videoRef.current,
+      videoSrcObject: !!videoRef.current?.srcObject,
+      videoReadyState: videoRef.current?.readyState,
+      videoWidth: videoRef.current?.videoWidth,
+      videoHeight: videoRef.current?.videoHeight,
+      isCapturing,
+      error,
+      permissions: {}
+    };
+
+    try {
+      const cameraPermission = await navigator.permissions.query({ name: 'camera' as PermissionName });
+      (diagnostics.permissions as any).camera = cameraPermission.state;
+    } catch (e) {
+      (diagnostics.permissions as any).camera = 'unsupported';
+    }
+
+    console.log('=== DIAGNÓSTICO DA CÂMERA ===');
+    console.log(JSON.stringify(diagnostics, null, 2));
+    
+    setError(`Diagnóstico executado. Verifique o console do navegador (F12) para detalhes.`);
   };
 
   const isPhotoValid = useMemo(() => {
@@ -339,7 +464,12 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                    <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 text-red-600 rounded-full flex items-center justify-center mb-6"><Settings2 size={32} /></div>
                    <h4 className="font-bold text-slate-900 dark:text-white mb-2">Acesso Negado</h4>
                    <p className="text-xs text-slate-600 dark:text-slate-400 mb-6">O sistema requer acesso à câmera e localização para validar sua jornada.</p>
-                   <Button onClick={() => { setShowTroubleshoot(false); requestLocation(); if(method === PunchMethod.PHOTO) startCamera(); }} variant="outline" size="sm">Habilitar Acessos</Button>
+                   <div className="flex flex-col gap-3 w-full">
+                     <Button onClick={() => { setShowTroubleshoot(false); requestLocation(); if(method === PunchMethod.PHOTO) startCamera(); }} variant="outline" size="sm">Habilitar Acessos</Button>
+                     <Button onClick={diagnoseCamera} variant="ghost" size="sm" className="text-xs">
+                       <HelpCircle size={14} className="mr-1" /> Diagnóstico
+                     </Button>
+                   </div>
                 </div>
               ) : (
                 <>
@@ -383,9 +513,31 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                               setIsCapturing(false);
                             }}
                           />
-                          <button 
-                            onClick={capturePhoto}
-                            disabled={!isCapturing || !videoRef.current}
+                          <button
+                            onClick={async () => {
+                              try {
+                                setError(null);
+                                // If camera not already capturing, start it using this user gesture
+                                if (!isCapturing) {
+                                  await startCamera();
+                                  // small delay to let video attach
+                                  await new Promise(resolve => setTimeout(resolve, 200));
+                                }
+
+                                if (isCapturing || videoRef.current) {
+                                  await capturePhoto();
+                                } else {
+                                  setError("Não foi possível ativar a câmera. Verifique as permissões do navegador.");
+                                  setShowTroubleshoot(true);
+                                }
+                              } catch (err) {
+                                console.error('Erro ao ativar/capturar câmera via gesto do usuário:', err);
+                                setError("Erro ao ativar a câmera. Verifique as permissões do navegador.");
+                                setShowTroubleshoot(true);
+                              }
+                            }}
+                            // permitimos iniciar a câmera a partir deste botão (não desabilitar por isCapturing)
+                            disabled={showTroubleshoot}
                             className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                             aria-label="Capturar foto"
                             type="button"

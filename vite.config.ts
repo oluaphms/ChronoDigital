@@ -17,6 +17,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3008,
       host: '0.0.0.0',
+      strictPort: false,
+    },
+    esbuild: {
+      // Configuração para evitar problemas de permissão
+      logOverride: { 'this-is-undefined-in-esm': 'silent' }
     },
     plugins: [
       react(),
