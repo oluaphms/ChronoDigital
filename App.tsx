@@ -283,7 +283,17 @@ const AppMain: React.FC = () => {
   const handlePunchStart = (type: LogType) => {
     setError(null);
     setPendingPunchType(type);
-    setShowMethodSelection(true);
+    
+    // Se a empresa exige foto obrigatória, abrir direto o modal de foto
+    // Isso é especialmente importante em dispositivos móveis para acionar a câmera imediatamente
+    if (company?.settings.requirePhoto) {
+      setSelectedMethod(PunchMethod.PHOTO);
+      setPunchType(type);
+      setShowMethodSelection(false);
+    } else {
+      // Caso contrário, mostrar modal de seleção
+      setShowMethodSelection(true);
+    }
   };
 
   const handleMethodSelection = (method: 'photo' | 'manual') => {
@@ -675,6 +685,8 @@ const AppMain: React.FC = () => {
                   onClick={() => {
                     setShowMethodSelection(false);
                     if (pendingPunchType) {
+                      // Garantir que o modal abra no modo Foto para acionar a câmera imediatamente
+                      setSelectedMethod(PunchMethod.PHOTO);
                       setPunchType(pendingPunchType);
                     }
                   }}

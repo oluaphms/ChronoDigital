@@ -283,12 +283,13 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     const initializeCamera = async () => {
       if (!mounted) return;
       
-      // Aguardar um pouco para garantir que o DOM está pronto
+      // Reduzir delay para iniciar câmera mais rapidamente em dispositivos móveis
       cameraTimeout = setTimeout(async () => {
         if (mounted && method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
+          console.log('Iniciando câmera automaticamente...');
           await startCamera();
         }
-      }, 200);
+      }, 100);
     };
 
     if (method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
@@ -530,12 +531,39 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                     <div className="w-full h-full">
                       {!photo ? (
                         <>
+                          {/* Overlay quando câmera não está ativa */}
+                          {!isCapturing && !error && (
+                            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-30 flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
+                              <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                                <Camera size={32} />
+                              </div>
+                              <p className="text-white font-black text-sm uppercase tracking-widest mb-2">Ativar Câmera</p>
+                              <p className="text-slate-400 text-xs mb-6 leading-relaxed">Toque no botão abaixo para permitir o acesso à câmera e iniciar a captura.</p>
+                              <Button 
+                                onClick={async () => {
+                                  try {
+                                    setError(null);
+                                    await startCamera();
+                                  } catch (err) {
+                                    console.error('Erro ao ativar câmera:', err);
+                                    setError("Erro ao ativar a câmera. Verifique as permissões do navegador.");
+                                    setShowTroubleshoot(true);
+                                  }
+                                }}
+                                size="sm" 
+                                className="rounded-xl px-8 flex items-center gap-2"
+                              >
+                                <Camera size={18} /> Ativar Câmera
+                              </Button>
+                            </div>
+                          )}
+                          
                           <video 
                             ref={videoRef} 
                             autoPlay 
                             playsInline 
                             muted
-                            className="w-full h-full object-cover scale-x-[-1]" 
+                            className={`w-full h-full object-cover scale-x-[-1] ${!isCapturing ? 'opacity-0' : 'opacity-100'}`}
                             onLoadedMetadata={() => {
                               // Garantir que o vídeo está pronto
                               if (videoRef.current) {
@@ -552,39 +580,20 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                               setIsCapturing(false);
                             }}
                           />
-                          <button
-                            onClick={async () => {
-                              try {
-                                setError(null);
-                                // If camera not already capturing, start it using this user gesture
-                                if (!isCapturing) {
-                                  await startCamera();
-                                  // small delay to let video attach
-                                  await new Promise(resolve => setTimeout(resolve, 200));
-                                }
-
-                                if (isCapturing || videoRef.current) {
-                                  await capturePhoto();
-                                } else {
-                                  setError("Não foi possível ativar a câmera. Verifique as permissões do navegador.");
-                                  setShowTroubleshoot(true);
-                                }
-                              } catch (err) {
-                                console.error('Erro ao ativar/capturar câmera via gesto do usuário:', err);
-                                setError("Erro ao ativar a câmera. Verifique as permissões do navegador.");
-                                setShowTroubleshoot(true);
-                              }
-                            }}
-                            // permitimos iniciar a câmera a partir deste botão (não desabilitar por isCapturing)
-                            disabled={showTroubleshoot}
-                            className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                            aria-label="Capturar foto"
-                            type="button"
-                          >
-                            <div className="w-16 h-16 border-[6px] border-indigo-600 rounded-full group-hover:scale-110 transition-transform flex items-center justify-center">
-                              <Camera size={24} className="text-indigo-600" />
-                            </div>
-                          </button>
+                          {/* Botão de captura - só aparece quando câmera está ativa */}
+                          {isCapturing && (
+                            <button
+                              onClick={capturePhoto}
+                              disabled={!isCapturing || !videoRef.current}
+                              className="absolute bottom-8 left-1/2 -translate-x-1/2 w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-all z-20 group hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                              aria-label="Capturar foto"
+                              type="button"
+                            >
+                              <div className="w-16 h-16 border-[6px] border-indigo-600 rounded-full group-hover:scale-110 transition-transform flex items-center justify-center">
+                                <Camera size={24} className="text-indigo-600" />
+                              </div>
+                            </button>
+                          )}
                           <div className="absolute top-6 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black text-white uppercase tracking-widest pointer-events-none flex items-center gap-2">
                              <Camera size={12} /> Posicione seu rosto
                           </div>
