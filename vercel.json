@@ -39,7 +39,7 @@
   ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!\\.(js|css|json|ico|svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|eot|sw\\.js|manifest\\.json)$).*)",
       "destination": "/index.html"
     }
   ]
