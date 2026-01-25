@@ -106,9 +106,24 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       }
 
       console.log('Solicitando acesso à câmera...');
-      
+
+      // Verificar se há dispositivos de vídeo conectados (útil para diagnósticos)
+      let devices: MediaDeviceInfo[] = [];
+      try {
+        devices = await navigator.mediaDevices.enumerateDevices();
+      } catch (e) {
+        console.warn('Falha ao enumerar dispositivos:', e);
+      }
+      const hasVideoInput = devices.some(d => d.kind === 'videoinput');
+      if (!hasVideoInput) {
+        setError("Nenhuma câmera encontrada. Verifique se há uma câmera conectada ou integrada.");
+        setShowTroubleshoot(true);
+        return;
+      }
+
       // Tentar com configurações progressivas
       let stream: MediaStream | null = null;
+      let lastError: any = null;
       const videoConstraints = [
         { 
           video: { 
@@ -133,7 +148,8 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
           stream = await navigator.mediaDevices.getUserMedia(constraints);
           console.log('Acesso à câmera concedido com configurações:', constraints);
           break;
-        } catch (err) {
+        } catch (err: any) {
+          lastError = err;
           console.log('Falha com configurações:', constraints, err);
           if (stream) {
             stream.getTracks().forEach(track => track.stop());
@@ -143,6 +159,29 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       }
 
       if (!stream) {
+        // Tratar erros comuns com mensagens mais específicas para ajudar no debug
+        if (lastError) {
+          const name = lastError.name;
+          if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+            setError("Câmera bloqueada. Clique em 'Habilitar Acessos' e permita o acesso à câmera nas configurações do navegador.");
+            setShowTroubleshoot(true);
+            return;
+          }
+          if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+            setError("Nenhuma câmera encontrada. Verifique se há uma câmera conectada e tente novamente.");
+            setShowTroubleshoot(true);
+            return;
+          }
+          if (name === 'NotReadableError' || name === 'TrackStartError') {
+            setError("Câmera está sendo usada por outro aplicativo. Feche outros apps que usam a câmera e tente novamente.");
+            setShowTroubleshoot(true);
+            return;
+          }
+
+          // Mensagem fallback incluindo detalhe do último erro
+          throw new Error(`Não foi possível acessar a câmera: ${lastError.message || lastError}`);
+        }
+
         throw new Error('Não foi possível acessar a câmera com nenhuma configuração');
       }
       
