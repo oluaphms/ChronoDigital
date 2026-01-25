@@ -24,6 +24,13 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
   const [showTroubleshoot, setShowTroubleshoot] = useState(false);
   const [isLocationLoading, setIsLocationLoading] = useState(false);
   
+  // Garantir que showTroubleshoot seja false quando o modal abre com método PHOTO
+  useEffect(() => {
+    if (method === PunchMethod.PHOTO) {
+      setShowTroubleshoot(false);
+    }
+  }, []);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -53,11 +60,18 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       if (initialMethod === PunchMethod.PHOTO) {
         setPhoto(null);
         setError(null);
-        setShowTroubleshoot(false);
+        setShowTroubleshoot(false); // Sempre resetar troubleshoot quando mudar para PHOTO
         setIsCapturing(false);
       }
     }
   }, [initialMethod]);
+
+  // Resetar showTroubleshoot quando o método muda para PHOTO
+  useEffect(() => {
+    if (method === PunchMethod.PHOTO) {
+      setShowTroubleshoot(false);
+    }
+  }, [method]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -77,9 +91,10 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
         setIsLocationLoading(false);
       },
       (err) => {
-        setError("Acesso ao GPS negado. Verifique as permissões de localização do seu navegador.");
-        setShowTroubleshoot(true);
+        // Não bloquear a câmera por erro de GPS - apenas mostrar aviso
+        // setShowTroubleshoot(true); // Removido para não bloquear overlay da câmera
         setIsLocationLoading(false);
+        // O erro de GPS será mostrado na seção de status, não bloqueia a câmera
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -89,6 +104,13 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     requestLocation();
   }, []);
 
+  // Resetar showTroubleshoot quando o método muda para PHOTO
+  useEffect(() => {
+    if (method === PunchMethod.PHOTO) {
+      setShowTroubleshoot(false);
+    }
+  }, [method]);
+
   const startCamera = useCallback(async () => {
     setError(null);
     setIsCapturing(false);
@@ -96,7 +118,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     // Verificar se getUserMedia está disponível
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setError("Seu navegador não suporta acesso à câmera. Use Chrome, Firefox ou Safari atualizado.");
-      setShowTroubleshoot(true);
+      // Não definir showTroubleshoot - deixar o overlay aparecer para o usuário tentar novamente
       return;
     }
 
@@ -104,7 +126,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     const currentLocation = window.location;
     if (currentLocation.protocol !== 'https:' && currentLocation.hostname !== 'localhost' && currentLocation.hostname !== '127.0.0.1') {
       setError("Acesso à câmera requer conexão segura (HTTPS). Certifique-se de estar usando HTTPS.");
-      setShowTroubleshoot(true);
+      // Não definir showTroubleshoot - deixar o overlay aparecer para o usuário tentar novamente
       return;
     }
 
@@ -131,7 +153,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       const hasVideoInput = devices.some(d => d.kind === 'videoinput');
       if (!hasVideoInput) {
         setError("Nenhuma câmera encontrada. Verifique se há uma câmera conectada ou integrada.");
-        setShowTroubleshoot(true);
+        // Não definir showTroubleshoot - deixar o overlay aparecer
         return;
       }
 
@@ -573,9 +595,13 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                     <div className="w-full h-full">
                       {!photo ? (
                         <>
-                          {/* Overlay quando câmera não está ativa ou há erro */}
+                          {/* Overlay quando câmera não está ativa */}
                           {/* Em dispositivos móveis, o overlay sempre aparece inicialmente para garantir gesto do usuário */}
-                          {!isCapturing && !showTroubleshoot && (
+                          {/* Debug: verificar estados */}
+                          {(() => {
+                            console.log('Verificando overlay - isCapturing:', isCapturing, 'showTroubleshoot:', showTroubleshoot, 'error:', error, 'method:', method);
+                            return !isCapturing && !showTroubleshoot;
+                          })() && (
                             <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-30 flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
                               <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mb-4 animate-pulse">
                                 <Camera size={32} />
