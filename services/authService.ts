@@ -292,7 +292,28 @@ class AuthService {
       }
       
       return await this.supabaseUserToAppUser(supabaseUser);
-    } catch (error) {
+    } catch (error: any) {
+      // Tratar erros de refresh token inválido silenciosamente (comportamento esperado quando não há sessão)
+      if (error?.message?.includes('Refresh Token') || error?.message?.includes('Auth session missing')) {
+        // Limpar sessão inválida silenciosamente
+        try {
+          await auth.signOut();
+        } catch {
+          // Ignorar erros ao limpar sessão
+        }
+        // Tentar recuperar do localStorage como fallback
+        const saved = localStorage.getItem('current_user');
+        if (saved) {
+          try {
+            return JSON.parse(saved);
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+      
+      // Para outros erros, logar normalmente
       console.error('Erro ao obter usuário atual:', error);
       // Tentar recuperar do localStorage como fallback
       const saved = localStorage.getItem('current_user');

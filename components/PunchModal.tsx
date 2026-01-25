@@ -54,6 +54,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
         setPhoto(null);
         setError(null);
         setShowTroubleshoot(false);
+        setIsCapturing(false);
       }
     }
   }, [initialMethod]);
@@ -177,29 +178,33 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
           const name = lastError.name;
           if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
             setError("Câmera bloqueada. Toque em 'Ativar Câmera' novamente e permita o acesso à câmera quando solicitado.");
-            // Não definir showTroubleshoot aqui - deixar o usuário tentar novamente
             setIsCapturing(false);
+            setShowTroubleshoot(false); // Garantir que não fique em troubleshoot para permitir nova tentativa
             return;
           }
           if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
             setError("Nenhuma câmera encontrada. Verifique se há uma câmera conectada.");
             setIsCapturing(false);
+            setShowTroubleshoot(false);
             return;
           }
           if (name === 'NotReadableError' || name === 'TrackStartError') {
             setError("Câmera está sendo usada por outro aplicativo. Feche outros apps e tente novamente.");
             setIsCapturing(false);
+            setShowTroubleshoot(false);
             return;
           }
 
           // Mensagem fallback incluindo detalhe do último erro
           setError(`Não foi possível acessar a câmera: ${lastError.message || lastError}. Tente novamente.`);
           setIsCapturing(false);
+          setShowTroubleshoot(false);
           return;
         }
 
         setError('Não foi possível acessar a câmera. Tente novamente.');
         setIsCapturing(false);
+        setShowTroubleshoot(false);
         return;
       }
       
@@ -302,20 +307,33 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     const initializeCamera = async () => {
       if (!mounted) return;
       
-      // Reduzir delay para iniciar câmera mais rapidamente em dispositivos móveis
-      cameraTimeout = setTimeout(async () => {
-        if (mounted && method === PunchMethod.PHOTO && !photo && !showTroubleshoot) {
-          await startCamera();
-        }
-      }, 100);
+      // Em dispositivos móveis, não tentar iniciar automaticamente
+      // getUserMedia requer gesto do usuário em muitos navegadores móveis
+      // O overlay "Ativar Câmera" será mostrado para o usuário clicar
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      if (!isMobile) {
+        // Apenas em desktop, tentar iniciar automaticamente
+        cameraTimeout = setTimeout(async () => {
+          if (mounted && method === PunchMethod.PHOTO && !photo && !showTroubleshoot && !error) {
+            console.log('Tentando iniciar câmera automaticamente (desktop)...');
+            await startCamera();
+          }
+        }, 200);
+      } else {
+        console.log('Dispositivo móvel detectado - câmera será ativada pelo gesto do usuário');
+      }
     };
 
     // Iniciar câmera apenas se:
     // 1. Método é PHOTO
     // 2. Não há foto capturada
-    // 3. Não está em modo troubleshoot (mas pode ter erro e tentar novamente)
+    // 3. Não está em modo troubleshoot
     // 4. Câmera não está já capturando
+    // Nota: Em dispositivos móveis, pode ser necessário que o usuário clique no botão "Ativar Câmera"
+    // devido a restrições de segurança do navegador (getUserMedia requer gesto do usuário)
     if (method === PunchMethod.PHOTO && !photo && !showTroubleshoot && !isCapturing) {
+      console.log('Condições para iniciar câmera:', { method, photo: !!photo, showTroubleshoot, isCapturing, error });
       initializeCamera();
     } else if (method !== PunchMethod.PHOTO || photo) {
       // Parar câmera apenas se mudou de método ou já tem foto
@@ -556,6 +574,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                       {!photo ? (
                         <>
                           {/* Overlay quando câmera não está ativa ou há erro */}
+                          {/* Em dispositivos móveis, o overlay sempre aparece inicialmente para garantir gesto do usuário */}
                           {!isCapturing && !showTroubleshoot && (
                             <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-30 flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
                               <div className="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mb-4 animate-pulse">
@@ -570,19 +589,25 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                                   : 'Toque no botão abaixo para permitir o acesso à câmera e iniciar a captura.'}
                               </p>
                               {error && (
-                                <p className="text-red-400 text-xs mb-4 font-medium">{error}</p>
+                                <p className="text-red-400 text-xs mb-4 font-medium max-w-xs">{error}</p>
                               )}
                               <Button 
                                 onClick={async () => {
                                   try {
-                                    // Resetar estados de erro antes de tentar novamente
+                                    // Resetar todos os estados de erro antes de tentar novamente
                                     setError(null);
                                     setShowTroubleshoot(false);
                                     setIsCapturing(false);
+                                    
+                                    // Pequeno delay para garantir que os estados foram atualizados
+                                    await new Promise(resolve => setTimeout(resolve, 50));
+                                    
+                                    // Tentar iniciar a câmera
                                     await startCamera();
                                   } catch (err) {
                                     console.error('Erro ao ativar câmera:', err);
                                     setError("Erro ao ativar a câmera. Verifique as permissões do navegador.");
+                                    setIsCapturing(false);
                                   }
                                 }}
                                 size="sm" 

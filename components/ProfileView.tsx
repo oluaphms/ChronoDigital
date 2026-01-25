@@ -433,6 +433,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ user }) => {
                 value={passwordForm.currentPassword}
                 onChange={e => setPasswordForm({...passwordForm, currentPassword: e.target.value})}
                 placeholder="Digite sua senha atual"
+                autoComplete="current-password"
               />
             </div>
             <div>
@@ -443,6 +444,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ user }) => {
                 onChange={e => setPasswordForm({...passwordForm, newPassword: e.target.value})}
                 placeholder="Mínimo 6 caracteres"
                 minLength={6}
+                autoComplete="new-password"
               />
             </div>
             <div>
@@ -453,6 +455,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({ user }) => {
                 onChange={e => setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
                 placeholder="Digite a nova senha novamente"
                 minLength={6}
+                autoComplete="new-password"
               />
             </div>
           </div>

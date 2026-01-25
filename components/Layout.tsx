@@ -248,7 +248,14 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
                  ))}
               </nav>
               <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
-                 <button onClick={onLogout} className="w-full flex items-center gap-4 px-5 py-4 text-red-600 dark:text-red-400 font-bold focus-visible:ring-4 focus-visible:ring-red-500/50 rounded-xl">
+                 <button 
+                   onClick={() => {
+                     setIsMobileMenuOpen(false);
+                     onLogout();
+                   }} 
+                   className="w-full flex items-center gap-4 px-5 py-4 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 font-bold focus-visible:ring-4 focus-visible:ring-red-500/50 rounded-xl transition-all duration-200 active:scale-[0.98]"
+                   aria-label="Sair do aplicativo"
+                 >
                     <LogOut size={20} aria-hidden="true" /> Sair do Aplicativo
                  </button>
               </div>

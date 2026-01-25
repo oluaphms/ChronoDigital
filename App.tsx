@@ -507,6 +507,7 @@ const AppMain: React.FC = () => {
                         placeholder="Nome de usuário ou Email" 
                         value={loginData.identifier}
                         onChange={e => setLoginData({...loginData, identifier: e.target.value})}
+                        autoComplete="username"
                         className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
                     </div>
@@ -517,6 +518,7 @@ const AppMain: React.FC = () => {
                         placeholder="Senha de acesso" 
                         value={loginData.password}
                         onChange={e => setLoginData({...loginData, password: e.target.value})}
+                        autoComplete="current-password"
                         className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
                     </div>
