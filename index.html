@@ -79,72 +79,44 @@
 <body class="gradient-bg text-slate-900 dark:text-slate-100 min-h-screen">
     <a href="#main-content" class="skip-link">Pular para o conteúdo principal</a>
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
 <script>
-  // Limpar Service Workers e caches antigos COMPLETAMENTE - EXECUTAR IMEDIATAMENTE
+  // CRÍTICO: Limpar Service Workers ANTES de qualquer requisição ser feita
+  // Este script DEVE executar antes do script type="module" abaixo
   (function() {
     'use strict';
     if ('serviceWorker' in navigator) {
-      // Executar imediatamente, sem esperar load
-      (async function() {
-        try {
-          // Desregistrar TODOS os Service Workers
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          let cacheNames = [];
-          
-          if ('caches' in window) {
-            cacheNames = await caches.keys();
-          }
-          
-          // Desregistrar todos os SWs
-          for (let registration of registrations) {
-            try {
-              const unregistered = await registration.unregister();
-              console.log('[CLEANUP] SW unregistered:', registration.scope, unregistered);
-            } catch (e) {
-              console.error('[CLEANUP] Error unregistering SW:', e);
+      // Executar sincronamente se possível, ou o mais rápido possível
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        if (registrations.length > 0) {
+          console.log('[CLEANUP] Found', registrations.length, 'Service Worker(s), unregistering...');
+          Promise.all(registrations.map(r => r.unregister())).then(function() {
+            console.log('[CLEANUP] All Service Workers unregistered');
+            // Limpar caches também
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                if (names.length > 0) {
+                  console.log('[CLEANUP] Clearing', names.length, 'cache(s)');
+                  Promise.all(names.map(n => caches.delete(n))).then(function() {
+                    console.log('[CLEANUP] All caches cleared');
+                    // Recarregar apenas se havia SWs ou caches
+                    if (registrations.length > 0 || names.length > 0) {
+                      console.log('[CLEANUP] Reloading page to ensure clean state...');
+                      window.location.reload();
+                    }
+                  });
+                }
+              });
             }
-          }
-          
-          // Limpar TODOS os caches
-          if (cacheNames.length > 0) {
-            await Promise.all(cacheNames.map(name => {
-              console.log('[CLEANUP] Deleting cache:', name);
-              return caches.delete(name);
-            }));
-            console.log('[CLEANUP] All caches cleared');
-          }
-          
-          // Se havia SWs ou caches, recarregar para garantir limpeza completa
-          if (registrations.length > 0 || cacheNames.length > 0) {
-            console.log('[CLEANUP] Reloading to ensure clean state...');
-            // Usar replace para evitar adicionar ao histórico
-            setTimeout(() => window.location.replace(window.location.href), 50);
-          }
-        } catch (error) {
-          console.error('[CLEANUP] Error:', error);
+          }).catch(function(err) {
+            console.error('[CLEANUP] Error unregistering SWs:', err);
+          });
         }
-      })();
+      }).catch(function(err) {
+        console.error('[CLEANUP] Error getting SW registrations:', err);
+      });
     }
-    
-    // Também limpar quando a página carregar (backup)
-    window.addEventListener('load', function() {
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(function(registrations) {
-          for(let registration of registrations) {
-            registration.unregister();
-          }
-        });
-      }
-      if ('caches' in window) {
-        caches.keys().then(function(names) {
-          for (let name of names) {
-            caches.delete(name);
-          }
-        });
-      }
-    });
   })();
 </script>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
