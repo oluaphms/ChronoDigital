@@ -6,6 +6,7 @@ import { NotificationService } from '../services/notificationService';
 import { ThemeService } from '../services/themeService';
 import { AppSidebar, AppSidebarNavContent } from '../src/components/layout';
 import { MobileDrawer, MenuToggleButton } from '../src/components/navigation';
+import { i18n } from '../lib/i18n';
 
 const SIDEBAR_WIDTH_EXPANDED = 240;
 const SIDEBAR_WIDTH_COLLAPSED = 72;
@@ -89,7 +90,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} aria-hidden="true" />
               <input
                 type="text"
-                placeholder="Pesquisar ponto ou colaborador..."
+                placeholder={i18n.t('layout.searchPlaceholder')}
                 aria-label="Campo de pesquisa"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-800 border-none rounded-xl text-sm outline-none focus:ring-4 focus:ring-indigo-100 dark:focus:ring-indigo-900/30 transition-all text-slate-900 dark:text-white"
               />
@@ -100,8 +101,8 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
             <button
               onClick={toggleTheme}
               className="p-2.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
-              aria-label={theme === 'light' ? 'Ativar modo escuro' : theme === 'dark' ? 'Ativar modo automático' : 'Ativar modo claro'}
-              title={theme === 'light' ? 'Modo claro' : theme === 'dark' ? 'Modo escuro' : 'Modo automático'}
+              aria-label={theme === 'light' ? i18n.t('layout.ariaThemeLight') : theme === 'dark' ? i18n.t('layout.ariaThemeDark') : i18n.t('layout.ariaThemeAuto')}
+              title={theme === 'light' ? i18n.t('layout.themeLight') : theme === 'dark' ? i18n.t('layout.themeDark') : i18n.t('layout.themeAuto')}
             >
               {theme === 'light' ? <Sun size={20} /> : theme === 'dark' ? <Moon size={20} /> : <BrainCircuit size={20} />}
             </button>
@@ -109,12 +110,12 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
                 className="p-2.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all relative"
-                aria-label={`Ver notificações${unreadCount > 0 ? `, ${unreadCount} não lidas` : ''}`}
+                aria-label={`${i18n.t('layout.notifications')}${unreadCount > 0 ? `, ${unreadCount} ${i18n.t('layout.unreadCount')}` : ''}`}
                 aria-expanded={showNotifications}
               >
                 <Bell size={20} />
                 {unreadCount > 0 && (
-                  <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-white dark:border-slate-900" aria-label={`${unreadCount} notificações não lidas`} />
+                  <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-600 rounded-full border-2 border-white dark:border-slate-900" aria-label={`${unreadCount} ${i18n.t('layout.unreadCount')}`} />
                 )}
               </button>
               {showNotifications && (
@@ -126,7 +127,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
             <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 hidden sm:block" aria-hidden="true" />
             <div className="hidden sm:flex items-center gap-3 ml-2">
               <div className="text-right">
-                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest leading-none mb-1">Empresa Ativa</p>
+                <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest leading-none mb-1">{i18n.t('layout.activeCompany')}</p>
                 <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400">Corporação LTDA</p>
               </div>
             </div>
@@ -143,7 +144,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
       <MobileDrawer
         open={isMobileMenuOpen}
         onClose={() => setIsMobileMenuOpen(false)}
-        aria-label="Navegação móvel"
+        aria-label={i18n.t('layout.mobileNavLabel')}
       >
         <AppSidebarNavContent onItemClick={() => setIsMobileMenuOpen(false)} />
         <div className="pt-6 mt-6 border-t border-slate-100 dark:border-slate-800">
@@ -154,9 +155,9 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
               onLogout();
             }}
             className="w-full flex items-center justify-center gap-2 py-3 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 font-bold rounded-xl transition-all"
-            aria-label="Sair do aplicativo"
+            aria-label={i18n.t('layout.logoutApp')}
           >
-            Sair do Aplicativo
+            {i18n.t('layout.logoutApp')}
           </button>
         </div>
       </MobileDrawer>

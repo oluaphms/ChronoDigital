@@ -9,6 +9,7 @@ import { i18n } from './lib/i18n';
 import App from './App';
 import { ToastProvider } from './src/components/ToastProvider';
 import ErrorBoundary from './components/ErrorBoundary';
+import { LanguageProvider } from './src/contexts/LanguageContext';
 
 initSentry();
 ThemeService.init();
@@ -22,9 +23,11 @@ root.render(
   <React.StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
+        <LanguageProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </LanguageProvider>
       </BrowserRouter>
     </ErrorBoundary>
   </React.StrictMode>

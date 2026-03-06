@@ -113,7 +113,26 @@ class AuthService {
       return newUser;
     } catch (error) {
       console.error('Erro ao converter usuário Supabase:', error);
-      return null;
+      // Fallback: retorna usuário mínimo a partir só do Auth (tabela users inexistente/RLS/schema)
+      const email = (supabaseUser?.email || '').trim().toLowerCase();
+      if (!email) return null;
+      return {
+        id: supabaseUser.id,
+        nome: supabaseUser.user_metadata?.nome || email.split('@')[0] || 'Usuário',
+        email: supabaseUser.email || '',
+        cargo: 'Colaborador',
+        role: 'employee',
+        createdAt: new Date(),
+        companyId: '',
+        departmentId: '',
+        avatar: supabaseUser.user_metadata?.avatar_url,
+        preferences: {
+          notifications: true,
+          theme: 'light',
+          allowManualPunch: true,
+          language: 'pt-BR'
+        }
+      };
     }
   }
 
@@ -130,28 +149,47 @@ class AuthService {
       
       if (data.user) {
         const appUser = await this.supabaseUserToAppUser(data.user);
-        
         if (appUser) {
-          // Salvar no localStorage como fallback
-          localStorage.setItem('current_user', JSON.stringify(appUser));
+          try {
+            localStorage.setItem('current_user', JSON.stringify(appUser));
+          } catch {
+            // ignore
+          }
           return { user: appUser, error: null };
         }
+        // Fallback final: usuário mínimo só com dados do Auth
+        const u = data.user;
+        const email = (u.email || '').trim().toLowerCase();
+        const minimalUser: User = {
+          id: u.id,
+          nome: u.user_metadata?.nome || email.split('@')[0] || 'Usuário',
+          email: u.email || '',
+          cargo: 'Colaborador',
+          role: 'employee',
+          createdAt: new Date(),
+          companyId: '',
+          departmentId: '',
+          avatar: u.user_metadata?.avatar_url,
+          preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' }
+        };
+        return { user: minimalUser, error: null };
       }
       
-      return { user: null, error: 'Erro ao carregar dados do usuário' };
+      return { user: null, error: 'Erro ao fazer login. Tente novamente.' };
     } catch (error: any) {
       let errorMessage = 'Erro ao fazer login';
-      
-      if (error.message) {
-        if (error.message.includes('Invalid login credentials')) {
-          errorMessage = 'Email ou senha incorretos';
-        } else if (error.message.includes('Email not confirmed')) {
-          errorMessage = 'Por favor, confirme seu email antes de fazer login';
-        } else {
-          errorMessage = error.message;
-        }
+      const msg = error?.message ?? '';
+
+      if (msg.includes('Invalid login credentials') || error?.status === 400) {
+        errorMessage = 'Email ou senha incorretos. Confira se o usuário existe em Authentication → Users no Supabase.';
+      } else if (msg.includes('Email not confirmed')) {
+        errorMessage = 'Por favor, confirme seu email antes de fazer login (ou marque Auto Confirm no Supabase).';
+      } else if (msg.includes('Informe e-mail e senha')) {
+        errorMessage = msg;
+      } else if (msg) {
+        errorMessage = msg;
       }
-      
+
       return { user: null, error: errorMessage };
     }
   }

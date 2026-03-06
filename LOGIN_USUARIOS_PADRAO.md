@@ -13,7 +13,7 @@ O login é validado pelo **Supabase Auth** (`auth.users`). Os registros em `publ
 
 | E-mail (exatamente)           | Senha (exemplo) | Observação |
 |------------------------------|-----------------|------------|
-| `desenvolvedor@smartponto.com` | ex: `                `    | Admin      |
+| `desenvolvedor@smartponto.com` | ex: `dev123`    | Admin      |
 | `admin@smartponto.com`         | ex: `admin123`  | Admin      |
 | `oluaphms@gmail.com`           | (defina uma)    | Colaborador|
 | `paulohmorais@hotmail.com`     | (defina uma)    | Admin      |
@@ -39,6 +39,14 @@ Assim, cada usuário do Auth passa a ter um registro em `public.users` com o mes
 - **Senha**: a que você definiu no passo 1 no Supabase (Auth).
 
 Se você só inseriu linhas em `public.users` e **não** criou os usuários em **Authentication → Users**, o login sempre falha, porque a checagem de e-mail/senha é feita no Auth.
+
+### Erro 400 no login (`/auth/v1/token?grant_type=password`)
+
+Se aparecer **400** na aba Rede (Network) ao tentar logar, o Supabase está recusando e-mail/senha. Causas comuns:
+
+- **Usuário não existe no Auth**: crie em **Authentication → Users** (Add user → Create new user) com o **mesmo e-mail** que o app envia (ex.: `admin` → `admin@smartponto.com`).
+- **Senha errada**: use a senha definida no Supabase para esse usuário.
+- **E-mail não confirmado**: ao criar o usuário, marque **Auto Confirm User**.
 
 ## Resumo
 

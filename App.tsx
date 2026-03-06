@@ -42,6 +42,8 @@ import {
   Camera,
   Keyboard,
   MapPin,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { BiometricService } from './services/biometricService';
 import DashboardPage from './src/pages/Dashboard';
@@ -160,6 +162,8 @@ const AppMain: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showIdentifier, setShowIdentifier] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Theme State (para tela de login)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -473,20 +477,44 @@ const AppMain: React.FC = () => {
         ? loginData.identifier
         : `${loginData.identifier}@smartponto.com`;
       const email = rawEmail.trim().toLowerCase();
-      const result = await authService.signInWithEmail(email, loginData.password);
+
+      const loginPromise = authService.signInWithEmail(email, loginData.password);
+      const LOGIN_TIMEOUT_MS = 60000; // 60 segundos (conexão lenta, Supabase frio ou rede instável)
+      const timeoutPromise = new Promise<{ user: any; error: string | null }>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                'Tempo esgotado. Verifique sua conexão e tente de novo. Confira também: .env.local (VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY) e se o projeto Supabase está ativo (Dashboard).'
+              )
+            ),
+          LOGIN_TIMEOUT_MS
+        )
+      );
+      let result: { user: any; error: string | null };
+      try {
+        result = await Promise.race([loginPromise, timeoutPromise]);
+      } catch (timeoutErr: any) {
+        setLoginError(timeoutErr?.message || 'Tempo esgotado. Tente novamente.');
+        return;
+      }
 
       if (result.error) {
         setLoginError(result.error);
-        setIsLoggingIn(false);
         return;
       }
 
       if (result.user) {
         setUser(result.user);
-        const comp = await PontoService.getCompany(result.user.companyId);
-        if (comp) setCompany(comp);
-
-        setIsLoggingIn(false);
+        try {
+          const comp = await Promise.race([
+            PontoService.getCompany(result.user.companyId),
+            new Promise<undefined>((r) => setTimeout(() => r(undefined), 3000))
+          ]);
+          if (comp) setCompany(comp);
+        } catch {
+          // segue sem empresa
+        }
 
         if (result.user.role === 'admin' || result.user.role === 'hr') {
           setActiveTab('admin');
@@ -497,7 +525,9 @@ const AppMain: React.FC = () => {
         }
       }
     } catch (error: any) {
-      setLoginError(error.message || 'Erro ao fazer login');
+      console.error('Erro no handleLoginSubmit:', error);
+      setLoginError(error?.message || 'Erro ao fazer login');
+    } finally {
       setIsLoggingIn(false);
     }
   };
@@ -630,28 +660,54 @@ const AppMain: React.FC = () => {
                 </div>
 
                 <form onSubmit={handleLoginSubmit} className="space-y-6">
+                  {/* Campo usuário oculto para acessibilidade e gerenciadores de senha (evita aviso do navegador) */}
+                  <input
+                    type="text"
+                    autoComplete="username"
+                    value={loginData.identifier}
+                    readOnly
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    className="absolute w-px h-px -left-[9999px] opacity-0 pointer-events-none"
+                  />
                   <div className="space-y-4">
                     <div className="relative">
                       <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                       <input
-                        type="text"
+                        type={showIdentifier ? 'text' : 'password'}
                         placeholder="Nome de usuário ou Email"
                         value={loginData.identifier}
                         onChange={e => setLoginData({ ...loginData, identifier: e.target.value })}
                         autoComplete="username"
-                        className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
+                        className="w-full pl-12 pr-10 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowIdentifier((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                        aria-label={showIdentifier ? 'Ocultar' : 'Mostrar'}
+                      >
+                        {showIdentifier ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
                     </div>
                     <div className="relative">
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                       <input
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         placeholder="Senha de acesso"
                         value={loginData.password}
                         onChange={e => setLoginData({ ...loginData, password: e.target.value })}
                         autoComplete="current-password"
-                        className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
+                        className="w-full pl-12 pr-10 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 transition-all text-sm"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                        aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
                     </div>
                   </div>
 

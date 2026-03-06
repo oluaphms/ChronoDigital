@@ -61,7 +61,15 @@ const stubAuth = {
 const realAuth = configured
   ? {
       signIn: async (email: string, password: string) => {
-        const { data, error } = await client!.auth.signInWithPassword({ email, password });
+        const normalizedEmail = (email || '').trim().toLowerCase();
+        const normalizedPassword = password ?? '';
+        if (!normalizedEmail || !normalizedPassword) {
+          throw new Error('Informe e-mail e senha.');
+        }
+        const { data, error } = await client!.auth.signInWithPassword({
+          email: normalizedEmail,
+          password: normalizedPassword,
+        });
         if (error) throw error;
         if (!data) throw new Error('Erro ao fazer login: dados não retornados');
         return data;

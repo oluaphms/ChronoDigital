@@ -1,20 +1,28 @@
+import { i18n } from '../../lib/i18n';
+
 export interface MenuItemConfig {
-  name: string;
+  /** Chave de tradução (ex: menu.dashboard) */
+  nameKey: string;
   icon: string;
   route: string;
 }
 
 export const menuItems: MenuItemConfig[] = [
-  { name: 'Dashboard', icon: 'dashboard', route: '/dashboard' },
-  { name: 'Productivity Trends', icon: 'av_timer', route: '/productivity-trends' },
-  { name: 'Real-Time Insights', icon: 'insights', route: '/real-time-insights' },
-  { name: 'Alerts', icon: 'notification_important', route: '/alerts' },
-  { name: 'Employees', icon: 'group', route: '/employees' },
-  { name: 'Teams', icon: 'groups', route: '/teams' },
-  { name: 'Screenshots', icon: 'perm_media', route: '/screenshots' },
-  { name: 'Time and Attendance', icon: 'event_note', route: '/time-attendance' },
-  { name: 'Activities', icon: 'storage', route: '/activities' },
-  { name: 'Projects', icon: 'work_outline', route: '/projects' },
-  { name: 'Reports', icon: 'data_usage', route: '/reports' },
-  { name: 'Settings', icon: 'settings', route: '/settings' },
+  { nameKey: 'menu.dashboard', icon: 'dashboard', route: '/dashboard' },
+  { nameKey: 'menu.productivityTrends', icon: 'av_timer', route: '/productivity-trends' },
+  { nameKey: 'menu.realTimeInsights', icon: 'insights', route: '/real-time-insights' },
+  { nameKey: 'menu.alerts', icon: 'notification_important', route: '/alerts' },
+  { nameKey: 'menu.employees', icon: 'group', route: '/employees' },
+  { nameKey: 'menu.teams', icon: 'groups', route: '/teams' },
+  { nameKey: 'menu.screenshots', icon: 'perm_media', route: '/screenshots' },
+  { nameKey: 'menu.timeAndAttendance', icon: 'event_note', route: '/time-attendance' },
+  { nameKey: 'menu.activities', icon: 'storage', route: '/activities' },
+  { nameKey: 'menu.projects', icon: 'work_outline', route: '/projects' },
+  { nameKey: 'menu.reports', icon: 'data_usage', route: '/reports' },
+  { nameKey: 'menu.settings', icon: 'settings', route: '/settings' },
 ];
+
+/** Retorna o nome traduzido do item do menu (reage ao idioma atual do i18n) */
+export function getMenuItemName(item: MenuItemConfig): string {
+  return i18n.t(item.nameKey);
+}

@@ -1,7 +1,9 @@
 import React, { memo, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
-import { menuItems } from '../../config/menuItems';
+import { menuItems, getMenuItemName } from '../../config/menuItems';
+import { i18n } from '../../../lib/i18n';
+import { useLanguage } from '../../contexts/LanguageContext';
 import type { User } from '../../../types';
 
 const SIDEBAR_WIDTH_EXPANDED = 240;
@@ -25,11 +27,13 @@ export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function App
 }) {
   const location = useLocation();
   const navigate = useNavigate();
+  useLanguage(); // re-render quando o idioma mudar
 
   return (
-    <nav className="flex flex-col gap-1 py-2" aria-label="Menu principal">
+    <nav className="flex flex-col gap-1 py-2" aria-label={i18n.t('layout.navLabel')}>
       {menuItems.map((item) => {
         const isActive = location.pathname === item.route;
+        const name = getMenuItemName(item);
         return (
           <button
             key={item.route}
@@ -49,7 +53,7 @@ export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function App
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
               }
             `}
-            title={collapsed ? item.name : undefined}
+            title={collapsed ? name : undefined}
           >
             {isActive && (
               <span
@@ -63,7 +67,7 @@ export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function App
             >
               {item.icon}
             </span>
-            {!collapsed && <span className="flex-1 truncate">{item.name}</span>}
+            {!collapsed && <span className="flex-1 truncate">{name}</span>}
           </button>
         );
       })}
@@ -89,7 +93,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChan
         width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
         boxShadow: '4px 0 24px rgba(0,0,0,0.06)',
       }}
-      aria-label="Menu principal"
+      aria-label={i18n.t('layout.navLabel')}
     >
       <div className="flex flex-col flex-1 min-h-0 p-3">
         <div className={`flex items-center gap-3 ${collapsed ? 'justify-center px-0' : 'px-2'} pb-4 border-b border-slate-100 dark:border-slate-800`}>
@@ -131,7 +135,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChan
               onClick={onLogout}
               className={`w-full flex items-center justify-center gap-2 py-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all text-xs font-bold focus-visible:ring-2 focus-visible:ring-red-500/50 ${collapsed ? 'px-0' : ''}`}
             >
-              <LogOut size={16} aria-hidden /> {!collapsed && <span>Sair</span>}
+              <LogOut size={16} aria-hidden /> {!collapsed && <span>{i18n.t('layout.logout')}</span>}
             </button>
           </div>
         </div>
@@ -140,7 +144,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChan
           type="button"
           onClick={handleToggle}
           className="mt-2 flex items-center justify-center w-full py-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
-          aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
+          aria-label={collapsed ? i18n.t('layout.expandMenu') : i18n.t('layout.collapseMenu')}
         >
           {collapsed ? (
             <span className="material-icons text-lg">chevron_right</span>
