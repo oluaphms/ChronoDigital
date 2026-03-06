@@ -25,9 +25,17 @@ Se você está recebendo erros relacionados ao Firebase, isso acontece porque o 
    - **Project URL** (ex: `https://xxxxx.supabase.co`)
    - **anon public** key (uma chave longa)
 
-### 3. Configurar o Arquivo .env.local
+### 3. Arquivos de ambiente (.env e .env.local)
 
-Abra o arquivo `.env.local` na raiz do projeto e substitua os valores:
+- **Só o `.env.local` é necessário** na raiz do projeto para desenvolvimento local. Não é obrigatório ter um arquivo `.env`.
+- Se existir `.env`, o Vite carrega primeiro o `.env` e depois o `.env.local` (o `.env.local` sobrescreve). Para este projeto, usar apenas `.env.local` com as credenciais do Supabase é suficiente.
+- O `.env.local` está no `.gitignore` e não deve ser commitado. Use o `.env.local.example` como modelo (copie para `.env.local` e preencha).
+
+**Em produção (Vercel):** não existe `.env.local` no servidor. Configure **VITE_SUPABASE_URL** e **VITE_SUPABASE_ANON_KEY** em **Vercel → Project → Settings → Environment Variables**.
+
+### 4. Configurar o Arquivo .env.local
+
+Abra (ou crie) o arquivo `.env.local` na raiz do projeto e preencha:
 
 ```env
 # Supabase Configuration
@@ -35,14 +43,14 @@ VITE_SUPABASE_URL=https://seu-projeto.supabase.co
 VITE_SUPABASE_ANON_KEY=sua_chave_anon_aqui
 ```
 
-### 4. Exemplo de Como Ficaria
+### 5. Exemplo de Como Ficaria
 
 ```env
 VITE_SUPABASE_URL=https://abcdefghijklmnop.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3AiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTYzODk2NzI5MCwiZXhwIjoxOTU0NTQzMjkwfQ.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### 5. Criar as Tabelas no Banco de Dados
+### 6. Criar as Tabelas no Banco de Dados
 
 O app usa **3 tabelas**: `users`, `companies`, `time_records`. Veja [SUPABASE_TABELAS.md](./SUPABASE_TABELAS.md) para resumo.
 
@@ -55,7 +63,7 @@ No Supabase Dashboard:
 2. Clique em **"New query"**
 3. Cole o conteúdo de **`supabase_schema.sql`** (raiz do projeto) e execute. Esse arquivo inclui as 3 tabelas, índices e todas as políticas RLS.
 
-### 6. Configurar Autenticação
+### 7. Configurar Autenticação
 
 1. No Supabase Dashboard, vá em **Authentication** > **Providers**
 2. Habilite **Email** (já vem habilitado por padrão)
@@ -63,7 +71,7 @@ No Supabase Dashboard:
    - Clique em **Google**
    - Siga as instruções para configurar OAuth
 
-### 7. Reiniciar o Servidor
+### 8. Reiniciar o Servidor
 
 Após configurar o `.env.local`:
 

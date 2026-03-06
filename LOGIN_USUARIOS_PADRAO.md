@@ -15,15 +15,25 @@ O login é validado pelo **Supabase Auth** (`auth.users`). Os registros em `publ
 |------------------------------|-----------------|------------|
 | `desenvolvedor@smartponto.com` | ex: `dev123`    | Admin      |
 | `admin@smartponto.com`         | ex: `admin123`  | Admin      |
+| `funcionario@smartponto.com`   | ex: `funcionario123` | Funcionário (sem painel admin) |
 | `oluaphms@gmail.com`           | (defina uma)    | Colaborador|
 | `paulohmorais@hotmail.com`     | (defina uma)    | Admin      |
 
 - Marque **Auto Confirm User** para não precisar confirmar e-mail.
 - Anote a senha que definir; o app não sabe a senha antiga.
 
-### 2. Sincronizar `public.users` com o Auth
+### 2. (Opcional) Script dos 3 usuários de teste
 
-Depois de criar os usuários no Auth, rode o script que mantém `public.users` alinhado com `auth.users` (preservando nome, cargo e role):
+Para criar de uma vez **Funcionário**, **Administrador** e **Desenvolvedor** com os roles corretos:
+
+1. Crie no Auth (como acima) os 3 usuários: `funcionario@smartponto.com`, `admin@smartponto.com`, `desenvolvedor@smartponto.com`.
+2. No Supabase: **SQL Editor** → **New query** → cole o conteúdo de **`supabase/criar_usuarios_teste.sql`** e execute.
+
+O script cria a empresa de teste `comp_1` (se não existir) e define em `public.users`: funcionário com `role = employee` (sem painel admin), admin e desenvolvedor com `role = admin` (acesso total).
+
+### 3. Sincronizar `public.users` com o Auth
+
+Se preferir não usar o script acima, depois de criar os usuários no Auth rode o script que mantém `public.users` alinhado com `auth.users` (preservando nome, cargo e role):
 
 1. No Supabase: **SQL Editor** → **New query**.
 2. Abra o arquivo `supabase/sync_auth_users.sql` do projeto.
@@ -31,7 +41,7 @@ Depois de criar os usuários no Auth, rode o script que mantém `public.users` a
 
 Assim, cada usuário do Auth passa a ter um registro em `public.users` com o mesmo `id`, e o app consegue carregar perfil e fazer login.
 
-### 3. Como logar no app
+### 4. Como logar no app
 
 - **Campo "Nome de usuário ou Email"**: pode ser o e-mail completo ou só o “login”:
   - `admin` → o app usa `admin@smartponto.com`
@@ -40,7 +50,7 @@ Assim, cada usuário do Auth passa a ter um registro em `public.users` com o mes
 
 Se você só inseriu linhas em `public.users` e **não** criou os usuários em **Authentication → Users**, o login sempre falha, porque a checagem de e-mail/senha é feita no Auth.
 
-### Erro 400 no login (`/auth/v1/token?grant_type=password`)
+### 5. Erro 400 no login (`/auth/v1/token?grant_type=password`)
 
 Se aparecer **400** na aba Rede (Network) ao tentar logar, o Supabase está recusando e-mail/senha. Causas comuns:
 
@@ -48,7 +58,7 @@ Se aparecer **400** na aba Rede (Network) ao tentar logar, o Supabase está recu
 - **Senha errada**: use a senha definida no Supabase para esse usuário.
 - **E-mail não confirmado**: ao criar o usuário, marque **Auto Confirm User**.
 
-### No celular: “só consegui logar uma vez, depois não entra mais”
+### 6. No celular: “só consegui logar uma vez, depois não entra mais”
 
 Pode ser sessão antiga em conflito. O app agora **limpa a sessão antes de cada login**. Se ainda falhar:
 
