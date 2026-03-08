@@ -180,7 +180,18 @@ const AdminEmployees: React.FC = () => {
         loadData();
       }
     } catch (e: any) {
-      setError(e?.message || 'Erro ao salvar');
+      const msg = String(e?.message ?? '');
+      const code = e?.code ?? '';
+      const isDuplicateEmail =
+        code === '23505' ||
+        msg.includes('users_email_key') ||
+        (msg.includes('duplicate key') && msg.includes('email')) ||
+        /already registered|already exists|user already/i.test(msg);
+      if (isDuplicateEmail) {
+        setError('Este e-mail já está cadastrado. Use outro e-mail ou edite o funcionário existente.');
+      } else {
+        setError(msg || 'Erro ao salvar');
+      }
     } finally {
       setSaving(false);
     }
