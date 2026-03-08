@@ -10,6 +10,8 @@ interface ShiftRow {
   name: string;
   start_time: string;
   end_time: string;
+  break_start_time: string | null;
+  break_end_time: string | null;
   break_duration: number;
   tolerance_minutes: number;
 }
@@ -23,8 +25,9 @@ const AdminShifts: React.FC = () => {
   const [form, setForm] = useState({
     name: '',
     start_time: '08:00',
+    break_start_time: '12:00',
+    break_end_time: '13:00',
     end_time: '17:00',
-    break_duration: 60,
     tolerance_minutes: 15,
   });
   const [saving, setSaving] = useState(false);
@@ -42,8 +45,10 @@ const AdminShifts: React.FC = () => {
         (data ?? []).map((r: any) => ({
           id: r.id,
           name: r.name,
-          start_time: r.start_time ?? '08:00',
-          end_time: r.end_time ?? '17:00',
+          start_time: toTimeStr(r.start_time ?? '08:00'),
+          end_time: toTimeStr(r.end_time ?? '17:00'),
+          break_start_time: r.break_start_time ? toTimeStr(r.break_start_time) : null,
+          break_end_time: r.break_end_time ? toTimeStr(r.break_end_time) : null,
           break_duration: r.break_duration ?? 0,
           tolerance_minutes: r.tolerance_minutes ?? 0,
         }))
@@ -63,7 +68,14 @@ const AdminShifts: React.FC = () => {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm({ name: '', start_time: '08:00', end_time: '17:00', break_duration: 60, tolerance_minutes: 15 });
+    setForm({
+      name: '',
+      start_time: '08:00',
+      break_start_time: '12:00',
+      break_end_time: '13:00',
+      end_time: '17:00',
+      tolerance_minutes: 15,
+    });
     setModalOpen(true);
   };
 
@@ -72,8 +84,9 @@ const AdminShifts: React.FC = () => {
     setForm({
       name: row.name,
       start_time: toTimeStr(row.start_time),
+      break_start_time: row.break_start_time ?? '12:00',
+      break_end_time: row.break_end_time ?? '13:00',
       end_time: toTimeStr(row.end_time),
-      break_duration: row.break_duration ?? 0,
       tolerance_minutes: row.tolerance_minutes ?? 0,
     });
     setModalOpen(true);
@@ -84,8 +97,9 @@ const AdminShifts: React.FC = () => {
     setForm({
       name: `${row.name} (cópia)`,
       start_time: toTimeStr(row.start_time),
+      break_start_time: row.break_start_time ?? '12:00',
+      break_end_time: row.break_end_time ?? '13:00',
       end_time: toTimeStr(row.end_time),
-      break_duration: row.break_duration ?? 0,
       tolerance_minutes: row.tolerance_minutes ?? 0,
     });
     setModalOpen(true);
@@ -103,25 +117,33 @@ const AdminShifts: React.FC = () => {
       setMessage({ type: 'error', text: 'Informe o nome do horário.' });
       return;
     }
-    const startMin = timeToMinutes(form.start_time);
-    const endMin = timeToMinutes(form.end_time);
-    if (endMin <= startMin) {
-      setMessage({ type: 'error', text: 'A saída deve ser após a entrada.' });
+    const tEntrada = timeToMinutes(form.start_time);
+    const tSaidaIntervalo = timeToMinutes(form.break_start_time);
+    const tVoltaIntervalo = timeToMinutes(form.break_end_time);
+    const tSaida = timeToMinutes(form.end_time);
+    if (tSaidaIntervalo <= tEntrada) {
+      setMessage({ type: 'error', text: 'Saída para intervalo deve ser após a entrada.' });
       return;
     }
-    const durationMin = endMin - startMin;
-    if (form.break_duration >= durationMin) {
-      setMessage({ type: 'error', text: 'O intervalo deve ser menor que a jornada (entrada até saída).' });
+    if (tVoltaIntervalo <= tSaidaIntervalo) {
+      setMessage({ type: 'error', text: 'Volta do intervalo deve ser após a saída para intervalo.' });
       return;
     }
+    if (tSaida <= tVoltaIntervalo) {
+      setMessage({ type: 'error', text: 'Saída final deve ser após a volta do intervalo.' });
+      return;
+    }
+    const breakDurationMin = tVoltaIntervalo - tSaidaIntervalo;
     setSaving(true);
     setMessage(null);
     try {
       const payload = {
         name: form.name.trim(),
         start_time: form.start_time,
+        break_start_time: form.break_start_time,
+        break_end_time: form.break_end_time,
         end_time: form.end_time,
-        break_duration: form.break_duration,
+        break_duration: breakDurationMin,
         tolerance_minutes: form.tolerance_minutes,
       };
       if (editingId) {
@@ -182,8 +204,9 @@ const AdminShifts: React.FC = () => {
               <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Nome</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Entrada</th>
+                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Saída interv.</th>
+                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Volta interv.</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Saída</th>
-                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Intervalo (min)</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Tolerância (min)</th>
                 <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Ações</th>
               </tr>
@@ -193,8 +216,9 @@ const AdminShifts: React.FC = () => {
                 <tr key={row.id} className="border-b border-slate-100 dark:border-slate-800">
                   <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{row.name}</td>
                   <td className="px-4 py-3 tabular-nums">{toTimeStr(row.start_time)}</td>
+                  <td className="px-4 py-3 tabular-nums">{row.break_start_time ?? '—'}</td>
+                  <td className="px-4 py-3 tabular-nums">{row.break_end_time ?? '—'}</td>
                   <td className="px-4 py-3 tabular-nums">{toTimeStr(row.end_time)}</td>
-                  <td className="px-4 py-3">{row.break_duration ?? 0}</td>
                   <td className="px-4 py-3">{row.tolerance_minutes ?? 0}</td>
                   <td className="px-4 py-3 text-right">
                     <button type="button" onClick={() => openDuplicate(row)} className="p-2 text-slate-500 hover:text-slate-700 rounded-lg" title="Duplicar"><Copy className="w-4 h-4" /></button>
@@ -219,25 +243,30 @@ const AdminShifts: React.FC = () => {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome</label>
               <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Ex: Comercial 8h" />
             </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">4 registros diários: entrada, saída intervalo, volta do intervalo, saída.</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Entrada</label>
                 <input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Saída</label>
-                <input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Saída intervalo</label>
+                <input type="time" value={form.break_start_time} onChange={(e) => setForm({ ...form, break_start_time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Intervalo (min)</label>
-                <input type="number" min={0} value={form.break_duration} onChange={(e) => setForm({ ...form, break_duration: Number(e.target.value) })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Entrada volta do intervalo</label>
+                <input type="time" value={form.break_end_time} onChange={(e) => setForm({ ...form, break_end_time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Tolerância (min)</label>
-                <input type="number" min={0} value={form.tolerance_minutes} onChange={(e) => setForm({ ...form, tolerance_minutes: Number(e.target.value) })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Saída</label>
+                <input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
               </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Tolerância (min)</label>
+              <input type="number" min={0} value={form.tolerance_minutes} onChange={(e) => setForm({ ...form, tolerance_minutes: Number(e.target.value) })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
             </div>
             <div className="flex gap-3 pt-2">
               <button type="button" onClick={() => setModalOpen(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium">Cancelar</button>
