@@ -13,7 +13,7 @@ O login é validado pelo **Supabase Auth** (`auth.users`). Os registros em `publ
 
 | E-mail (exatamente)           | Senha (exemplo) | Observação |
 |------------------------------|-----------------|------------|
-| `  | ex: `dev123`    | Admin      |
+| `desenvolvedor@smartponto.com` | ex: `dev123`    | Admin      |
 | `admin@smartponto.com`         | ex: `admin123`  | Admin      |
 | `funcionario@smartponto.com`   | ex: `funcionario123` | Funcionário (sem painel admin) |
 | `oluaphms@gmail.com`           | (defina uma)    | Colaborador|
