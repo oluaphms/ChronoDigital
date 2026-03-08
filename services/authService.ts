@@ -163,7 +163,18 @@ class AuthService {
       }
       
       if (data.user) {
-        const appUser = await this.supabaseUserToAppUser(data.user);
+        // Timeout na carga do perfil: evita "Servidor indisponível" quando só um usuário
+        // (ex.: desenvolvedor@smartponto.com) tem perfil lento/RLS travando em public.users
+        const PROFILE_LOAD_TIMEOUT_MS = 12000;
+        const appUser = await Promise.race([
+          this.supabaseUserToAppUser(data.user),
+          new Promise<User | null>((resolve) =>
+            setTimeout(() => {
+              console.warn('[Auth] Carregamento do perfil em public.users excedeu o tempo; usando perfil mínimo.');
+              resolve(null);
+            }, PROFILE_LOAD_TIMEOUT_MS)
+          ),
+        ]);
         if (appUser) {
           try {
             localStorage.setItem('current_user', JSON.stringify(appUser));

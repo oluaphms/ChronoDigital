@@ -56,7 +56,8 @@ const authStorage =
       }
     : undefined;
 
-const SUPABASE_FETCH_TIMEOUT_MS = 15000;
+// Timeout por requisição (auth + REST). Free tier pode ter cold start; 30s evita falso "Tempo esgotado".
+const SUPABASE_FETCH_TIMEOUT_MS = 30000;
 
 const fetchWithTimeout: typeof fetch = (...args) =>
   Promise.race([
@@ -88,8 +89,8 @@ if (configured) {
 
 export const supabase = client;
 
-/** Timeout padrão para testes de conexão (ms). */
-const DEFAULT_CONNECTION_TIMEOUT_MS = 10000;
+/** Timeout padrão para testes de conexão e operações (ms). */
+const DEFAULT_CONNECTION_TIMEOUT_MS = 20000;
 
 /** Testa se o projeto Supabase está acessível (rede, URL e chave). Usa tabela users ou employees. */
 export async function testSupabaseConnection(
@@ -384,15 +385,25 @@ const realStorage = configured
 
 export const storage = realStorage;
 
+const RESET_SESSION_SIGNOUT_TIMEOUT_MS = 4000;
+
 /**
  * Limpa sessão quebrada (timeout, projeto pausado, token corrompido).
- * Faz signOut no Supabase, limpa localStorage/sessionStorage e recarrega a página.
+ * Tenta signOut no Supabase com timeout curto; se o servidor estiver indisponível,
+ * não trava: limpa storage e recarrega a página mesmo assim.
  */
 export async function resetSession(): Promise<void> {
   try {
-    if (client) await client.auth.signOut();
+    if (client) {
+      await Promise.race([
+        client.auth.signOut(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('signOut timeout')), RESET_SESSION_SIGNOUT_TIMEOUT_MS)
+        ),
+      ]);
+    }
   } catch {
-    // ignora falha de rede/timeout no signOut
+    // Servidor indisponível ou timeout: segue para limpar storage e recarregar
   }
   try {
     if (typeof localStorage !== 'undefined') localStorage.clear();

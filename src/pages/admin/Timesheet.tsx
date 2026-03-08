@@ -5,6 +5,11 @@ import PageHeader from '../../components/PageHeader';
 import { LoadingState } from '../../../components/UI';
 import { FileDown, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react';
 
+function formatLocation(loc: { lat?: number; lng?: number } | null | undefined): string {
+  if (!loc || loc.lat == null || loc.lng == null) return '—';
+  return `${Number(loc.lat).toFixed(4)}, ${Number(loc.lng).toFixed(4)}`;
+}
+
 type DaySummary = {
   date: string;
   entrance: string;
@@ -13,6 +18,7 @@ type DaySummary = {
   breakEnd?: string;
   workedHours: string;
   status: string;
+  location?: string;
 };
 
 type TimesheetRow = {
@@ -95,6 +101,7 @@ const AdminTimesheet: React.FC = () => {
           if (!existing.breakStart) existing.breakStart = time;
           else existing.breakEnd = time;
         }
+        if (r.location && existing.location == null) existing.location = formatLocation(r.location);
         byDate.set(d, existing);
       });
       byDate.forEach((sum, d) => {
@@ -127,12 +134,12 @@ const AdminTimesheet: React.FC = () => {
   };
 
   const handleExportExcel = () => {
-    const headers = ['Funcionário', 'Data', 'Entrada', 'Saída', 'Intervalo', 'Horas Trabalhadas', 'Status'];
+    const headers = ['Funcionário', 'Data', 'Entrada', 'Saída', 'Intervalo', 'Horas Trabalhadas', 'Localização', 'Status'];
     const lines = [headers.join('\t')];
     buildRows.forEach((row) => {
       row.dates.forEach((d) => {
-        const sum = row.byDate.get(d) || { entrance: '', exit: '', breakStart: '', breakEnd: '', workedHours: '', status: '' };
-        lines.push([row.userName, d, sum.entrance, sum.exit, sum.breakStart && sum.breakEnd ? `${sum.breakStart}-${sum.breakEnd}` : '', sum.workedHours, sum.status].join('\t'));
+        const sum = row.byDate.get(d) || { entrance: '', exit: '', breakStart: '', breakEnd: '', workedHours: '', location: '', status: '' };
+        lines.push([row.userName, d, sum.entrance, sum.exit, sum.breakStart && sum.breakEnd ? `${sum.breakStart}-${sum.breakEnd}` : '', sum.workedHours, sum.location || '—', sum.status].join('\t'));
       });
     });
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
@@ -250,6 +257,7 @@ const AdminTimesheet: React.FC = () => {
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Saída</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Intervalo</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Horas Trabalhadas</th>
+                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Localização</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Status</th>
                 <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Ações</th>
               </tr>
@@ -267,6 +275,7 @@ const AdminTimesheet: React.FC = () => {
                       <td className="px-4 py-3 tabular-nums">{sum.exit || '—'}</td>
                       <td className="px-4 py-3">{sum.breakStart && sum.breakEnd ? `${sum.breakStart} - ${sum.breakEnd}` : '—'}</td>
                       <td className="px-4 py-3 tabular-nums">{sum.workedHours || '—'}</td>
+                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs font-mono">{sum.location ?? '—'}</td>
                       <td className="px-4 py-3">{sum.status || 'OK'}</td>
                       <td className="px-4 py-3 text-right">
                         {rec && (

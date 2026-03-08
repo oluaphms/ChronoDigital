@@ -4,7 +4,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
 import { LoadingState } from '../../../components/UI';
-import { MapPin, Clock, RefreshCw } from 'lucide-react';
+import { MapPin, RefreshCw } from 'lucide-react';
 
 type Status = 'Trabalhando' | 'Em Pausa' | 'Offline' | 'Ausente';
 
@@ -18,7 +18,7 @@ interface EmployeeStatus {
   lng?: number;
 }
 
-const AdminMonitoring: React.FC = () => {
+const EmployeeMonitoring: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [list, setList] = useState<EmployeeStatus[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -80,7 +80,7 @@ const AdminMonitoring: React.FC = () => {
   useEffect(() => {
     if (!supabase || !user?.companyId) return;
     const channel = supabase
-      .channel('time_records_monitoring')
+      .channel('time_records_monitoring_employee')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_records', filter: `company_id=eq.${user.companyId}` }, () => {
         load();
       })
@@ -92,17 +92,10 @@ const AdminMonitoring: React.FC = () => {
 
   if (loading || !user) return <LoadingState message="Carregando..." />;
 
-  const statusColor: Record<Status, string> = {
-    Trabalhando: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
-    'Em Pausa': 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-    Offline: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
-    Ausente: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <PageHeader title="Monitoramento" />
+        <PageHeader title="Mapa em tempo real" />
         <button
           type="button"
           onClick={() => load()}
@@ -112,53 +105,25 @@ const AdminMonitoring: React.FC = () => {
           <RefreshCw className={`w-5 h-5 ${loadingData ? 'animate-spin' : ''}`} /> Atualizar
         </button>
       </div>
-      <p className="text-sm text-slate-600 dark:text-slate-400">Status em tempo real dos funcionários. Atualização automática via Supabase Realtime.</p>
+      <p className="text-sm text-slate-600 dark:text-slate-400">
+        Localização em tempo real dos colegas que bateram ponto com GPS. Atualização automática.
+      </p>
 
-      {/* Mapa: localização em tempo real de quem bateu ponto com GPS */}
       <div className="space-y-2">
         <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-          <MapPin className="w-5 h-5 text-indigo-500" />
+          <MapPin className="w-5 h-5 text-emerald-500" />
           Mapa em tempo real
         </h2>
         <MonitoringMap employees={list} height="420px" className="w-full" />
       </div>
 
-      <h2 className="text-base font-semibold text-slate-800 dark:text-slate-200 pt-2">Lista por status</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {list.map((emp) => (
-          <div
-            key={emp.userId}
-            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-5 flex flex-col gap-3"
-          >
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-900 dark:text-white truncate">{emp.userName}</span>
-              <span className={`px-2.5 py-1 rounded-lg text-xs font-medium shrink-0 ${statusColor[emp.status]}`}>
-                {emp.status}
-              </span>
-            </div>
-            {emp.lastRecordAt && (
-              <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                <Clock className="w-4 h-4 shrink-0" />
-                <span>Último registro: {emp.lastRecordAt}</span>
-              </div>
-            )}
-            {emp.lastRecordType && (
-              <p className="text-xs text-slate-500 dark:text-slate-400">Tipo: {emp.lastRecordType}</p>
-            )}
-            {(emp.lat != null && emp.lng != null) && (
-              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                <MapPin className="w-4 h-4 shrink-0" />
-                <span>Lat {Number(emp.lat).toFixed(4)}, Lng {Number(emp.lng).toFixed(4)}</span>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
       {!loadingData && list.length === 0 && (
-        <p className="text-center text-slate-500 dark:text-slate-400 py-8">Nenhum funcionário na empresa.</p>
+        <p className="text-center text-slate-500 dark:text-slate-400 py-8">
+          Nenhuma localização recente. Os colegas aparecem aqui ao bater ponto com GPS.
+        </p>
       )}
     </div>
   );
 };
 
-export default AdminMonitoring;
+export default EmployeeMonitoring;

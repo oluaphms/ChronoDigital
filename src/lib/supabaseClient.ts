@@ -1,7 +1,7 @@
 /**
  * Cliente centralizado Supabase (path canônico: src/lib/supabaseClient).
  * Re-exporta do serviço raiz que já inclui:
- * - fetch com timeout 15s (evita requisições travadas)
+ * - fetch com timeout 30s (evita falso "Tempo esgotado" em rede lenta / free tier)
  * - auth com persistSession e autoRefreshToken
  */
 

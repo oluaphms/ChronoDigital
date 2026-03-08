@@ -112,6 +112,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
         { label: 'Dashboard', path: '/employee/dashboard' },
         { label: 'Registrar Ponto', path: '/employee/clock' },
         { label: 'Espelho de Ponto', path: '/employee/timesheet' },
+        { label: 'Mapa em tempo real', path: '/employee/monitoring' },
         { label: 'Banco de Horas', path: '/employee/time-balance' },
         { label: 'Perfil', path: '/employee/profile' },
         { label: 'Configurações', path: '/employee/settings' },

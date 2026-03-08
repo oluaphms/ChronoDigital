@@ -6,6 +6,11 @@ import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import { LoadingState } from '../../../components/UI';
 import { calculateWorkedHours } from '../../utils/timeCalculations';
 
+function formatLocation(loc: { lat?: number; lng?: number } | null | undefined): string {
+  if (!loc || loc.lat == null || loc.lng == null) return '—';
+  return `${Number(loc.lat).toFixed(4)}, ${Number(loc.lng).toFixed(4)}`;
+}
+
 const EmployeeTimesheet: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [records, setRecords] = useState<any[]>([]);
@@ -37,7 +42,7 @@ const EmployeeTimesheet: React.FC = () => {
   }, [records, periodStart, periodEnd]);
 
   const byDate = useMemo(() => {
-    const map = new Map<string, { entrance?: string; exit?: string; breakStart?: string; breakEnd?: string; worked: string; status: string }>();
+    const map = new Map<string, { entrance?: string; exit?: string; breakStart?: string; breakEnd?: string; worked: string; status: string; location?: string }>();
     const sorted = [...filtered].sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
     sorted.forEach((r: any) => {
       const d = (r.created_at || '').slice(0, 10);
@@ -49,6 +54,7 @@ const EmployeeTimesheet: React.FC = () => {
         if (!cur.breakStart) cur.breakStart = time;
         else cur.breakEnd = time;
       }
+      if (r.location && cur.location == null) cur.location = formatLocation(r.location);
       map.set(d, cur);
     });
     map.forEach((sum, d) => {
@@ -104,6 +110,7 @@ const EmployeeTimesheet: React.FC = () => {
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Saída</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Intervalo</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Horas Trabalhadas</th>
+                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Localização</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Status</th>
               </tr>
             </thead>
@@ -117,6 +124,7 @@ const EmployeeTimesheet: React.FC = () => {
                     <td className="px-4 py-3 tabular-nums">{sum.exit || '—'}</td>
                     <td className="px-4 py-3">{sum.breakStart && sum.breakEnd ? `${sum.breakStart} - ${sum.breakEnd}` : '—'}</td>
                     <td className="px-4 py-3 tabular-nums">{sum.worked || '—'}</td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs font-mono">{sum.location ?? '—'}</td>
                     <td className="px-4 py-3">{sum.status || 'OK'}</td>
                   </tr>
                 );

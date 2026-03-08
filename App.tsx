@@ -75,6 +75,7 @@ import AdminSettings from './src/pages/admin/Settings';
 import EmployeeDashboard from './src/pages/employee/Dashboard';
 import EmployeeClockIn from './src/pages/employee/ClockIn';
 import EmployeeTimesheet from './src/pages/employee/Timesheet';
+import EmployeeMonitoring from './src/pages/employee/Monitoring';
 import EmployeeProfile from './src/pages/employee/Profile';
 import EmployeeSettings from './src/pages/employee/Settings';
 import TimeBalancePage from './src/pages/TimeBalance';
@@ -169,6 +170,7 @@ const AppMain: React.FC = () => {
   // Conexão Supabase (fallback quando servidor pausado/rede lenta)
   const [connectionUnavailable, setConnectionUnavailable] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isResettingSession, setIsResettingSession] = useState(false);
 
   // Theme State (para tela de login)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -212,15 +214,13 @@ const AppMain: React.FC = () => {
           return;
         }
 
-        // Teste de conexão ao iniciar (log em dev; fallback se servidor pausado)
-        testSupabaseConnection(10000).then((result) => {
+        // Teste de conexão ao iniciar apenas para log (não bloqueia a tela)
+        const connectionTimeoutMs = 15000;
+        testSupabaseConnection(connectionTimeoutMs).then((result) => {
           if (result.ok && import.meta.env?.DEV) {
             console.log('[SmartPonto] Conexão Supabase OK');
           }
-          if (!result.ok) {
-            logSupabaseError(new Error(result.message ?? 'Connection test failed'), result);
-            if (isMounted) setConnectionUnavailable(true);
-          }
+          // Não loga falha aqui para não poluir o console; login mostrará erro se precisar.
         });
 
         // Tentar obter usuário do Supabase Auth com timeout
@@ -502,13 +502,13 @@ const AppMain: React.FC = () => {
       const email = rawEmail.trim().toLowerCase();
 
       const loginPromise = authService.signInWithEmail(email, loginData.password);
-      const LOGIN_TIMEOUT_MS = 45000; // 45 segundos
+      const LOGIN_TIMEOUT_MS = 60000; // 60 segundos (rede lenta / primeiro acesso)
       const timeoutPromise = new Promise<{ user: any; error: string | null }>((_, reject) =>
         setTimeout(
           () =>
             reject(
               new Error(
-                'Tempo esgotado. O servidor Supabase pode estar pausado (free tier) ou a rede está lenta. Abra https://supabase.com/dashboard e verifique se o projeto está ativo (Restore se pausado). Em seguida use "Limpar sessão e tentar de novo".'
+                'Tempo esgotado. O servidor pode estar lento ou pausado (Supabase free tier). Verifique em supabase.com/dashboard se o projeto está ativo. Use "Limpar sessão e tentar de novo" e tente novamente.'
               )
             ),
           LOGIN_TIMEOUT_MS
@@ -520,7 +520,7 @@ const AppMain: React.FC = () => {
       } catch (timeoutErr: any) {
         logSupabaseError(timeoutErr, 'login');
         setLoginError(timeoutErr?.message || 'Tempo esgotado. Tente novamente.');
-        setConnectionUnavailable(true);
+        // Não força tela "Servidor indisponível": usuário fica no login e pode clicar em "Limpar sessão e tentar de novo"
         return;
       }
 
@@ -560,7 +560,14 @@ const AppMain: React.FC = () => {
   /** Limpa sessão e estado para tentar login de novo (timeout, 400 ou sessão quebrada). */
   const handleClearSessionAndRetry = async () => {
     setLoginError(null);
+    setIsResettingSession(true);
     await resetSession();
+  };
+
+  /** Voltar à tela de login sem recarregar (útil se a reconexão automática já tiver restaurado). */
+  const handleBackToLogin = () => {
+    setConnectionUnavailable(false);
+    setLoginError(null);
   };
 
   const handleLogout = async () => {
@@ -630,6 +637,10 @@ const AppMain: React.FC = () => {
 
   // Fallback: servidor temporariamente indisponível (free tier pausado / rede lenta)
   if (connectionUnavailable) {
+    const onClearSession = async () => {
+      setIsResettingSession(true);
+      await resetSession();
+    };
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
         <div className="max-w-md w-full space-y-6">
@@ -640,14 +651,24 @@ const AppMain: React.FC = () => {
             Servidor temporariamente indisponível.
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-sm">
-            {isReconnecting ? 'Tentando reconectar...' : 'Aguarde ou limpe a sessão para tentar novamente.'}
+            {isReconnecting ? 'Tentando reconectar...' : isResettingSession ? 'Limpando sessão...' : 'Aguarde, volte ao login ou limpe a sessão para tentar novamente.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Button
-              onClick={() => resetSession()}
+              onClick={handleBackToLogin}
+              variant="outline"
               className="w-full sm:w-auto"
+              disabled={isResettingSession}
             >
-              Limpar sessão e tentar de novo
+              Voltar ao login
+            </Button>
+            <Button
+              onClick={onClearSession}
+              className="w-full sm:w-auto"
+              disabled={isResettingSession}
+              loading={isResettingSession}
+            >
+              {isResettingSession ? 'Limpando...' : 'Limpar sessão e tentar de novo'}
             </Button>
           </div>
         </div>
@@ -877,6 +898,7 @@ const AppMain: React.FC = () => {
             <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
             <Route path="/employee/clock" element={<EmployeeClockIn />} />
             <Route path="/employee/timesheet" element={<EmployeeTimesheet />} />
+            <Route path="/employee/monitoring" element={<EmployeeMonitoring />} />
             <Route path="/employee/profile" element={<EmployeeProfile />} />
             <Route path="/employee/settings" element={<EmployeeSettings />} />
             <Route path="/employee/time-balance" element={<TimeBalancePage />} />

@@ -11,7 +11,7 @@ export async function checkSupabaseConnection(): Promise<boolean> {
   }
 
   try {
-    const { error } = await supabase.from('employees').select('id').limit(1);
+    const { error } = await supabase.from('users').select('id').limit(1);
 
     if (error) throw error;
 

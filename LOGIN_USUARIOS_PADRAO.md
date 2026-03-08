@@ -58,7 +58,14 @@ Se aparecer **400** na aba Rede (Network) ao tentar logar, o Supabase está recu
 - **Senha errada**: use a senha definida no Supabase para esse usuário.
 - **E-mail não confirmado**: ao criar o usuário, marque **Auto Confirm User**.
 
-### 6. No celular: “só consegui logar uma vez, depois não entra mais”
+### 6. Só o usuário desenvolvedor@smartponto.com cai em "Servidor temporariamente indisponível"
+
+Se **apenas** esse usuário fica na tela de servidor indisponível e os outros (admin, funcionário) entram normal, a causa costuma ser a **carga do perfil** em `public.users` (consulta lenta ou RLS para esse usuário). O app agora aplica um **timeout** nessa etapa: se passar de ~12 s, o login segue com um perfil mínimo e o usuário entra. Para corrigir de vez:
+
+1. No Supabase, **SQL Editor**: confira se existe **uma** linha em `public.users` com `email = 'desenvolvedor@smartponto.com'` e com `id` **igual** ao do usuário em **Authentication → Users** (mesmo UUID).
+2. Se não existir ou o `id` for diferente, rode o script **`supabase/sync_auth_users.sql`** (ou **`supabase/criar_usuarios_teste.sql`** se for o ambiente de teste) para alinhar Auth e `public.users`.
+
+### 7. No celular: “só consegui logar uma vez, depois não entra mais”
 
 Pode ser sessão antiga em conflito. O app agora **limpa a sessão antes de cada login**. Se ainda falhar:
 

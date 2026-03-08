@@ -18,7 +18,12 @@ function normalizeError(error: unknown): { message: string; category: ErrorCateg
   const msg = error instanceof Error ? error.message : String(error);
   const lower = msg.toLowerCase();
 
-  if (lower.includes('timeout') || lower.includes('tempo esgotado')) {
+  if (
+    lower.includes('timeout') ||
+    lower.includes('tempo esgotado') ||
+    lower.includes('não respondeu a tempo') ||
+    lower.includes('nao respondeu a tempo')
+  ) {
     return { message: msg, category: 'timeout' };
   }
   if (
@@ -54,7 +59,12 @@ export function logSupabaseError(error: unknown, detail?: unknown): void {
   if (log.length > maxLogSize) log.shift();
 
   if (typeof console !== 'undefined') {
-    console.warn('[SmartPonto]', category, message, detail ?? '');
+    // Timeout em dev: debug para não poluir console (mensagem já aparece na UI quando for login)
+    if (category === 'timeout' && typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.debug('[SmartPonto]', category, message, detail ?? '');
+    } else {
+      console.warn('[SmartPonto]', category, message, detail ?? '');
+    }
   }
 }
 
