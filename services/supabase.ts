@@ -7,11 +7,27 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() || '';
 const configured = !!(supabaseUrl && supabaseAnonKey);
 
 export const isSupabaseConfigured = configured;
+
+// Log imediato se variáveis faltando ou URL suspeita (evita timeout por URL errada)
+if (typeof console !== 'undefined') {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error(
+      '❌ [Supabase] Variáveis de ambiente não encontradas. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local e reinicie o servidor (npm run dev).',
+    );
+    console.error(
+      '❌ Se VITE_SUPABASE_URL estiver errado, o sistema fica tentando conectar indefinidamente e gera exatamente o erro de timeout.',
+    );
+  } else if (!supabaseUrl.startsWith('https://') || !supabaseUrl.includes('.supabase.co')) {
+    console.warn(
+      '⚠️ [Supabase] VITE_SUPABASE_URL não parece uma URL válida do Supabase (esperado: https://xxxx.supabase.co). Verifique o .env.local.',
+    );
+  }
+}
 
 const notConfiguredMsg =
   'Supabase não configurado. Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local (local) ou nas variáveis de ambiente da Vercel (Settings → Environment Variables). Veja CONFIGURAR_SUPABASE.md.';
@@ -59,32 +75,72 @@ if (configured) {
 
 export const supabase = client;
 
-/** Testa se o projeto Supabase está acessível (rede, URL e chave). Timeout 25s (projeto pausado pode demorar para acordar). */
-export async function testSupabaseConnection(): Promise<{ ok: boolean; message?: string }> {
+/** Timeout padrão para testes de conexão (ms). */
+const DEFAULT_CONNECTION_TIMEOUT_MS = 10000;
+
+/** Testa se o projeto Supabase está acessível (rede, URL e chave). Usa tabela users ou employees. */
+export async function testSupabaseConnection(
+  timeoutMs: number = DEFAULT_CONNECTION_TIMEOUT_MS,
+): Promise<{ ok: boolean; message?: string }> {
   if (!configured || !client) {
     return { ok: false, message: notConfiguredMsg };
   }
-  const timeoutMs = 25000;
-  try {
-    const queryPromise = client.from('users').select('id').limit(1);
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), timeoutMs)
-    );
-    const { error } = await Promise.race([queryPromise, timeoutPromise]);
-    if (error && error.code !== 'PGRST116') {
-      return { ok: false, message: error.message || 'Erro ao acessar o Supabase.' };
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('timeout')), timeoutMs),
+  );
+  const tablesToTry = ['users', 'employees', 'companies'] as const;
+  for (const table of tablesToTry) {
+    try {
+      const queryPromise = client.from(table).select('*').limit(1);
+      const { error } = await Promise.race([queryPromise, timeoutPromise]);
+      if (error && error.code !== 'PGRST116') {
+        continue; // tabela inexistente ou outro erro – tenta próxima
+      }
+      if (typeof console !== 'undefined' && import.meta.env?.DEV) {
+        console.log('[SmartPonto] Supabase connected (table:', table, ')');
+      }
+      return { ok: true };
+    } catch (e: any) {
+      if (e?.message === 'timeout') {
+        return {
+          ok: false,
+          message:
+            'O Supabase não respondeu a tempo. Causas comuns: (1) Projeto pausado — em supabase.com/dashboard abra o projeto e clique em "Restore" se aparecer pausado; aguarde 1–2 minutos e tente de novo. (2) Rede lenta ou bloqueada. (3) URL errada no .env.local (VITE_SUPABASE_URL deve ser https://xxxx.supabase.co). Clique em "Entrar" novamente ou use "Limpar sessão e tentar de novo".',
+        };
+      }
+      // não é timeout, pode ser rede/outro – tenta próxima tabela
     }
-    return { ok: true };
-  } catch (e: any) {
-    if (e?.message === 'timeout') {
-      return {
-        ok: false,
-        message:
-          'O Supabase não respondeu a tempo. Causas comuns: (1) Projeto pausado — em supabase.com/dashboard abra o projeto e clique em "Restore" se aparecer pausado; aguarde 1–2 minutos e tente de novo. (2) Rede lenta ou bloqueada. (3) URL errada no .env.local (VITE_SUPABASE_URL deve ser https://xxxx.supabase.co). Clique em "Entrar" novamente para testar de novo.',
-      };
-    }
-    return { ok: false, message: e?.message || 'Não foi possível conectar ao Supabase.' };
   }
+  return {
+    ok: false,
+    message:
+      'Não foi possível conectar ao Supabase. Verifique VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local, reinicie o servidor (npm run dev) e tente novamente.',
+  };
+}
+
+/**
+ * Executa uma promise do Supabase com timeout. Útil para evitar travamento em redes lentas ou projeto pausado.
+ * @param promise Promise retornada por supabase.from(...).select() etc.
+ * @param ms Timeout em ms (padrão 10000).
+ */
+export async function withSupabaseTimeout<T>(
+  promise: Promise<{ data: T; error: any }>,
+  ms: number = DEFAULT_CONNECTION_TIMEOUT_MS,
+): Promise<{ data: T; error: any }> {
+  return Promise.race([
+    promise,
+    new Promise<{ data: null; error: { message: string } }>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Supabase timeout (${ms}ms). O servidor pode estar pausado ou a rede está lenta.`,
+            ),
+          ),
+        ms,
+      ),
+    ),
+  ]);
 }
 
 // Stub auth when not configured: getCurrentUser → null, onAuthStateChange → no-op

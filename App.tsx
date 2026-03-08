@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo, Suspense, lazy } from 'react';
-import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { User, LogType, DailySummary, PunchMethod, Company } from './types';
 import Layout from './components/Layout';
 import Clock from './components/Clock';
@@ -11,7 +11,7 @@ import { getWorkInsights } from './services/geminiService';
 import { PontoService } from './services/pontoService';
 import { useRecords } from './hooks/useRecords';
 import { authService } from './services/authService';
-import { isSupabaseConfigured } from './services/supabase';
+import { isSupabaseConfigured, testSupabaseConnection } from './services/supabase';
 import { validateLogin } from './lib/validationSchemas';
 import ProfileView from './components/ProfileView';
 import {
@@ -75,6 +75,7 @@ import EmployeeClockIn from './src/pages/employee/ClockIn';
 import EmployeeTimesheet from './src/pages/employee/Timesheet';
 import EmployeeProfile from './src/pages/employee/Profile';
 import EmployeeSettings from './src/pages/employee/Settings';
+import TimeBalancePage from './src/pages/TimeBalance';
 
 // Lazy loading of complex views
 const AdminView = lazy(() => import('./components/AdminView'));
@@ -204,6 +205,16 @@ const AppMain: React.FC = () => {
           }
           return;
         }
+
+        // Teste de conexão ao iniciar (log em dev; evita timeout por URL errada)
+        testSupabaseConnection(10000).then((result) => {
+          if (result.ok && import.meta.env?.DEV) {
+            console.log('[SmartPonto] Conexão Supabase OK');
+          }
+          if (!result.ok && typeof console !== 'undefined') {
+            console.warn('[SmartPonto] Supabase connection test failed:', result.message);
+          }
+        });
 
         // Tentar obter usuário do Supabase Auth com timeout
         const userPromise = authService.getCurrentUser();
@@ -805,6 +816,9 @@ const AppMain: React.FC = () => {
       <LayoutComponent user={user} activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout}>
         <Suspense fallback={<LoadingState message="Carregando módulo inteligente..." />}>
           <Routes>
+            {/* Redirecionamentos para dashboard */}
+            <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+            <Route path="/employee" element={<Navigate to="/employee/dashboard" replace />} />
             {/* Rotas Admin */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/employees" element={<AdminEmployees />} />
@@ -821,6 +835,7 @@ const AppMain: React.FC = () => {
             <Route path="/employee/timesheet" element={<EmployeeTimesheet />} />
             <Route path="/employee/profile" element={<EmployeeProfile />} />
             <Route path="/employee/settings" element={<EmployeeSettings />} />
+            <Route path="/employee/time-balance" element={<TimeBalancePage />} />
             {/* Rotas legadas (compatibilidade) */}
             <Route path="/dashboard" element={isAdminOrHr ? <AdminDashboard /> : <EmployeeDashboard />} />
             <Route path="/dashboard-admin" element={<AdminDashboard />} />

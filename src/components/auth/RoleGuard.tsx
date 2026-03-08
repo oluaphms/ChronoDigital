@@ -19,7 +19,7 @@ const RoleGuard: React.FC<RoleGuardProps> = ({
   user,
   allowedRoles,
   children,
-  redirectTo = '/dashboard-employee',
+  redirectTo = '/employee/dashboard',
 }) => {
   const location = useLocation();
 

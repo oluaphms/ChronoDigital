@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Clock,
   CalendarDays,
+  Scale,
   User,
   Settings,
   LogOut,
@@ -19,6 +20,7 @@ const EMPLOYEE_ITEMS = [
   { label: 'Dashboard', path: '/employee/dashboard', icon: LayoutDashboard },
   { label: 'Registrar Ponto', path: '/employee/clock', icon: Clock },
   { label: 'Espelho de Ponto', path: '/employee/timesheet', icon: CalendarDays },
+  { label: 'Banco de Horas', path: '/employee/time-balance', icon: Scale },
   { label: 'Perfil', path: '/employee/profile', icon: User },
   { label: 'Configurações', path: '/employee/settings', icon: Settings },
 ];

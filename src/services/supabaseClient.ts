@@ -28,3 +28,6 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
 
 export { db, auth, storage, isSupabaseConfigured, SupabaseClient, createClient };
 
+// Re-export para uso de timeout em queries críticas
+export { testSupabaseConnection, withSupabaseTimeout } from '../../services/supabase';
+

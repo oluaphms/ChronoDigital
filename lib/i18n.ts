@@ -41,6 +41,7 @@ const translations: Record<Language, Record<string, string>> = {
     'menu.horarios': 'Horários',
     'menu.empresa': 'Empresa',
     'menu.registrarPonto': 'Registrar Ponto',
+    'menu.timeBalance': 'Banco de Horas',
     'menu.perfil': 'Perfil',
     // Layout
     'layout.searchPlaceholder': 'Pesquisar ponto ou colaborador...',
@@ -124,6 +125,7 @@ const translations: Record<Language, Record<string, string>> = {
     'menu.horarios': 'Schedules',
     'menu.empresa': 'Company',
     'menu.registrarPonto': 'Clock In/Out',
+    'menu.timeBalance': 'Time Balance',
     'menu.perfil': 'Profile',
     // Layout
     'layout.searchPlaceholder': 'Search time or employee...',

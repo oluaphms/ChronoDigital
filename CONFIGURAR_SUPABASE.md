@@ -109,13 +109,22 @@ Se o login nunca completa e aparece **Tempo esgotado** tanto em localhost quanto
 3. **Variáveis em produção (Vercel)**  
    No site publicado, as variáveis vêm do Vercel, não do `.env.local`. Em **Vercel → Project → Settings → Environment Variables**, confira **VITE_SUPABASE_URL** e **VITE_SUPABASE_ANON_KEY** (e redeploy após alterar).
 
+4. **URL errada (causa muito comum de timeout)**  
+   Se **VITE_SUPABASE_URL** estiver errada (typo, projeto antigo, sem `https://` ou sem `.supabase.co`), o app fica tentando conectar indefinidamente e gera exatamente o erro de timeout. Confira no `.env.local` que a URL está assim: `https://xxxxxxxx.supabase.co` (copie de **Supabase Dashboard → Settings → API → Project URL**). Depois reinicie o servidor: `npm run dev`.
+
+5. **CORS**  
+   No painel do Supabase: **Settings → API**. Confirme que o domínio do app está permitido. Para desenvolvimento local, adicione se necessário: `http://localhost:5173` ou `http://localhost:3000`.
+
 ### Outros problemas
 
 1. Verifique se todas as variáveis começam com `VITE_`
 2. Verifique se não há espaços extras nas variáveis
 3. Certifique-se de que reiniciou o servidor após alterar o `.env.local`
 4. Verifique no console do navegador se as variáveis estão sendo carregadas
-5. Verifique se as tabelas foram criadas corretamente no Supabase
+5. Verifique se as tabelas foram criadas corretamente no Supabase  
+6. **RLS (Row Level Security):** Se o Supabase retornar erro de permissão, no **SQL Editor** você pode criar uma policy temporária para teste, por exemplo:  
+   `CREATE POLICY "Allow read" ON employees FOR SELECT USING (true);`  
+   (Substitua `employees` pela tabela que estiver bloqueada. Em produção, use políticas restritas por usuário/empresa.)
 
 ## 📚 Recursos
 
