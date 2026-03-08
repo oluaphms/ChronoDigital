@@ -44,6 +44,8 @@ class AuthService {
           createdAt: user.created_at ? new Date(user.created_at) : new Date(),
           companyId: user.company_id ?? '',
           departmentId: user.department_id ?? '',
+          schedule_id: user.schedule_id,
+          phone: user.phone,
           avatar: supabaseUser.user_metadata?.avatar_url || user.avatar,
           preferences: user.preferences || {
             notifications: true,
@@ -102,6 +104,8 @@ class AuthService {
               createdAt: u.created_at ? new Date(u.created_at) : new Date(),
               companyId: u.company_id ?? '',
               departmentId: u.department_id ?? '',
+              schedule_id: u.schedule_id,
+              phone: u.phone,
               avatar: u.avatar || newUser.avatar,
               preferences: u.preferences || newUser.preferences
             };

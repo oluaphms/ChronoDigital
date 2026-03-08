@@ -51,24 +51,8 @@ import TimeClockPage from './src/pages/TimeClock';
 import TimeRecordsPage from './src/pages/TimeRecords';
 import EmployeesPage from './src/pages/Employees';
 import SchedulesPage from './src/pages/Schedules';
-import LocationsPage from './src/pages/Locations';
-import DevicesPage from './src/pages/Devices';
-import RequestsPage from './src/pages/Requests';
-import AdjustmentsPage from './src/pages/Adjustments';
-import VacationsPage from './src/pages/Vacations';
-import AbsencesPage from './src/pages/Absences';
-import TimeBalancePage from './src/pages/TimeBalance';
-import DepartmentsPage from './src/pages/Departments';
-import NotificationsPage from './src/pages/Notifications';
-import AIChatPage from './src/pages/AIChat';
-import ProductivityTrendsPage from './src/pages/ProductivityTrends';
 import RealTimeInsightsPage from './src/pages/RealTimeInsights';
-import AlertsPage from './src/pages/Alerts';
-import TeamsPage from './src/pages/Teams';
-import ScreenshotsPage from './src/pages/Screenshots';
-import TimeAttendancePage from './src/pages/TimeAttendance';
-import ActivitiesPage from './src/pages/Activities';
-import ProjectsPage from './src/pages/Projects';
+import CompanyPage from './src/pages/Company';
 import ReportsPage from './src/pages/Reports';
 import SettingsPage from './src/pages/Settings';
 import ForgotPasswordModal from './src/components/auth/ForgotPasswordModal';
@@ -77,6 +61,20 @@ import AcceptInvitePage from './src/pages/AcceptInvite';
 import RoleGuard from './src/components/auth/RoleGuard';
 import AdminLayout from './src/layouts/AdminLayout';
 import EmployeeLayout from './src/layouts/EmployeeLayout';
+import AdminDashboard from './src/pages/admin/Dashboard';
+import AdminEmployees from './src/pages/admin/Employees';
+import AdminTimesheet from './src/pages/admin/Timesheet';
+import AdminMonitoring from './src/pages/admin/Monitoring';
+import AdminSchedules from './src/pages/admin/Schedules';
+import AdminShifts from './src/pages/admin/Shifts';
+import AdminCompany from './src/pages/admin/Company';
+import AdminReports from './src/pages/admin/Reports';
+import AdminSettings from './src/pages/admin/Settings';
+import EmployeeDashboard from './src/pages/employee/Dashboard';
+import EmployeeClockIn from './src/pages/employee/ClockIn';
+import EmployeeTimesheet from './src/pages/employee/Timesheet';
+import EmployeeProfile from './src/pages/employee/Profile';
+import EmployeeSettings from './src/pages/employee/Settings';
 
 // Lazy loading of complex views
 const AdminView = lazy(() => import('./components/AdminView'));
@@ -467,7 +465,7 @@ const AppMain: React.FC = () => {
     });
   }, [records, historyTypeFilter, historyMethodFilter, historyDateFilter]);
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent, skipConnectionTest = false) => {
     e.preventDefault();
     const parsed = validateLogin(loginData);
     if (!parsed.success) {
@@ -479,10 +477,12 @@ const AppMain: React.FC = () => {
     setLoginError(null);
 
     try {
-      const connectionTest = await testSupabaseConnection();
-      if (!connectionTest.ok) {
-        setLoginError(connectionTest.message ?? 'Não foi possível conectar ao Supabase.');
-        return;
+      if (!skipConnectionTest) {
+        const connectionTest = await testSupabaseConnection();
+        if (!connectionTest.ok) {
+          setLoginError(connectionTest.message ?? 'Não foi possível conectar ao Supabase.');
+          return;
+        }
       }
 
       const rawEmail = loginData.identifier.includes('@')
@@ -530,10 +530,10 @@ const AppMain: React.FC = () => {
 
         if (result.user.role === 'admin' || result.user.role === 'hr') {
           setActiveTab('admin');
-          navigate('/dashboard', { replace: true });
+          navigate('/admin/dashboard', { replace: true });
         } else {
           setActiveTab('dashboard');
-          navigate('/dashboard', { replace: true });
+          navigate('/employee/dashboard', { replace: true });
         }
       }
     } catch (error: any) {
@@ -743,13 +743,24 @@ const AppMain: React.FC = () => {
                       <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-500 text-xs font-bold animate-in shake">
                         <AlertTriangle size={16} /> {loginError}
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleClearSessionAndRetry}
-                        className="text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 underline"
-                      >
-                        Limpar sessão e tentar de novo
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleClearSessionAndRetry}
+                          className="text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 underline"
+                        >
+                          Limpar sessão e tentar de novo
+                        </button>
+                        {loginError.includes('não respondeu a tempo') || loginError.includes('Sem resposta') ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { setLoginError(null); handleLoginSubmit(e, true); }}
+                            className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline font-medium"
+                          >
+                            Tentar login mesmo assim
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   )}
 
@@ -786,71 +797,61 @@ const AppMain: React.FC = () => {
   }
 
   const path = location.pathname;
+  const isAdminRoute = path.startsWith('/admin');
+  const isEmployeeRoute = path.startsWith('/employee');
   const isPortalRoute =
+    isAdminRoute ||
+    isEmployeeRoute ||
     path === '/dashboard' ||
     path === '/dashboard-admin' ||
     path === '/dashboard-employee' ||
     path === '/time-clock' ||
     path === '/time-records' ||
-    path === '/admin' ||
     path === '/settings' ||
+    path === '/profile' ||
     path === '/employees' ||
-    path === '/departments' ||
     path === '/schedules' ||
-    path === '/locations' ||
-    path === '/devices' ||
-    path === '/requests' ||
-    path === '/adjustments' ||
-    path === '/vacations' ||
-    path === '/absences' ||
-    path === '/time-balance' ||
-    path === '/notifications' ||
-    path === '/ai-chat' ||
-    path === '/productivity-trends' ||
     path === '/real-time-insights' ||
-    path === '/alerts' ||
-    path === '/teams' ||
-    path === '/screenshots' ||
-    path === '/time-attendance' ||
-    path === '/activities' ||
-    path === '/projects' ||
+    path === '/company' ||
     path === '/reports';
 
   const isAdminOrHr = user.role === 'admin' || user.role === 'hr';
-  const LayoutComponent = isAdminOrHr ? AdminLayout : EmployeeLayout;
+  const LayoutComponent = isAdminRoute ? AdminLayout : isEmployeeRoute ? EmployeeLayout : isAdminOrHr ? AdminLayout : EmployeeLayout;
 
   if (isPortalRoute) {
     return (
       <LayoutComponent user={user} activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout}>
         <Suspense fallback={<LoadingState message="Carregando módulo inteligente..." />}>
           <Routes>
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/dashboard-admin" element={<DashboardPage />} />
-            <Route path="/dashboard-employee" element={<DashboardPage />} />
+            {/* Rotas Admin */}
+            <Route path="/admin/dashboard" element={<AdminDashboard />} />
+            <Route path="/admin/employees" element={<AdminEmployees />} />
+            <Route path="/admin/timesheet" element={<AdminTimesheet />} />
+            <Route path="/admin/monitoring" element={<AdminMonitoring />} />
+            <Route path="/admin/schedules" element={<AdminSchedules />} />
+            <Route path="/admin/shifts" element={<AdminShifts />} />
+            <Route path="/admin/company" element={<AdminCompany />} />
+            <Route path="/admin/reports" element={<AdminReports />} />
+            <Route path="/admin/settings" element={<AdminSettings />} />
+            {/* Rotas Funcionário */}
+            <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
+            <Route path="/employee/clock" element={<EmployeeClockIn />} />
+            <Route path="/employee/timesheet" element={<EmployeeTimesheet />} />
+            <Route path="/employee/profile" element={<EmployeeProfile />} />
+            <Route path="/employee/settings" element={<EmployeeSettings />} />
+            {/* Rotas legadas (compatibilidade) */}
+            <Route path="/dashboard" element={isAdminOrHr ? <AdminDashboard /> : <EmployeeDashboard />} />
+            <Route path="/dashboard-admin" element={<AdminDashboard />} />
+            <Route path="/dashboard-employee" element={<EmployeeDashboard />} />
             <Route path="/time-clock" element={<TimeClockPage />} />
             <Route path="/time-records" element={<TimeRecordsPage />} />
-            <Route
-              path="/admin"
-              element={
-                <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <AdminView admin={user} />
-                </RoleGuard>
-              }
-            />
-            <Route path="/settings" element={<SettingsPage user={user} />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/profile" element={<ProfileView user={user} />} />
             <Route
               path="/employees"
               element={
                 <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
                   <EmployeesPage />
-                </RoleGuard>
-              }
-            />
-            <Route
-              path="/departments"
-              element={
-                <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <DepartmentsPage />
                 </RoleGuard>
               }
             />
@@ -863,51 +864,29 @@ const AppMain: React.FC = () => {
               }
             />
             <Route
-              path="/locations"
+              path="/real-time-insights"
               element={
                 <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <LocationsPage />
+                  <RealTimeInsightsPage />
                 </RoleGuard>
               }
             />
             <Route
-              path="/devices"
+              path="/company"
               element={
                 <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <DevicesPage />
+                  <CompanyPage user={user} />
                 </RoleGuard>
               }
             />
-            <Route path="/requests" element={<RequestsPage />} />
             <Route
-              path="/adjustments"
+              path="/reports"
               element={
                 <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <AdjustmentsPage />
+                  <ReportsPage />
                 </RoleGuard>
               }
             />
-            <Route path="/vacations" element={<VacationsPage />} />
-            <Route path="/absences" element={<AbsencesPage />} />
-            <Route path="/time-balance" element={<TimeBalancePage />} />
-            <Route path="/notifications" element={<NotificationsPage />} />
-            <Route
-              path="/ai-chat"
-              element={
-                <RoleGuard user={user} allowedRoles={['admin', 'hr']}>
-                  <AIChatPage />
-                </RoleGuard>
-              }
-            />
-            <Route path="/productivity-trends" element={<ProductivityTrendsPage />} />
-            <Route path="/real-time-insights" element={<RealTimeInsightsPage />} />
-            <Route path="/alerts" element={<AlertsPage />} />
-            <Route path="/teams" element={<TeamsPage />} />
-            <Route path="/screenshots" element={<ScreenshotsPage />} />
-            <Route path="/time-attendance" element={<TimeAttendancePage />} />
-            <Route path="/activities" element={<ActivitiesPage />} />
-            <Route path="/projects" element={<ProjectsPage />} />
-            <Route path="/reports" element={<ReportsPage />} />
           </Routes>
         </Suspense>
       </LayoutComponent>

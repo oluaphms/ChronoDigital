@@ -1,12 +1,16 @@
 import React, { memo, useCallback, useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { User } from '../types';
 import { Bell, Search, Sun, Moon, BrainCircuit } from 'lucide-react';
 import NotificationCenter from './NotificationCenter';
 import { NotificationService } from '../services/notificationService';
 import { ThemeService } from '../services/themeService';
 import { AppSidebar, AppSidebarNavContent } from '../src/components/layout';
+import { getMenuItemsForUser } from '../src/config/menuItems';
 import { MobileDrawer, MenuToggleButton } from '../src/components/navigation';
 import { i18n } from '../lib/i18n';
+import AdminSidebar from '../src/components/AdminSidebar';
+import EmployeeSidebar from '../src/components/EmployeeSidebar';
 
 const SIDEBAR_WIDTH_EXPANDED = 240;
 const SIDEBAR_WIDTH_COLLAPSED = 72;
@@ -23,12 +27,19 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab, onLogout, layoutVariant }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>(user.preferences?.theme || 'auto');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isDesktop, setIsDesktop] = useState(typeof window !== 'undefined' && window.innerWidth >= 1024);
+
+  const isAdminRoutes = location.pathname.startsWith('/admin');
+  const isEmployeeRoutes = location.pathname.startsWith('/employee');
+  const useAdminSidebar = layoutVariant === 'admin' || isAdminRoutes;
+  const useEmployeeSidebar = layoutVariant === 'employee' || isEmployeeRoutes;
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 1024px)');
@@ -64,13 +75,63 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
 
   const sidebarWidth = sidebarCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED;
 
+  const sidebar = useAdminSidebar ? (
+    <AdminSidebar user={user} onLogout={onLogout} onCollapsedChange={setSidebarCollapsed} />
+  ) : useEmployeeSidebar ? (
+    <EmployeeSidebar user={user} onLogout={onLogout} onCollapsedChange={setSidebarCollapsed} />
+  ) : (
+    <AppSidebar user={user} onLogout={onLogout} onCollapsedChange={setSidebarCollapsed} />
+  );
+
+  const mobileNavContent = useAdminSidebar ? (
+    <nav className="flex flex-col gap-1 py-2">
+      {[
+        { label: 'Dashboard', path: '/admin/dashboard' },
+        { label: 'Funcionários', path: '/admin/employees' },
+        { label: 'Espelho de Ponto', path: '/admin/timesheet' },
+        { label: 'Monitoramento', path: '/admin/monitoring' },
+        { label: 'Escalas', path: '/admin/schedules' },
+        { label: 'Horários', path: '/admin/shifts' },
+        { label: 'Empresa', path: '/admin/company' },
+        { label: 'Relatórios', path: '/admin/reports' },
+        { label: 'Configurações', path: '/admin/settings' },
+      ].map((item) => (
+        <button
+          key={item.path}
+          type="button"
+          onClick={() => { navigate(item.path); setIsMobileMenuOpen(false); }}
+          className={`w-full text-left px-4 py-3 rounded-xl font-medium ${location.pathname === item.path ? 'bg-indigo-600 text-white' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </nav>
+  ) : useEmployeeSidebar ? (
+    <nav className="flex flex-col gap-1 py-2">
+      {[
+        { label: 'Dashboard', path: '/employee/dashboard' },
+        { label: 'Registrar Ponto', path: '/employee/clock' },
+        { label: 'Espelho de Ponto', path: '/employee/timesheet' },
+        { label: 'Perfil', path: '/employee/profile' },
+        { label: 'Configurações', path: '/employee/settings' },
+      ].map((item) => (
+        <button
+          key={item.path}
+          type="button"
+          onClick={() => { navigate(item.path); setIsMobileMenuOpen(false); }}
+          className={`w-full text-left px-4 py-3 rounded-xl font-medium ${location.pathname === item.path ? 'bg-emerald-600 text-white' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </nav>
+  ) : (
+    <AppSidebarNavContent items={getMenuItemsForUser(user)} onItemClick={() => setIsMobileMenuOpen(false)} />
+  );
+
   return (
     <div className="flex h-screen overflow-hidden bg-transparent">
-      <AppSidebar
-        user={user}
-        onLogout={onLogout}
-        onCollapsedChange={setSidebarCollapsed}
-      />
+      {sidebar}
 
       <div
         className="flex-1 flex flex-col min-w-0 bg-transparent relative transition-[margin] duration-300 ease-in-out"
@@ -146,7 +207,7 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
         onClose={() => setIsMobileMenuOpen(false)}
         aria-label={i18n.t('layout.mobileNavLabel')}
       >
-        <AppSidebarNavContent onItemClick={() => setIsMobileMenuOpen(false)} />
+        {mobileNavContent}
         <div className="pt-6 mt-6 border-t border-slate-100 dark:border-slate-800">
           <button
             type="button"

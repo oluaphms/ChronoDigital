@@ -54,12 +54,12 @@ if (configured) {
 
 export const supabase = client;
 
-/** Testa se o projeto Supabase está acessível (rede, URL e chave). Timeout 8s. */
+/** Testa se o projeto Supabase está acessível (rede, URL e chave). Timeout 25s (projeto pausado pode demorar para acordar). */
 export async function testSupabaseConnection(): Promise<{ ok: boolean; message?: string }> {
   if (!configured || !client) {
     return { ok: false, message: notConfiguredMsg };
   }
-  const timeoutMs = 8000;
+  const timeoutMs = 25000;
   try {
     const queryPromise = client.from('users').select('id').limit(1);
     const timeoutPromise = new Promise<never>((_, reject) =>
@@ -75,7 +75,7 @@ export async function testSupabaseConnection(): Promise<{ ok: boolean; message?:
       return {
         ok: false,
         message:
-          'Sem resposta do Supabase. Verifique VITE_SUPABASE_URL no .env.local (ou nas variáveis da Vercel), a rede e se o projeto está ativo em supabase.com/dashboard.',
+          'O Supabase não respondeu a tempo. Causas comuns: (1) Projeto pausado — em supabase.com/dashboard abra o projeto e clique em "Restore" se aparecer pausado; aguarde 1–2 minutos e tente de novo. (2) Rede lenta ou bloqueada. (3) URL errada no .env.local (VITE_SUPABASE_URL deve ser https://xxxx.supabase.co). Clique em "Entrar" novamente para testar de novo.',
       };
     }
     return { ok: false, message: e?.message || 'Não foi possível conectar ao Supabase.' };

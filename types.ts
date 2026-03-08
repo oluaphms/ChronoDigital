@@ -116,6 +116,8 @@ export interface User {
   createdAt: Date;
   companyId: string;
   departmentId: string;
+  schedule_id?: string;
+  phone?: string;
   avatar?: string;
   permissions?: string[]; // Permissões customizadas (sobrescreve role)
   preferences: {

@@ -34,16 +34,19 @@ const TimeBalancePage: React.FC = () => {
     const load = async () => {
       setIsLoadingData(true);
       try {
-        const [balanceRows, recRows, wsRows, usRows] = await Promise.all([
-          db.select(
-            'time_balance',
-            [
-              { column: 'user_id', operator: 'eq', value: user.id },
-              { column: 'month', operator: 'eq', value: monthInput },
-            ],
-            { column: 'month', ascending: false },
-            1,
-          ),
+        const [balanceResult, recRows, wsRows, usRows] = await Promise.all([
+          db
+            .select(
+              'time_balance',
+              [
+                { column: 'user_id', operator: 'eq', value: user.id },
+                { column: 'month', operator: 'eq', value: monthInput },
+              ],
+              { column: 'month', ascending: false },
+              1,
+            )
+            .then((rows) => rows ?? [])
+            .catch(() => [] as any[]),
           db.select(
             'time_records',
             [{ column: 'user_id', operator: 'eq', value: user.id }],
@@ -60,7 +63,8 @@ const TimeBalancePage: React.FC = () => {
           ),
         ]);
 
-        if (balanceRows && balanceRows.length > 0) {
+        const balanceRows = Array.isArray(balanceResult) ? balanceResult : [];
+        if (balanceRows.length > 0) {
           const b = balanceRows[0];
           setSupabaseBalance({
             id: b.id,

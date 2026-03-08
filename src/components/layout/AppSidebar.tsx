@@ -1,7 +1,7 @@
 import React, { memo, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
-import { menuItems, getMenuItemName } from '../../config/menuItems';
+import { getMenuItemsForUser, getMenuItemName, type MenuItemConfig } from '../../config/menuItems';
 import { i18n } from '../../../lib/i18n';
 import { useLanguage } from '../../contexts/LanguageContext';
 import type { User } from '../../../types';
@@ -17,11 +17,13 @@ export interface AppSidebarProps {
 
 /** Conteúdo de navegação reutilizável (sidebar desktop e drawer mobile) */
 export interface AppSidebarNavContentProps {
+  items: MenuItemConfig[];
   collapsed?: boolean;
   onItemClick?: () => void;
 }
 
 export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function AppSidebarNavContent({
+  items,
   collapsed = false,
   onItemClick,
 }) {
@@ -31,7 +33,7 @@ export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function App
 
   return (
     <nav className="flex flex-col gap-1 py-2" aria-label={i18n.t('layout.navLabel')}>
-      {menuItems.map((item) => {
+      {items.map((item) => {
         const isActive = location.pathname === item.route;
         const name = getMenuItemName(item);
         return (
@@ -109,7 +111,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChan
         </div>
 
         <div className="mt-4 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-          <AppSidebarNavContent collapsed={collapsed} />
+          <AppSidebarNavContent items={getMenuItemsForUser(user)} collapsed={collapsed} />
         </div>
 
         <div className={`pt-4 mt-auto border-t border-slate-100 dark:border-slate-800 ${collapsed ? 'px-0' : 'px-2'}`}>

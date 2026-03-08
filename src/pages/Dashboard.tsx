@@ -70,30 +70,34 @@ const DashboardPage: React.FC = () => {
           })) ?? [];
         setRecords(mapped);
 
-        // time_balance do mês atual
-        const now = new Date();
-        const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const balanceRows = await db.select(
-          'time_balance',
-          [
-            { column: 'user_id', operator: 'eq', value: user.id },
-            { column: 'month', operator: 'eq', value: monthKey },
-          ],
-          { column: 'month', ascending: false },
-          1,
-        );
-        if (balanceRows && balanceRows.length > 0) {
-          const b = balanceRows[0];
-          setBalance({
-            id: b.id,
-            month: b.month,
-            user_id: b.user_id,
-            total_hours: b.total_hours ?? 0,
-            extra_hours: b.extra_hours ?? 0,
-            debit_hours: b.debit_hours ?? 0,
-            final_balance: b.final_balance ?? 0,
-          });
-        } else {
+        // time_balance do mês atual (requer tabela com coluna month; falha silenciosa se não existir)
+        try {
+          const now = new Date();
+          const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          const balanceRows = await db.select(
+            'time_balance',
+            [
+              { column: 'user_id', operator: 'eq', value: user.id },
+              { column: 'month', operator: 'eq', value: monthKey },
+            ],
+            { column: 'month', ascending: false },
+            1,
+          );
+          if (balanceRows && balanceRows.length > 0) {
+            const b = balanceRows[0];
+            setBalance({
+              id: b.id,
+              month: b.month,
+              user_id: b.user_id,
+              total_hours: b.total_hours ?? 0,
+              extra_hours: b.extra_hours ?? 0,
+              debit_hours: b.debit_hours ?? 0,
+              final_balance: b.final_balance ?? 0,
+            });
+          } else {
+            setBalance(null);
+          }
+        } catch (_) {
           setBalance(null);
         }
 
