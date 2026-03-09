@@ -506,13 +506,9 @@ const AppMain: React.FC = () => {
     setLoginError(null);
 
     try {
-      // Teste de conexão removido do login: causava timeout em redes locais mesmo com projeto ativo. O login direto retorna erro claro se URL/senha estiverem errados ou projeto inacessível.
-      const rawEmail = loginData.identifier.includes('@')
-        ? loginData.identifier
-        : `${loginData.identifier}@smartponto.com`;
-      const email = rawEmail.trim().toLowerCase();
-
-      const loginPromise = authService.signInWithEmail(email, loginData.password);
+      // Delega a resolução do identificador (email, nome, CPF) para o AuthService,
+      // que já trata e normaliza o valor (incluindo fallback de domínio quando necessário).
+      const loginPromise = authService.signInWithEmail(loginData.identifier, loginData.password);
       const LOGIN_TIMEOUT_MS = 60000; // 60 segundos (rede lenta / primeiro acesso)
       const timeoutPromise = new Promise<{ user: any; error: string | null }>((_, reject) =>
         setTimeout(

@@ -10,7 +10,10 @@ const projectRoot = path.resolve(__dirname, '..')
 const nodeModules = path.join(projectRoot, 'node_modules')
 const viteBin = path.join(nodeModules, 'vite', 'bin', 'vite.js')
 
-const env = { ...process.env, NODE_PATH: nodeModules }
+// Garantir que o Vite rode sempre em modo desenvolvimento ao usar `npm run dev`,
+// mesmo que o ambiente tenha NODE_ENV=production configurado globalmente.
+// Não sobrescrevemos NODE_PATH para evitar múltiplas cópias de React.
+const env = { ...process.env, NODE_ENV: 'development' }
 
 if (!fs.existsSync(viteBin)) {
   console.error('Vite nao encontrado. Instalando vite e @vitejs/plugin-react...')

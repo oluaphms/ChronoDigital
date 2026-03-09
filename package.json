@@ -23,8 +23,8 @@
     "leaflet": "^1.9.4",
     "list": "^2.0.19",
     "lucide-react": "^0.562.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "react-i18next": "^15.1.2",
     "react-is": "^18.3.1",
     "react-router-dom": "^7.13.1",
@@ -45,11 +45,5 @@
     "typescript": "~5.8.2",
     "vite": "^7.3.1",
     "vitest": "^2.1.8"
-  },
-  "overrides": {
-    "recharts": {
-      "react": "^19.2.3",
-      "react-dom": "^19.2.3"
-    }
   }
 }

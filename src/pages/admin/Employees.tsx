@@ -342,7 +342,10 @@ const AdminEmployees: React.FC = () => {
 
         {modalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" onClick={() => !saving && setModalOpen(false)}>
-            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div
+              className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-md max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">{editingId ? 'Editar Funcionário' : 'Cadastrar Funcionário'}</h3>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <div className="grid grid-cols-1 gap-3">
@@ -367,7 +370,7 @@ const AdminEmployees: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setShowPassword((prev) => !prev)}
-                        className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center px-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                         aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
                       >
                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}

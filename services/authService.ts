@@ -130,12 +130,25 @@ class AuthService {
       }
 
       // 3) Criar usuário básico se não existir no banco (primeiro login)
+      //    Usa role vinda do metadata se existir (admin/dev), para não cair indevidamente como "employee".
+      const metaRoleRaw =
+        supabaseUser.app_metadata?.role ??
+        supabaseUser.user_metadata?.role ??
+        (Array.isArray(supabaseUser.app_metadata?.roles) ? supabaseUser.app_metadata.roles[0] : undefined);
+      let resolvedRole: User['role'] = 'employee';
+      if (typeof metaRoleRaw === 'string') {
+        const r = metaRoleRaw.toLowerCase();
+        if (r === 'admin' || r === 'hr' || r === 'supervisor' || r === 'employee') {
+          resolvedRole = r as User['role'];
+        }
+      }
+
       const newUser: User = {
         id: supabaseUser.id,
         nome: supabaseUser.user_metadata?.nome || email.split('@')[0] || 'Usuário',
         email: supabaseUser.email || '',
         cargo: 'Colaborador',
-        role: 'employee',
+        role: resolvedRole,
         createdAt: new Date(),
         companyId: '',
         departmentId: '',
@@ -195,12 +208,25 @@ class AuthService {
       // Fallback: retorna usuário mínimo a partir só do Auth (tabela users inexistente/RLS/schema)
       const email = (supabaseUser?.email || '').trim().toLowerCase();
       if (!email) return null;
+      // Tentar ainda assim preservar uma role elevada se vier no metadata (admin/hr/supervisor)
+      const metaRoleRaw =
+        supabaseUser?.app_metadata?.role ??
+        supabaseUser?.user_metadata?.role ??
+        (Array.isArray(supabaseUser?.app_metadata?.roles) ? supabaseUser.app_metadata.roles[0] : undefined);
+      let resolvedRole: User['role'] = 'employee';
+      if (typeof metaRoleRaw === 'string') {
+        const r = metaRoleRaw.toLowerCase();
+        if (r === 'admin' || r === 'hr' || r === 'supervisor' || r === 'employee') {
+          resolvedRole = r as User['role'];
+        }
+      }
+
       return {
         id: supabaseUser.id,
         nome: supabaseUser.user_metadata?.nome || email.split('@')[0] || 'Usuário',
         email: supabaseUser.email || '',
         cargo: 'Colaborador',
-        role: 'employee',
+        role: resolvedRole,
         createdAt: new Date(),
         companyId: '',
         departmentId: '',
@@ -280,6 +306,17 @@ class AuthService {
           }
         } catch {
           // mantém employee e companyId vazio
+        }
+        // Se não conseguimos ler do banco, ainda tentamos usar role do metadata do usuário de auth
+        const metaRoleRaw =
+          data.user.app_metadata?.role ??
+          data.user.user_metadata?.role ??
+          (Array.isArray(data.user.app_metadata?.roles) ? data.user.app_metadata.roles[0] : undefined);
+        if (typeof metaRoleRaw === 'string') {
+          const r = metaRoleRaw.toLowerCase();
+          if (r === 'admin' || r === 'hr' || r === 'supervisor' || r === 'employee') {
+            fallbackRole = r as User['role'];
+          }
         }
         const u = data.user;
         const email = (u.email || '').trim().toLowerCase();
