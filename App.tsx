@@ -287,6 +287,15 @@ const AppMain: React.FC = () => {
             setCompany(null);
           }
         });
+        // Sincronizar uma vez com a sessão atual (evita perder sessão após HMR ou reload)
+        authService.getCurrentUser().then((current) => {
+          if (isMounted && current) {
+            setUser(current);
+            PontoService.getCompany(current.companyId).then(comp => {
+              if (isMounted && comp) setCompany(comp);
+            }).catch(() => {});
+          }
+        }).catch(() => {});
       } catch (error) {
         console.error('Error setting up auth state listener:', error);
       }

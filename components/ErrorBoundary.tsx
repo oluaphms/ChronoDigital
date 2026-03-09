@@ -79,7 +79,7 @@ class ErrorBoundary extends Component<Props, State> {
               </p>
             </div>
 
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {((typeof import.meta !== 'undefined' && import.meta.env?.DEV) || process.env.NODE_ENV === 'development') && this.state.error && (
               <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl p-6 space-y-4">
                 <h3 className="font-bold text-slate-900 dark:text-white text-sm">
                   Detalhes do Erro (Desenvolvimento):

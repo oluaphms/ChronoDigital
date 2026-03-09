@@ -72,6 +72,17 @@ Pode ser sessão antiga em conflito. O app agora **limpa a sessão antes de cada
 1. Na tela de login, após ver o erro, clique em **“Limpar sessão e tentar de novo”** e tente entrar de novo com o mesmo usuário e senha.
 2. Ou no navegador do celular: configurações do site → limpar dados/cookies do **app-smartponto.vercel.app** (ou localhost) e abrir o app de novo.
 
+### 8. Usuário existe no Auth mas não consigo logar (ex.: paulhenriquems7054@gmail.com)
+
+Se o usuário aparece em **Authentication → Users** e o login retorna "Email ou senha incorretos", no **Supabase Dashboard**:
+
+1. **Authentication** → **Users** → clique no usuário (ex.: paulhenriquems7054@gmail.com).
+2. **Email Confirmed**: se estiver false, clique em **Confirm email** no menu do usuário, ou em **Authentication** → **Providers** → **Email** desative **Confirm email**.
+3. **Senha**: redefina a senha do usuário (menu ⋮ → **Send password recovery** ou edite e defina uma nova, ex.: `phms705412`). No app use exatamente essa senha.
+4. Se o usuário foi criado com **Invite user**, ele precisa abrir o link do convite e definir a senha antes de logar.
+
+Depois, na tela de login use **Limpar sessão e tentar de novo** e tente com o e-mail e a senha definida no Supabase.
+
 ## Resumo
 
 1. Criar usuário em **Authentication → Users** (e-mail + senha, Auto Confirm).

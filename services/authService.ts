@@ -144,20 +144,18 @@ class AuthService {
 
   /**
    * Login com email e senha.
-   * Tenta limpar sessão anterior com timeout curto para não travar se o Supabase estiver lento/inacessível.
+   * Só limpa sessão local se já existir sessão, para não quebrar logins seguintes (ex.: após HMR ou segundo login).
    */
   async signInWithEmail(email: string, password: string): Promise<AuthResult> {
     try {
-      // Limpar sessão local primeiro (instantâneo, não chama servidor) para não travar em estado quebrado após timeout
-      await auth.signOut({ scope: 'local' });
-      // Tentar também signOut no servidor com timeout; se estiver lento/pausado, não bloqueia
+      // Limpar sessão local apenas se houver sessão (evita side effects desnecessários que podem atrapalhar o próximo signIn)
       try {
-        await Promise.race([
-          auth.signOut(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('signOut timeout')), 2000)),
-        ]);
+        const session = await auth.getSession();
+        if (session) {
+          await auth.signOut({ scope: 'local' });
+        }
       } catch {
-        // Ignora: sessão inexistente, timeout ou servidor inacessível – segue para signIn
+        // Ignora; segue para signIn
       }
       const data = await auth.signIn(email, password);
       
@@ -166,14 +164,15 @@ class AuthService {
       }
       
       if (data.user) {
-        // Timeout na carga do perfil: evita "Servidor indisponível" quando só um usuário
-        // (ex.: desenvolvedor@smartponto.com) tem perfil lento/RLS travando em public.users
-        const PROFILE_LOAD_TIMEOUT_MS = 12000;
+        // Timeout na carga do perfil: free tier / RLS podem demorar; fallback evita travar o login
+        const PROFILE_LOAD_TIMEOUT_MS = 20000;
         const appUser = await Promise.race([
           this.supabaseUserToAppUser(data.user),
           new Promise<User | null>((resolve) =>
             setTimeout(() => {
-              console.warn('[Auth] Carregamento do perfil em public.users excedeu o tempo; usando perfil mínimo.');
+              if (import.meta.env?.DEV && typeof console !== 'undefined') {
+                console.info('[Auth] Perfil completo ainda carregando; usando perfil mínimo. Você pode seguir usando o sistema.');
+              }
               resolve(null);
             }, PROFILE_LOAD_TIMEOUT_MS)
           ),
@@ -193,7 +192,7 @@ class AuthService {
         try {
           const roleRows = await Promise.race([
             db.select('users', [{ column: 'id', operator: 'eq', value: data.user.id }], undefined as any, 1),
-            new Promise<any[]>(r => setTimeout(() => r([]), 2000)),
+            new Promise<any[]>(r => setTimeout(() => r([]), 4000)),
           ]);
           if (roleRows?.[0]) {
             const row = roleRows[0];
@@ -229,9 +228,9 @@ class AuthService {
       const msg = error?.message ?? '';
 
       if (msg.includes('Invalid login credentials') || error?.status === 400) {
-        errorMessage = 'Email ou senha incorretos. Confira se o usuário existe em Authentication → Users no Supabase.';
+        errorMessage = 'Email ou senha incorretos. No Supabase: Authentication → Users → selecione o usuário → confira "Email Confirmed" (confirme se necessário) e redefina a senha se precisar.';
       } else if (msg.includes('Email not confirmed')) {
-        errorMessage = 'Por favor, confirme seu email antes de fazer login (ou marque Auto Confirm no Supabase).';
+        errorMessage = 'Email ainda não confirmado. No Supabase: Authentication → Users → clique no usuário → "Confirm email", ou em Auth Settings desative "Enable Email Confirmations".';
       } else if (msg.includes('Informe e-mail e senha')) {
         errorMessage = msg;
       } else if (msg) {
