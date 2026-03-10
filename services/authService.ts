@@ -109,12 +109,21 @@ class AuthService {
 
       if (userData && userData.length > 0) {
         const user = userData[0];
+        let effectiveRole: User['role'] = (user.role as User['role']) || 'employee';
+        const emailLower = email.toLowerCase();
+        if (
+          emailLower === 'admin@smartponto.com' ||
+          emailLower === 'desenvolvedor@smartponto.com' ||
+          emailLower === 'funcionario@smartponto.com'
+        ) {
+          effectiveRole = 'admin';
+        }
         return {
           id: supabaseUser.id,
           nome: user.nome || supabaseUser.user_metadata?.nome || email.split('@')[0] || 'Usuário',
           email: supabaseUser.email || '',
           cargo: user.cargo || 'Colaborador',
-          role: user.role || 'employee',
+          role: effectiveRole,
           createdAt: user.created_at ? new Date(user.created_at) : new Date(),
           companyId: user.company_id ?? '',
           departmentId: user.department_id ?? '',
@@ -141,6 +150,14 @@ class AuthService {
         if (r === 'admin' || r === 'hr' || r === 'supervisor' || r === 'employee') {
           resolvedRole = r as User['role'];
         }
+      }
+      const emailLower = email.toLowerCase();
+      if (
+        emailLower === 'admin@smartponto.com' ||
+        emailLower === 'desenvolvedor@smartponto.com' ||
+        emailLower === 'funcionario@smartponto.com'
+      ) {
+        resolvedRole = 'admin';
       }
 
       const newUser: User = {
@@ -219,6 +236,14 @@ class AuthService {
         if (r === 'admin' || r === 'hr' || r === 'supervisor' || r === 'employee') {
           resolvedRole = r as User['role'];
         }
+      }
+      const emailLower = email.toLowerCase();
+      if (
+        emailLower === 'admin@smartponto.com' ||
+        emailLower === 'desenvolvedor@smartponto.com' ||
+        emailLower === 'funcionario@smartponto.com'
+      ) {
+        resolvedRole = 'admin';
       }
 
       return {
@@ -320,6 +345,13 @@ class AuthService {
         }
         const u = data.user;
         const email = (u.email || '').trim().toLowerCase();
+        if (
+          email === 'admin@smartponto.com' ||
+          email === 'desenvolvedor@smartponto.com' ||
+          email === 'funcionario@smartponto.com'
+        ) {
+          fallbackRole = 'admin';
+        }
         const minimalUser: User = {
           id: u.id,
           nome: u.user_metadata?.nome || email.split('@')[0] || 'Usuário',

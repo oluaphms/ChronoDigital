@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, ReactNode } from 'react';
 
 type ToastType = 'success' | 'error' | 'info';
 
@@ -24,41 +24,67 @@ interface ToastProviderProps {
   children: ReactNode;
 }
 
-export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+interface ToastProviderState {
+  toasts: Toast[];
+}
 
-  const addToast = useCallback((type: ToastType, message: string) => {
+/**
+ * Versão baseada em classe para evitar problemas de hooks em ambientes
+ * com múltiplas cópias de React. Não usa useState/useEffect.
+ */
+export class ToastProvider extends React.Component<ToastProviderProps, ToastProviderState> {
+  private timeouts: Record<string, number> = {};
+
+  constructor(props: ToastProviderProps) {
+    super(props);
+    this.state = { toasts: [] };
+  }
+
+  componentWillUnmount(): void {
+    Object.values(this.timeouts).forEach((id) => {
+      window.clearTimeout(id);
+    });
+    this.timeouts = {};
+  }
+
+  private addToast: ToastContextValue['addToast'] = (type, message) => {
     const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+    this.setState((prev) => ({ toasts: [...prev.toasts, { id, type, message }] }));
+    const timeoutId = window.setTimeout(() => {
+      this.setState((prev) => ({ toasts: prev.toasts.filter((t) => t.id !== id) }));
+      delete this.timeouts[id];
     }, 4000);
-  }, []);
+    this.timeouts[id] = timeoutId;
+  };
 
-  const value: ToastContextValue = { addToast };
+  render() {
+    const value: ToastContextValue = { addToast: this.addToast };
+    const { children } = this.props;
+    const { toasts } = this.state;
 
-  return (
-    <ToastContext.Provider value={value}>
-      {children}
-      <div className="fixed right-4 bottom-4 z-[140] space-y-2 max-w-sm">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`px-4 py-3 rounded-2xl shadow-lg text-sm font-medium text-white ${
-              toast.type === 'success'
-                ? 'bg-emerald-600'
-                : toast.type === 'error'
-                ? 'bg-red-600'
-                : 'bg-slate-800'
-            }`}
-          >
-            {toast.message}
-          </div>
-        ))}
-      </div>
-    </ToastContext.Provider>
-  );
-};
+    return (
+      <ToastContext.Provider value={value}>
+        {children}
+        <div className="fixed right-4 bottom-4 z-[140] space-y-2 max-w-sm">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`px-4 py-3 rounded-2xl shadow-lg text-sm font-medium text-white ${
+                toast.type === 'success'
+                  ? 'bg-emerald-600'
+                  : toast.type === 'error'
+                  ? 'bg-red-600'
+                  : 'bg-slate-800'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      </ToastContext.Provider>
+    );
+  }
+}
 
 export default ToastProvider;
 

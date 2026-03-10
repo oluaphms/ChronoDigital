@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search } from 'lucide-react';
+import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, auth, isSupabaseConfigured } from '../../services/supabaseClient';
@@ -29,15 +29,38 @@ interface ScheduleOption {
 
 const OUTRO_CARGO_VALUE = '__outro__';
 
+/** Linha do CSV de importação (colunas: nome, email, senha, cargo, telefone, cpf, departamento, escala) */
+interface ImportRow {
+  nome: string;
+  email: string;
+  senha: string;
+  cargo: string;
+  telefone: string;
+  cpf: string;
+  departamento: string;
+  escala: string;
+}
+
+interface ImportResult {
+  success: number;
+  failed: { row: number; email: string; reason: string }[];
+}
+
+const CSV_TEMPLATE = 'nome,email,senha,cargo,telefone,cpf,departamento,escala\n"Maria Silva",maria@empresa.com,senha123,Analista,(11) 99999-0000,12345678901,,\n"João Santos",joao@empresa.com,senha123,Desenvolvedor,,,,';
+
 const AdminEmployees: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<EmployeeRow[]>([]);
   const [schedules, setSchedules] = useState<ScheduleOption[]>([]);
   const [cargos, setCargos] = useState<{ id: string; name: string }[]>([]);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     nome: '',
@@ -240,6 +263,236 @@ const AdminEmployees: React.FC = () => {
     }
   };
 
+  /** Parse CSV simples: suporta vírgula ou ponto-e-vírgula; campos entre aspas opcional. */
+  const parseCSV = (text: string): ImportRow[] => {
+    const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+    if (lines.length < 2) return [];
+    const header = lines[0].toLowerCase();
+    const sep = header.includes(';') ? ';' : ',';
+    const rows: ImportRow[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      const parts: string[] = [];
+      let cur = '';
+      let inQuotes = false;
+      for (let j = 0; j < line.length; j++) {
+        const c = line[j];
+        if (c === '"') {
+          inQuotes = !inQuotes;
+        } else if ((c === sep && !inQuotes) || (c === '\t' && !inQuotes)) {
+          parts.push(cur.trim());
+          cur = '';
+        } else {
+          cur += c;
+        }
+      }
+      parts.push(cur.trim());
+      const nome = parts[0]?.replace(/^"|"$/g, '')?.trim() || '';
+      const email = (parts[1]?.replace(/^"|"$/g, '')?.trim() || '').toLowerCase();
+      const senha = parts[2]?.replace(/^"|"$/g, '')?.trim() || '';
+      const cargo = parts[3]?.replace(/^"|"$/g, '')?.trim() || 'Colaborador';
+      const telefone = parts[4]?.replace(/^"|"$/g, '')?.trim() || '';
+      const cpf = parts[5]?.replace(/^"|"$/g, '')?.trim() || '';
+      const departamento = parts[6]?.replace(/^"|"$/g, '')?.trim() || '';
+      const escala = parts[7]?.replace(/^"|"$/g, '')?.trim() || '';
+      if (nome || email) {
+        rows.push({ nome, email, senha, cargo, telefone, cpf, departamento, escala });
+      }
+    }
+    return rows;
+  };
+
+  const handleDownloadTemplate = () => {
+    const blob = new Blob([CSV_TEMPLATE], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'modelo_importacao_funcionarios.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  /** Converte arquivo em lista de ImportRow conforme o tipo (CSV, TXT, XLSX, PDF). */
+  const parseFileToImportRows = async (file: File): Promise<{ rows: ImportRow[]; error?: string }> => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mime = (file.type || '').toLowerCase();
+
+    // CSV ou TXT: texto
+    if (ext === 'csv' || ext === 'txt' || mime.includes('text/plain') || mime.includes('text/csv') || mime.includes('application/csv')) {
+      const text = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve((r.result as string) || '');
+        r.onerror = () => reject(new Error('Falha ao ler arquivo'));
+        r.readAsText(file, 'UTF-8');
+      });
+      const rows = parseCSV(text);
+      return { rows };
+    }
+
+    // Excel (XLSX / XLS)
+    if (ext === 'xlsx' || ext === 'xls' || mime.includes('spreadsheet') || mime.includes('excel')) {
+      const buffer = await file.arrayBuffer();
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
+      const sheet = workbook.worksheets[0];
+      if (!sheet) return { rows: [], error: 'Planilha vazia' };
+      const headerRow = sheet.getRow(1);
+      const col = (key: string) => {
+        const k = key.toLowerCase();
+        let idx = 0;
+        headerRow.eachCell((cell, colNumber) => {
+          if (String(cell.value || '').toLowerCase().trim() === k) idx = colNumber;
+        });
+        return idx;
+      };
+      const get = (row: any, key: string) => String(row.getCell(col(key))?.value ?? '').trim();
+      const rows: ImportRow[] = [];
+      for (let i = 2; i <= sheet.rowCount; i++) {
+        const row = sheet.getRow(i);
+        const nome = get(row, 'nome');
+        const email = get(row, 'email');
+        if (!nome && !email) continue;
+        rows.push({
+          nome,
+          email: email.toLowerCase(),
+          senha: get(row, 'senha'),
+          cargo: get(row, 'cargo') || 'Colaborador',
+          telefone: get(row, 'telefone'),
+          cpf: get(row, 'cpf'),
+          departamento: get(row, 'departamento'),
+          escala: get(row, 'escala'),
+        });
+      }
+      return { rows };
+    }
+
+    // PDF: extrair texto e interpretar como linhas CSV-like
+    if (ext === 'pdf' || mime.includes('pdf')) {
+      try {
+        const buffer = await file.arrayBuffer();
+        const pdfjsLib = await import('pdfjs-dist');
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+        const numPages = pdf.numPages;
+        let fullText = '';
+        for (let p = 1; p <= numPages; p++) {
+          const page = await pdf.getPage(p);
+          const content = await page.getTextContent();
+          fullText += (content.items as { str?: string }[]).map((it) => it.str || '').join(' ') + '\n';
+        }
+        const rows = parseCSV(fullText);
+        return { rows };
+      } catch (err: any) {
+        return { rows: [], error: `PDF não pôde ser lido: ${err?.message || 'formato inválido'}. Use CSV ou Excel.` };
+      }
+    }
+
+    // Outros: tentar como texto
+    const text = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve((r.result as string) || '');
+      r.onerror = () => reject(new Error('Falha ao ler arquivo'));
+      r.readAsText(file, 'UTF-8');
+    });
+    const rows = parseCSV(text);
+    return { rows };
+  };
+
+  const runBulkImport = async (toImport: ImportRow[]) => {
+    if (!user?.companyId) return;
+    const failed: ImportResult['failed'] = [];
+    let success = 0;
+    const deptByName = new Map(departments.map((d) => [d.name.trim().toLowerCase(), d.id]));
+    const schedByName = new Map(schedules.map((s) => [s.name.trim().toLowerCase(), s.id]));
+    for (let i = 0; i < toImport.length; i++) {
+      const row = toImport[i];
+      const rowNum = i + 2;
+      if (!row.nome.trim()) {
+        failed.push({ row: rowNum, email: row.email || '—', reason: 'Nome obrigatório' });
+        continue;
+      }
+      if (!row.email.trim()) {
+        failed.push({ row: rowNum, email: '—', reason: 'E-mail obrigatório' });
+        continue;
+      }
+      const senha = row.senha.trim() || `Smart${Date.now().toString(36)}!`;
+      const cargoFinal = row.cargo || 'Colaborador';
+      const departmentId = row.departamento ? deptByName.get(row.departamento.trim().toLowerCase()) || '' : '';
+      const scheduleId = row.escala ? schedByName.get(row.escala.trim().toLowerCase()) || '' : '';
+      try {
+        const authData = await auth.signUp(row.email.trim().toLowerCase(), senha, { nome: row.nome, cargo: cargoFinal });
+        if (!authData?.user?.id) {
+          failed.push({ row: rowNum, email: row.email, reason: 'Conta criada mas ID não retornado' });
+          continue;
+        }
+        await db.insert('users', {
+          id: authData.user.id,
+          nome: row.nome.trim(),
+          cpf: row.cpf || null,
+          email: row.email.trim().toLowerCase(),
+          phone: row.telefone || null,
+          cargo: cargoFinal,
+          role: 'employee',
+          company_id: user.companyId,
+          department_id: departmentId || null,
+          schedule_id: scheduleId || null,
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        success++;
+      } catch (err: any) {
+        const msg = String(err?.message ?? '');
+        const code = err?.code ?? '';
+        const isDup = code === '23505' || msg.includes('duplicate') || /already registered|already exists|user already/i.test(msg);
+        failed.push({
+          row: rowNum,
+          email: row.email,
+          reason: isDup ? 'E-mail já cadastrado' : (msg || 'Erro ao criar'),
+        });
+      }
+    }
+    setImportResult({ success, failed });
+    if (success > 0) loadData();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user?.companyId || !isSupabaseConfigured) return;
+    setImportResult(null);
+    setImporting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const { rows: toImport, error: parseError } = await parseFileToImportRows(file);
+      if (parseError) {
+        setError(parseError);
+        setImporting(false);
+        e.target.value = '';
+        return;
+      }
+      if (toImport.length === 0) {
+        setError('Nenhuma linha válida no arquivo. Use o modelo (nome, email, senha, cargo, telefone, cpf). Formatos: CSV, TXT, Excel (XLSX) ou PDF.');
+        setImporting(false);
+        e.target.value = '';
+        return;
+      }
+      await runBulkImport(toImport);
+    } catch (err: any) {
+      setError(err?.message || 'Erro ao processar arquivo.');
+    } finally {
+      e.target.value = '';
+      setImporting(false);
+    }
+  };
+
+  const openImportModal = () => {
+    setImportModalOpen(true);
+    setImportResult(null);
+    setError(null);
+    setSuccess(null);
+  };
+
   if (loading || !user) return <LoadingState message="Carregando..." />;
 
   return (
@@ -257,13 +510,22 @@ const AdminEmployees: React.FC = () => {
         )}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <PageHeader title="Funcionários" />
-          <button
-            type="button"
-            onClick={openCreate}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
-          >
-            <UserPlus className="w-5 h-5" /> Cadastrar Funcionário
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openImportModal}
+              className="inline-flex items-center gap-2 px-4 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              <Upload className="w-5 h-5" /> Importar funcionário
+            </button>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors"
+            >
+              <UserPlus className="w-5 h-5" /> Cadastrar Funcionário
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3">
@@ -413,6 +675,73 @@ const AdminEmployees: React.FC = () => {
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium">Cancelar</button>
                 <button type="button" onClick={handleSave} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50">Salvar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Importar funcionário */}
+        {importModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" onClick={() => !importing && setImportModalOpen(false)}>
+            <div
+              className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Importar funcionário(s)</h3>
+                <button type="button" onClick={() => !importing && setImportModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Envie um arquivo com as colunas: <strong>nome</strong>, <strong>email</strong>, <strong>senha</strong>, cargo, telefone, cpf, departamento, escala. Aceitos: <strong>CSV</strong>, <strong>TXT</strong>, <strong>Excel (XLSX)</strong>, <strong>PDF</strong> e demais formatos de texto. A primeira linha deve ser o cabeçalho.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadTemplate}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                <FileDown className="w-4 h-4" /> Baixar modelo CSV
+              </button>
+              <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.txt,.pdf,.xlsx,.xls,text/csv,text/plain,application/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,*/*"
+                  onChange={handleImportFile}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importing}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Upload className="w-5 h-5" />
+                  {importing ? 'Importando...' : 'Selecionar arquivo (CSV, TXT, PDF, Excel…)'}
+                </button>
+              </div>
+              {importResult && (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-2">
+                  <p className="text-sm font-medium text-slate-900 dark:text-white">
+                    {importResult.success} importado(s) com sucesso.
+                    {importResult.failed.length > 0 && ` ${importResult.failed.length} falha(s).`}
+                  </p>
+                  {importResult.failed.length > 0 && (
+                    <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-1 max-h-40 overflow-y-auto">
+                      {importResult.failed.map((f, i) => (
+                        <li key={i}>
+                          Linha {f.row} ({f.email}): {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end pt-2">
+                <button type="button" onClick={() => setImportModalOpen(false)} className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-50 dark:hover:bg-slate-800">
+                  Fechar
+                </button>
               </div>
             </div>
           </div>
