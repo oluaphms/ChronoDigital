@@ -26,13 +26,16 @@ const DepartmentsPage: React.FC = () => {
   const [modalError, setModalError] = useState<string | null>(null);
 
   const load = async () => {
-    if (!user?.companyId || !isSupabaseConfigured) {
+    if (!user || !isSupabaseConfigured) {
       setLoadingData(false);
       return;
     }
+    const companyId = user.companyId || user.id;
     setLoadingData(true);
     try {
-      const data = (await db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }])) as any[];
+      const data = (await db.select('departments', [
+        { column: 'company_id', operator: 'eq', value: companyId },
+      ])) as any[];
       setRows((data ?? []).map((r: any) => ({
         id: r.id,
         name: r.name || '',
@@ -75,10 +78,11 @@ const DepartmentsPage: React.FC = () => {
       setModalError('Supabase não configurado. Configure as variáveis de ambiente e reinicie.');
       return;
     }
-    if (!user?.companyId) {
-      setModalError('Empresa não identificada. Faça logout e login novamente.');
+    if (!user) {
+      setModalError('Usuário não identificado. Faça login novamente.');
       return;
     }
+    const companyId = user.companyId || user.id;
     const trimmed = name.trim();
     if (!trimmed) {
       setModalError('Informe o nome do departamento.');
@@ -94,7 +98,7 @@ const DepartmentsPage: React.FC = () => {
       } else {
         await db.insert('departments', {
           id: crypto.randomUUID(),
-          company_id: user.companyId,
+          company_id: companyId,
           name: trimmed,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),

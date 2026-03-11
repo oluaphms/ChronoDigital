@@ -605,6 +605,17 @@ class AuthService {
       // Verificar se Supabase está configurado antes de tentar
       if (!isSupabaseConfigured) {
         console.warn('Supabase not configured - returning null user');
+        // Fallback: tentar usuário salvo em localStorage (modo desenvolvimento / offline)
+        try {
+          if (typeof window !== 'undefined') {
+            const stored = window.localStorage.getItem('current_user');
+            if (stored) {
+              return JSON.parse(stored) as User;
+            }
+          }
+        } catch {
+          // ignora erro de leitura
+        }
         return null;
       }
 
@@ -617,6 +628,18 @@ class AuthService {
       const supabaseUser = await Promise.race([getUserPromise, timeoutPromise]);
       
       if (!supabaseUser) {
+        // Fallback: se não há sessão Supabase mas existe usuário em localStorage,
+        // mantemos o usuário logado em ambiente de desenvolvimento.
+        try {
+          if (typeof window !== 'undefined') {
+            const stored = window.localStorage.getItem('current_user');
+            if (stored) {
+              return JSON.parse(stored) as User;
+            }
+          }
+        } catch {
+          // ignora erro de leitura
+        }
         return null;
       }
       
@@ -646,6 +669,20 @@ class AuthService {
         const appUser = await this.supabaseUserToAppUser(session.user);
         callback(appUser);
       } else {
+        // Fallback: se Supabase reporta sessão vazia mas há usuário salvo localmente,
+        // reutilizamos esse usuário (útil em desenvolvimento quando a sessão do Supabase expira
+        // mas o usuário ainda está ativo na UI).
+        try {
+          if (typeof window !== 'undefined') {
+            const stored = window.localStorage.getItem('current_user');
+            if (stored) {
+              callback(JSON.parse(stored) as User);
+              return;
+            }
+          }
+        } catch {
+          // ignora erro de leitura
+        }
         callback(null);
       }
     });

@@ -4,6 +4,9 @@ import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import { LoadingState } from '../../../components/UI';
 import { Building2 } from 'lucide-react';
+import { PontoService } from '../../../services/pontoService';
+import { firestoreService } from '../../../services/firestoreService';
+import type { Company } from '../../../types';
 
 const AdminCompany: React.FC = () => {
   const { user, loading } = useCurrentUser();
@@ -21,63 +24,148 @@ const AdminCompany: React.FC = () => {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
+    if (!user) return;
+
+    // Se o usuário ainda não tem companyId, já libera o formulário para criar a empresa
+    if (!user.companyId) {
+      setCompanyId(user.id);
+      setForm((f) => ({ ...f, name: f.name || 'Nova Empresa' }));
+      setLoadingData(false);
+      return;
+    }
+
     const load = async () => {
       setLoadingData(true);
       try {
-        const rows = (await db.select('companies', [{ column: 'id', operator: 'eq', value: user.companyId }])) as any[];
-        if (rows?.[0]) {
-          const c = rows[0];
-          setCompanyId(c.id);
-          setForm({
-            name: c.name || c.nome || '',
-            cnpj: c.cnpj || '',
-            address: c.address || '',
-            phone: c.phone || '',
-            email: c.email || '',
-            timezone: c.timezone || 'America/Sao_Paulo',
-          });
+        if (!isSupabaseConfigured) {
+          // Fallback quando Supabase não está configurado:
+          // usa as informações locais/Firestore via PontoService
+          const company = await PontoService.getCompany(user.companyId);
+          if (company) {
+            setCompanyId(company.id);
+            setForm((f) => ({
+              ...f,
+              name: company.name || f.name || 'Nova Empresa',
+            }));
+          } else {
+            setCompanyId(user.companyId);
+            setForm((f) => ({ ...f, name: f.name || 'Nova Empresa' }));
+          }
         } else {
-          setCompanyId(user.companyId);
-          setForm((f) => ({ ...f, name: f.name || 'Nova Empresa' }));
+          const rows = (await db.select('companies', [
+            { column: 'id', operator: 'eq', value: user.companyId },
+          ])) as any[];
+          if (rows?.[0]) {
+            const c = rows[0];
+            setCompanyId(c.id);
+            setForm({
+              name: c.name || c.nome || '',
+              cnpj: c.cnpj || '',
+              address: c.address || '',
+              phone: c.phone || '',
+              email: c.email || '',
+              timezone: c.timezone || 'America/Sao_Paulo',
+            });
+          } else {
+            setCompanyId(user.companyId);
+            setForm((f) => ({ ...f, name: f.name || 'Nova Empresa' }));
+          }
         }
       } catch (e) {
         console.error(e);
-        setCompanyId(user.companyId);
+        setCompanyId(user.companyId || user.id);
       } finally {
         setLoadingData(false);
       }
     };
     load();
-  }, [user?.companyId]);
+  }, [user]);
 
   const handleSave = async () => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
+    if (!user) return;
     setSaving(true);
     setMessage(null);
     try {
-      const payload = {
-        name: form.name,
-        nome: form.name,
-        cnpj: form.cnpj || null,
-        address: form.address || null,
-        phone: form.phone || null,
-        email: form.email || null,
-        timezone: form.timezone,
-        updated_at: new Date().toISOString(),
-      };
-      const idToUse = companyId || user.companyId;
-      try {
-        await db.update('companies', idToUse, payload);
-      } catch {
-        await db.insert('companies', {
+      const idToUse = companyId || user.companyId || user.id;
+
+      if (!isSupabaseConfigured) {
+        // Modo desenvolvimento / sem Supabase: salva empresa em localStorage/FireStore via firestoreService
+        const existing = await firestoreService.getCompany(idToUse);
+        const baseSettings: Company['settings'] =
+          (existing as any)?.settings ||
+          (await PontoService.getCompany(idToUse))?.settings || {
+            fence: { lat: -23.5614, lng: -46.6559, radius: 150 },
+            allowManualPunch: true,
+            requirePhoto: true,
+            standardHours: { start: '09:00', end: '18:00' },
+            delayPolicy: { toleranceMinutes: 15 },
+          };
+
+        const company: any = {
           id: idToUse,
-          ...payload,
-          created_at: new Date().toISOString(),
-        });
+          nome: form.name || 'Nova Empresa',
+          cnpj: form.cnpj || null,
+          endereco: form.address || null,
+          geofence: baseSettings.fence,
+          settings: baseSettings,
+          createdAt: (existing as any)?.createdAt || new Date(),
+        };
+
+        await firestoreService.saveCompany(company);
+        localStorage.setItem(
+          `company_${idToUse}`,
+          JSON.stringify({
+            id: idToUse,
+            name: company.nome,
+            slug: (company.nome || 'empresa')
+              .toLowerCase()
+              .replace(/\s+/g, '-')
+              .replace(/[^a-z0-9-]/g, ''),
+            settings: baseSettings,
+          } as Company),
+        );
+      } else {
+        const payload = {
+          name: form.name,
+          nome: form.name,
+          cnpj: form.cnpj || null,
+          address: form.address || null,
+          phone: form.phone || null,
+          email: form.email || null,
+          timezone: form.timezone,
+          updated_at: new Date().toISOString(),
+        };
+        try {
+          await db.update('companies', idToUse, payload);
+        } catch {
+          await db.insert('companies', {
+            id: idToUse,
+            ...payload,
+            created_at: new Date().toISOString(),
+          });
+        }
+
+        // Se o usuário ainda não tinha companyId, vincular agora à empresa criada/atualizada
+        if (!user.companyId) {
+          try {
+            await db.update('users', user.id, { company_id: idToUse });
+          } catch (linkErr) {
+            console.error('Erro ao vincular usuário à empresa:', linkErr);
+          }
+          try {
+            const stored = localStorage.getItem('current_user');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              parsed.companyId = idToUse;
+              localStorage.setItem('current_user', JSON.stringify(parsed));
+            }
+          } catch {
+            // ignora erro de localStorage
+          }
+        }
       }
       setMessage({ type: 'success', text: 'Dados da empresa salvos com sucesso.' });
-      if (!companyId) setCompanyId(user.companyId);
+      if (!companyId) setCompanyId(idToUse);
     } catch (e: any) {
       setMessage({ type: 'error', text: e?.message || 'Erro ao salvar.' });
     } finally {
