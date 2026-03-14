@@ -17,6 +17,8 @@ import {
   CalendarClock,
   ClipboardList,
   CircleOff,
+  ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -36,10 +38,13 @@ export const adminNavigation: NavItem[] = [
   { name: 'Horários', path: '/admin/shifts', icon: Clock },
   { name: 'Jornada de Trabalho', path: '/admin/time-attendance', icon: CalendarClock },
   { name: 'Ajustes de Ponto', path: '/admin/adjustments', icon: Clock12 },
+  { name: 'Banco de Horas', path: '/admin/bank-hours', icon: Scale },
   { name: 'Ausências', path: '/admin/absences', icon: CircleOff },
   { name: 'Solicitações', path: '/admin/requests', icon: ClipboardList },
   { name: 'Monitoramento', path: '/admin/monitoring', icon: Activity },
   { name: 'Relatórios', path: '/admin/reports', icon: BarChart3 },
+  { name: 'Fiscalização REP-P', path: '/admin/fiscalizacao', icon: ShieldCheck },
+  { name: 'Segurança e Antifraude', path: '/admin/security', icon: ShieldAlert },
   { name: 'Empresa', path: '/admin/company', icon: Building },
   { name: 'Configurações', path: '/admin/settings', icon: Settings },
 ];
@@ -72,9 +77,12 @@ export function getBottomNavPrimaryItems(role: string): NavItem[] {
   return primary.length > 0 ? primary : all.slice(0, 4);
 }
 
-/** Itens que vão no drawer "Mais" no mobile (demais páginas) */
+/** Itens que vão no drawer "Mais" no mobile. Admin: lista completa (inclui Dashboard e Funcionários) para ficar tudo visível ao abrir "Mais". */
 export function getMoreMenuItems(role: string): NavItem[] {
   const all = getNavigationForRole(role);
-  const primaryPaths = role === 'admin' || role === 'hr' ? ADMIN_BOTTOM_PRIMARY : EMPLOYEE_BOTTOM_PRIMARY;
+  if (role === 'admin' || role === 'hr') {
+    return all;
+  }
+  const primaryPaths = EMPLOYEE_BOTTOM_PRIMARY;
   return all.filter((item) => !primaryPaths.includes(item.path));
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { FileDown, FileSpreadsheet } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { FileDown, FileSpreadsheet, Clock, TrendingUp, AlertTriangle, Scale, ShieldAlert } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
@@ -238,6 +239,24 @@ const AdminReports: React.FC = () => {
   return (
     <div className="space-y-6">
       <PageHeader title="Relatórios" />
+      <div className="flex flex-wrap gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+        <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase self-center">Motor de jornada:</span>
+        <Link to="/admin/reports/work-hours" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <Clock className="w-4 h-4" /> Jornada
+        </Link>
+        <Link to="/admin/reports/overtime" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <TrendingUp className="w-4 h-4" /> Horas extras
+        </Link>
+        <Link to="/admin/reports/inconsistencies" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <AlertTriangle className="w-4 h-4" /> Inconsistências
+        </Link>
+        <Link to="/admin/reports/bank-hours" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <Scale className="w-4 h-4" /> Banco de horas
+        </Link>
+        <Link to="/admin/reports/security" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <ShieldAlert className="w-4 h-4" /> Segurança (Antifraude)
+        </Link>
+      </div>
       {message && (
         <div className={`p-4 rounded-xl ${message.type === 'success' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'} text-sm`}>
           {message.text}

@@ -34,6 +34,8 @@ interface EmployeeRow {
   department_name?: string;
   schedule_id?: string;
   schedule_name?: string;
+  estrutura_id?: string;
+  estrutura_name?: string;
   status: string;
   created_at: string;
   numero_folha?: string;
@@ -85,6 +87,7 @@ const AdminEmployees: React.FC = () => {
   const [schedules, setSchedules] = useState<ScheduleOption[]>([]);
   const [cargos, setCargos] = useState<{ id: string; name: string }[]>([]);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
+  const [estruturas, setEstruturas] = useState<{ id: string; codigo: string; descricao: string }[]>([]);
   const [motivosDemissao, setMotivosDemissao] = useState<{ id: string; name: string }[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -106,6 +109,7 @@ const AdminEmployees: React.FC = () => {
     cargo: '',
     cargoOutro: '',
     department_id: '',
+    estrutura_id: '',
     schedule_id: '',
     admissao: '',
     demissao: '',
@@ -136,16 +140,18 @@ const AdminEmployees: React.FC = () => {
     if (!user?.companyId || !isSupabaseConfigured) return;
     setLoadingData(true);
     try {
-      const [usersRows, schedRows, deptRows, jobTitlesRows, motivosRows] = await Promise.all([
+      const [usersRows, schedRows, deptRows, jobTitlesRows, motivosRows, estruturasRows] = await Promise.all([
         db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }) as Promise<any[]>,
         db.select('schedules', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         db.select('job_titles', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         db.select('motivo_demissao', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
+        db.select('estruturas', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
       ]);
       const deptMap = new Map((deptRows ?? []).map((d: any) => [d.id, d.name]));
       const schedMap = new Map((schedRows ?? []).map((s: any) => [s.id, s.name]));
       const motivoMap = new Map((motivosRows ?? []).map((m: any) => [m.id, m.name]));
+      const estruturaMap = new Map((estruturasRows ?? []).map((e: any) => [e.id, e.descricao || e.codigo]));
       const list = (usersRows ?? []).map((u: any) => ({
         id: u.id,
         nome: u.nome || '',
@@ -157,6 +163,8 @@ const AdminEmployees: React.FC = () => {
         department_name: u.department_id ? deptMap.get(u.department_id) : undefined,
         schedule_id: u.schedule_id,
         schedule_name: u.schedule_id ? schedMap.get(u.schedule_id) : undefined,
+        estrutura_id: u.estrutura_id,
+        estrutura_name: u.estrutura_id ? estruturaMap.get(u.estrutura_id) : undefined,
         status: u.status || 'active',
         created_at: u.created_at,
         numero_folha: u.numero_folha,
@@ -174,6 +182,7 @@ const AdminEmployees: React.FC = () => {
       setRows(list);
       setSchedules((schedRows ?? []).map((s: any) => ({ id: s.id, name: s.name })));
       setDepartments((deptRows ?? []).map((d: any) => ({ id: d.id, name: d.name })));
+      setEstruturas((estruturasRows ?? []).map((e: any) => ({ id: e.id, codigo: e.codigo || '', descricao: e.descricao || e.codigo || '' })));
       setCargos((jobTitlesRows ?? []).map((j: any) => ({ id: j.id, name: j.name || '' })));
       setMotivosDemissao((motivosRows ?? []).map((m: any) => ({ id: m.id, name: m.name || '' })));
     } catch (e) {
@@ -202,6 +211,7 @@ const AdminEmployees: React.FC = () => {
       cargo: firstCargo || OUTRO_CARGO_VALUE,
       cargoOutro: '',
       department_id: '',
+      estrutura_id: '',
       schedule_id: '',
       admissao: '',
       demissao: '',
@@ -249,6 +259,7 @@ const AdminEmployees: React.FC = () => {
       cargo: cargoCadastrado ? row.cargo : OUTRO_CARGO_VALUE,
       cargoOutro: cargoCadastrado ? '' : row.cargo,
       department_id: row.department_id || '',
+      estrutura_id: row.estrutura_id || '',
       schedule_id: row.schedule_id || '',
       admissao: row.admissao || '',
       demissao: row.demissao || '',
@@ -322,6 +333,7 @@ const AdminEmployees: React.FC = () => {
         phone: form.phone?.trim() || null,
         cargo: cargoFinal,
         department_id: form.department_id || null,
+        estrutura_id: form.estrutura_id || null,
         schedule_id: form.schedule_id || null,
         numero_folha: form.numero_folha?.trim() || null,
         pis_pasep: form.pis_pasep?.trim() || null,
@@ -799,21 +811,44 @@ const AdminEmployees: React.FC = () => {
               className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 space-y-6"
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">{editingId ? 'Editar Funcionário' : 'Incluir Funcionário'}</h3>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center shrink-0">
+                  <User className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Funcionários | {editingId ? 'Editar' : 'Incluir'}</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Cadastro de funcionários</p>
+                </div>
+              </div>
               {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
               <div className="space-y-6">
-                {/* Dados de Identificação */}
-                <section>
-                  <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados de Identificação</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nº Folha</label>
-                      <input type="text" value={form.numero_folha} onChange={(e) => setForm({ ...form, numero_folha: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Ligação com folha de pagamento" />
+                {/* Dados de Identificação + Fotografia (lado a lado como no print) */}
+                <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="sm:col-span-2">
+                    <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados de Identificação</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nº Folha</label>
+                        <input type="text" value={form.numero_folha} onChange={(e) => setForm({ ...form, numero_folha: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Ligação com folha de pagamento" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Nome <span className="text-red-500">*</span> <span className="text-xs font-normal text-blue-500">(Portaria 1510)</span></label>
+                        <input type="text" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Nome completo (obrigatório, enviado ao REP)" />
+                      </div>
                     </div>
-                    <div className="sm:col-span-2">
-                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nome <span className="text-red-500">*</span></label>
-                      <input type="text" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Nome completo (obrigatório, enviado ao REP)" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Fotografia</h4>
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-24 h-24 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800/50 flex items-center justify-center">
+                        {form.photo_preview ? <img src={form.photo_preview} alt="Foto" className="w-full h-full object-cover" /> : <User className="w-10 h-10 text-slate-400" />}
+                      </div>
+                      <input ref={photoInputRef} type="file" accept="image/*" onChange={handlePhotoFile} className="hidden" />
+                      <div className="flex gap-2 w-full">
+                        <button type="button" onClick={() => photoInputRef.current?.click()} className="flex-1 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800">Alterar</button>
+                        <button type="button" onClick={() => setForm((f) => ({ ...f, photo_preview: '' }))} className="flex-1 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-800">Limpar</button>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -823,7 +858,7 @@ const AdminEmployees: React.FC = () => {
                   <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados Genéricos</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nº PIS/PASEP <span className="text-red-500">*</span></label>
+                      <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Nº PIS/PASEP <span className="text-red-500">*</span> <span className="text-xs font-normal text-blue-500">(Portaria 1510)</span></label>
                       <input type="text" value={form.pis_pasep} onChange={(e) => setForm({ ...form, pis_pasep: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Obrigatório, enviado ao REP" />
                     </div>
                     <div>
@@ -835,8 +870,15 @@ const AdminEmployees: React.FC = () => {
                       <input type="text" value={form.ctps} onChange={(e) => setForm({ ...form, ctps: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Carteira de Trabalho" />
                     </div>
                     <div className="sm:col-span-2">
-                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Empresa</label>
+                      <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Empresa <span className="text-xs font-normal text-blue-500">(Portaria 1510)</span></label>
                       <input type="text" value={user?.companyId ? 'Empresa atual' : ''} readOnly className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Estrutura</label>
+                      <select value={form.estrutura_id} onChange={(e) => setForm({ ...form, estrutura_id: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white">
+                        <option value="">Nenhuma</option>
+                        {estruturas.map((e) => <option key={e.id} value={e.id}>{e.descricao || e.codigo}</option>)}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Horário</label>
@@ -908,23 +950,6 @@ const AdminEmployees: React.FC = () => {
                     <div>
                       <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Telefone</label>
                       <input type="text" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Telefone" />
-                    </div>
-                  </div>
-                </section>
-
-                {/* Fotografia */}
-                <section>
-                  <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Fotografia</h4>
-                  <div className="flex flex-wrap items-start gap-4">
-                    <div className="w-24 h-24 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800/50 flex items-center justify-center">
-                      {form.photo_preview ? <img src={form.photo_preview} alt="Foto" className="w-full h-full object-cover" /> : <User className="w-10 h-10 text-slate-400" />}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <input ref={photoInputRef} type="file" accept="image/*" onChange={handlePhotoFile} className="hidden" />
-                      <button type="button" onClick={() => photoInputRef.current?.click()} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800">
-                        Abrir arquivo de imagem
-                      </button>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">Ou use Capturar de câmera (webcam) em dispositivos compatíveis.</p>
                     </div>
                   </div>
                 </section>
@@ -1001,9 +1026,13 @@ const AdminEmployees: React.FC = () => {
                 </section>
               </div>
 
+              <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                <span className="inline-flex w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-900/40 items-center justify-center text-amber-600 dark:text-amber-400 font-bold">!</span>
+                Os campos em azul são utilizados para relatórios, arquivos e comprovantes exigidos pela Portaria 1510 do MTE.
+              </p>
               <div className="flex gap-3 pt-2 border-t border-slate-200 dark:border-slate-700">
                 <button type="button" onClick={() => setModalOpen(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-medium">Cancelar</button>
-                <button type="button" onClick={handleSave} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50">{editingId ? 'Concluir' : 'Cadastrar'}</button>
+                <button type="button" onClick={handleSave} disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50">{editingId ? 'Concluir' : 'Concluir'}</button>
               </div>
             </div>
           </div>

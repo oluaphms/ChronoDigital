@@ -31,6 +31,17 @@ class AuthService {
 
     const lower = raw.toLowerCase();
 
+    // 0) Atalhos comuns: "admin" e "administrador" sempre usam a conta admin padrão
+    if (lower === 'admin' || lower === 'administrador') {
+      return 'admin@smartponto.com';
+    }
+    if (lower === 'desenvolvedor' || lower === 'dev') {
+      return 'desenvolvedor@smartponto.com';
+    }
+    if (lower === 'funcionario' || lower === 'funcionário') {
+      return 'funcionario@smartponto.com';
+    }
+
     // 1) Já é um email
     if (lower.includes('@')) {
       return lower;
@@ -109,14 +120,20 @@ class AuthService {
 
       if (userData && userData.length > 0) {
         const user = userData[0];
-        let effectiveRole: User['role'] = (user.role as User['role']) || 'employee';
+        const dbRole = (user.role as string)?.toLowerCase();
+        let effectiveRole: User['role'] =
+          dbRole === 'admin' || dbRole === 'hr' || dbRole === 'supervisor'
+            ? (user.role as User['role'])
+            : ((user.role as User['role']) || 'employee');
         const emailLower = email.toLowerCase();
         if (
           emailLower === 'admin@smartponto.com' ||
-          emailLower === 'desenvolvedor@smartponto.com' ||
-          emailLower === 'funcionario@smartponto.com'
+          emailLower === 'desenvolvedor@smartponto.com'
         ) {
           effectiveRole = 'admin';
+        }
+        if (emailLower === 'funcionario@smartponto.com') {
+          effectiveRole = 'employee';
         }
         return {
           id: supabaseUser.id,
@@ -344,13 +361,15 @@ class AuthService {
           }
         }
         const u = data.user;
-        const email = (u.email || '').trim().toLowerCase();
+        const emailForFallback = (u.email || '').trim().toLowerCase();
         if (
-          email === 'admin@smartponto.com' ||
-          email === 'desenvolvedor@smartponto.com' ||
-          email === 'funcionario@smartponto.com'
+          emailForFallback === 'admin@smartponto.com' ||
+          emailForFallback === 'desenvolvedor@smartponto.com'
         ) {
           fallbackRole = 'admin';
+        }
+        if (emailForFallback === 'funcionario@smartponto.com') {
+          fallbackRole = 'employee';
         }
         const minimalUser: User = {
           id: u.id,

@@ -1,7 +1,20 @@
 -- ============================================================
 -- RLS: permitir que o app registre funcionários, horários, escalas e departamentos
 -- Corrige: "new row violates row-level security policy for table users"
+-- Evita recursão: usa get_my_company_id() em vez de subquery em users.
 -- ============================================================
+
+-- Função que retorna company_id do usuário atual (SECURITY DEFINER = não passa por RLS, evita loop)
+CREATE OR REPLACE FUNCTION public.get_my_company_id()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT company_id FROM public.users WHERE id = auth.uid() LIMIT 1;
+$$;
+COMMENT ON FUNCTION public.get_my_company_id() IS 'Retorna company_id do usuário atual; usada nas políticas RLS para evitar recursão.';
 
 -- 1) USERS: admin precisa inserir/atualizar funcionários da mesma empresa;
 --    usuário pode inserir/atualizar o próprio perfil (ex: primeiro login).
@@ -18,12 +31,12 @@ DROP POLICY IF EXISTS "users_select_own_or_company" ON public.users;
 DROP POLICY IF EXISTS "users_insert_own_or_company" ON public.users;
 DROP POLICY IF EXISTS "users_update_own_or_company" ON public.users;
 
--- SELECT: ver próprio perfil OU usuários da mesma empresa (lista de funcionários para admin)
+-- SELECT: ver próprio perfil OU usuários da mesma empresa (usa função para evitar recursão)
 CREATE POLICY "users_select_own_or_company" ON public.users
   FOR SELECT TO authenticated
   USING (
     auth.uid() = id
-    OR company_id = (SELECT company_id FROM public.users WHERE id = auth.uid())
+    OR company_id = public.get_my_company_id()
   );
 
 -- INSERT: próprio perfil (id = auth.uid()) OU novo funcionário da mesma empresa (admin cadastrando)
@@ -33,7 +46,7 @@ CREATE POLICY "users_insert_own_or_company" ON public.users
     auth.uid() = id
     OR (
       company_id IS NOT NULL
-      AND company_id = (SELECT company_id FROM public.users WHERE id = auth.uid())
+      AND company_id = public.get_my_company_id()
     )
   );
 
@@ -42,7 +55,7 @@ CREATE POLICY "users_update_own_or_company" ON public.users
   FOR UPDATE TO authenticated
   USING (
     auth.uid() = id
-    OR company_id = (SELECT company_id FROM public.users WHERE id = auth.uid())
+    OR company_id = public.get_my_company_id()
   );
 
 -- 2) DEPARTMENTS: garantir que INSERT/UPDATE usem mesma empresa (só se a tabela existir)
@@ -58,16 +71,16 @@ BEGIN
     DROP POLICY IF EXISTS "departments_delete_company" ON public.departments;
     CREATE POLICY "departments_select_company" ON public.departments
       FOR SELECT TO authenticated
-      USING (company_id = (SELECT company_id FROM public.users WHERE id = auth.uid()));
+      USING (company_id = public.get_my_company_id());
     CREATE POLICY "departments_insert_company" ON public.departments
       FOR INSERT TO authenticated
-      WITH CHECK (company_id = (SELECT company_id FROM public.users WHERE id = auth.uid()));
+      WITH CHECK (company_id = public.get_my_company_id());
     CREATE POLICY "departments_update_company" ON public.departments
       FOR UPDATE TO authenticated
-      USING (company_id = (SELECT company_id FROM public.users WHERE id = auth.uid()));
+      USING (company_id = public.get_my_company_id());
     CREATE POLICY "departments_delete_company" ON public.departments
       FOR DELETE TO authenticated
-      USING (company_id = (SELECT company_id FROM public.users WHERE id = auth.uid()));
+      USING (company_id = public.get_my_company_id());
   END IF;
 END $$;
 

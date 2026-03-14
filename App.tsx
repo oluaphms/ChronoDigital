@@ -82,6 +82,11 @@ import AdminShifts from './src/pages/admin/Shifts';
 import AdminJobTitles from './src/pages/admin/JobTitles';
 import AdminCompany from './src/pages/admin/Company';
 import AdminReports from './src/pages/admin/Reports';
+import AdminBankHours from './src/pages/admin/BankHours';
+import ReportWorkHours from './src/pages/admin/reports/ReportWorkHours';
+import ReportOvertime from './src/pages/admin/reports/ReportOvertime';
+import ReportInconsistencies from './src/pages/admin/reports/ReportInconsistencies';
+import ReportBankHours from './src/pages/admin/reports/ReportBankHours';
 import AdminSettings from './src/pages/admin/Settings';
 import AdminEstruturas from './src/pages/admin/Estruturas';
 import AdminCidades from './src/pages/admin/Cidades';
@@ -96,6 +101,9 @@ import AdminArquivarCalculos from './src/pages/admin/ArquivarCalculos';
 import AdminColunasMix from './src/pages/admin/ColunasMix';
 import AdminPontoDiario from './src/pages/admin/PontoDiario';
 import AdminArquivosFiscais from './src/pages/admin/ArquivosFiscais';
+import AdminFiscalizacao from './src/pages/admin/Fiscalizacao';
+import AdminSecurity from './src/pages/admin/Security';
+import ReportSecurity from './src/pages/admin/reports/ReportSecurity';
 import AdminAusencias from './src/pages/Ausencias';
 import AdminAjuda from './src/pages/admin/Ajuda';
 import EmployeeDashboard from './src/pages/employee/Dashboard';
@@ -965,8 +973,16 @@ const AppMain: React.FC = () => {
             <Route path="/admin/ponto-diario" element={<AdminPontoDiario />} />
             <Route path="/admin/ponto-diario-leitura" element={<AdminPontoDiario />} />
             <Route path="/admin/arquivos-fiscais" element={<AdminArquivosFiscais />} />
+            <Route path="/admin/fiscalizacao" element={<AdminFiscalizacao />} />
+            <Route path="/admin/security" element={<AdminSecurity />} />
             <Route path="/admin/company" element={<AdminCompany />} />
             <Route path="/admin/reports" element={<AdminReports />} />
+            <Route path="/admin/reports/work-hours" element={<ReportWorkHours />} />
+            <Route path="/admin/reports/overtime" element={<ReportOvertime />} />
+            <Route path="/admin/reports/inconsistencies" element={<ReportInconsistencies />} />
+            <Route path="/admin/reports/bank-hours" element={<ReportBankHours />} />
+            <Route path="/admin/reports/security" element={<ReportSecurity />} />
+            <Route path="/admin/bank-hours" element={<AdminBankHours />} />
             <Route path="/admin/ajuda" element={<AdminAjuda />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
             {/* Rotas Funcionário */}

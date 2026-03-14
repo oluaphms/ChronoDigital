@@ -3,6 +3,17 @@ import { Camera, MapPin, LogIn, LogOut, Coffee, Fingerprint } from 'lucide-react
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, storage, isSupabaseConfigured } from '../../services/supabaseClient';
+import { getDayRecords, validatePunchSequence } from '../../services/timeProcessingService';
+import { getCurrentLocation } from '../../services/locationService';
+import {
+  validatePunch,
+  generateDeviceFingerprint,
+  type AllowedLocation,
+  type DeviceFingerprint,
+} from '../../security/antiFraudEngine';
+import { detectBehaviorAnomaly } from '../../ai/anomalyDetection';
+import { registerPunchSecure } from '../../rep/repEngine';
+import { savePunchEvidence, createFraudAlertsForFlags } from '../../services/punchEvidenceService';
 import { LogType, PunchMethod } from '../../../types';
 import { LoadingState } from '../../../components/UI';
 
@@ -82,19 +93,6 @@ const EmployeeClockIn: React.FC = () => {
     }
   };
 
-  const getLocation = (): Promise<{ lat: number; lng: number } | null> => {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        resolve(null);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        () => resolve(null),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    });
-  };
 
   const uploadPhoto = async (dataUrl: string): Promise<string | null> => {
     if (!storage || !user) return null;
@@ -115,7 +113,17 @@ const EmployeeClockIn: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
-      const location = await getLocation();
+      const today = new Date().toISOString().slice(0, 10);
+      const dayRecords = await getDayRecords(user.id, today);
+      const typeStr = type === LogType.IN ? 'entrada' : type === LogType.OUT ? 'saída' : 'pausa';
+      const validation = validatePunchSequence(dayRecords, typeStr);
+      if (!validation.valid) {
+        setError(validation.error || 'Sequência inválida.');
+        return;
+      }
+
+      const geo = await getCurrentLocation();
+      const fingerprint = generateDeviceFingerprint();
       let photoUrl: string | null = null;
       let method = PunchMethod.PHOTO;
 
@@ -134,18 +142,92 @@ const EmployeeClockIn: React.FC = () => {
         method = PunchMethod.PHOTO;
       }
 
-      const now = new Date().toISOString();
-      await db.insert('time_records', {
-        id: crypto.randomUUID(),
-        user_id: user.id,
-        company_id: user.companyId,
-        type: type === LogType.IN ? 'entrada' : type === LogType.OUT ? 'saída' : 'pausa',
-        method,
-        created_at: now,
-        updated_at: now,
-        location: location ? { lat: location.lat, lng: location.lng } : undefined,
-        photo_url: photoUrl || undefined,
+      let allowedLocations: AllowedLocation[] = [];
+      let trustedDeviceIds: string[] = [];
+      let history: any[] = [];
+      try {
+        const [locRows, devRows, histRows] = await Promise.all([
+          db.select('work_locations', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
+          db.select('trusted_devices', [{ column: 'employee_id', operator: 'eq', value: user.id }]) as Promise<any[]>,
+          db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], { column: 'created_at', ascending: false }, 50) as Promise<any[]>,
+        ]);
+        allowedLocations = (locRows ?? []).map((r) => ({
+          id: r.id,
+          company_id: r.company_id,
+          name: r.name,
+          latitude: r.latitude,
+          longitude: r.longitude,
+          radius: r.radius ?? 200,
+        }));
+        trustedDeviceIds = (devRows ?? []).map((d) => d.device_id).filter(Boolean);
+        history = (histRows ?? []).map((r) => ({
+          type: r.type,
+          timestamp: r.timestamp || r.created_at,
+          latitude: r.latitude,
+          longitude: r.longitude,
+          device_id: r.device_id,
+          created_at: r.created_at,
+        }));
+      } catch {
+        // continua sem zonas/dispositivos confiáveis
+      }
+
+      const now = new Date();
+      const anomaly = detectBehaviorAnomaly({
+        employeeId: user.id,
+        companyId: user.companyId,
+        type: typeStr,
+        timestamp: now,
+        latitude: geo?.latitude,
+        longitude: geo?.longitude,
+        deviceId: fingerprint.deviceId,
+        history,
       });
+
+      const validationResult = validatePunch({
+        employeeId: user.id,
+        companyId: user.companyId,
+        type: typeStr,
+        location: geo ? { latitude: geo.latitude, longitude: geo.longitude, accuracy: geo.accuracy } : undefined,
+        deviceFingerprint: fingerprint,
+        allowedLocations,
+        trustedDeviceIds,
+        behaviorAnomaly: anomaly.behaviorAnomaly,
+      });
+
+      const recordId = crypto.randomUUID();
+      const result = await registerPunchSecure({
+        userId: user.id,
+        companyId: user.companyId,
+        type: typeStr,
+        method,
+        recordId,
+        location: geo ? { lat: geo.latitude, lng: geo.longitude, accuracy: geo.accuracy } : undefined,
+        photoUrl: photoUrl || undefined,
+        source: 'web',
+        latitude: geo?.latitude ?? null,
+        longitude: geo?.longitude ?? null,
+        accuracy: geo?.accuracy ?? null,
+        deviceId: fingerprint.deviceId,
+        deviceType: 'web',
+        ipAddress: null,
+        fraudScore: validationResult.fraudScore,
+        fraudFlags: validationResult.fraudFlags.length ? validationResult.fraudFlags : null,
+      });
+
+      await savePunchEvidence({
+        timeRecordId: result.id,
+        photoUrl: photoUrl || null,
+        locationLat: geo?.latitude ?? null,
+        locationLng: geo?.longitude ?? null,
+        deviceId: fingerprint.deviceId,
+        fraudScore: validationResult.fraudScore,
+      });
+
+      if (validationResult.fraudFlags.length > 0) {
+        await createFraudAlertsForFlags(user.id, result.id, validationResult.fraudFlags);
+      }
+
       await loadLastRecord();
     } catch (e: any) {
       setError(e?.message || 'Erro ao registrar ponto');

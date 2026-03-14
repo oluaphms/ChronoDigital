@@ -139,16 +139,8 @@ const AdjustmentsPage: React.FC = () => {
         prev.map((r) => (r.id === row.id ? { ...r, status } : r)),
       );
 
-      if (status === 'approved' && row.time_record_id) {
-        // atualiza o registro de ponto relacionado
-        await db.update('time_records', row.time_record_id, {
-          created_at: new Date(
-            `${new Date(row.created_at).toISOString().slice(0, 10)}T${
-              row.requested_time
-            }:00`,
-          ).toISOString(),
-        });
-      }
+      // REP-P (Portaria 671): time_records são imutáveis. Ajustes aprovados ficam em time_adjustments
+      // e devem ser considerados nos cálculos de jornada/relatórios (não alteramos time_records).
 
       await NotificationService.create({
         userId: row.user_id,

@@ -3,7 +3,8 @@ import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState } from '../../../components/UI';
-import { FileDown, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react';
+import { FileDown, FileSpreadsheet, Pencil, Trash2, Lock } from 'lucide-react';
+import { closeTimesheet } from '../../services/timeProcessingService';
 
 function formatLocation(loc: { lat?: number; lng?: number } | null | undefined): string {
   if (!loc || loc.lat == null || loc.lng == null) return '—';
@@ -44,6 +45,11 @@ const AdminTimesheet: React.FC = () => {
   const [editForm, setEditForm] = useState({ type: 'entrada', created_at: '' });
   const [savingEdit, setSavingEdit] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [closeMonth, setCloseMonth] = useState(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [closing, setClosing] = useState(false);
 
   useEffect(() => {
     if (!user?.companyId || !isSupabaseConfigured) return;
@@ -197,6 +203,25 @@ const AdminTimesheet: React.FC = () => {
     }
   };
 
+  const handleCloseTimesheet = async () => {
+    if (!user?.companyId || !confirm(`Fechar folha de ponto do mês ${closeMonth}? Isso calculará totais e marcará a folha como fechada.`)) return;
+    setMessage(null);
+    setClosing(true);
+    try {
+      const [year, month] = closeMonth.split('-').map(Number);
+      const { closed, errors } = await closeTimesheet(user.companyId, month, year);
+      if (errors.length > 0) {
+        setMessage({ type: 'error', text: `Fechado: ${closed}. Erros: ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '...' : ''}` });
+      } else {
+        setMessage({ type: 'success', text: `Folha de ${closeMonth} fechada. ${closed} funcionário(s) processado(s).` });
+      }
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e?.message || 'Erro ao fechar folha.' });
+    } finally {
+      setClosing(false);
+    }
+  };
+
   if (loading || !user) return <LoadingState message="Carregando..." />;
 
   return (
@@ -234,13 +259,19 @@ const AdminTimesheet: React.FC = () => {
           <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Período (fim)</label>
           <input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button type="button" onClick={handleExportPDF} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
             <FileDown className="w-4 h-4" /> Exportar PDF
           </button>
           <button type="button" onClick={handleExportExcel} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
             <FileSpreadsheet className="w-4 h-4" /> Exportar Excel
           </button>
+          <div className="flex items-center gap-2 ml-2 pl-2 border-l border-slate-200 dark:border-slate-700">
+            <input type="month" value={closeMonth} onChange={(e) => setCloseMonth(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm" />
+            <button type="button" onClick={handleCloseTimesheet} disabled={closing} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50" title="Fechar folha do mês (calcula totais e marca como fechada)">
+              <Lock className="w-4 h-4" /> Fechar folha
+            </button>
+          </div>
         </div>
       </div>
 
@@ -279,10 +310,14 @@ const AdminTimesheet: React.FC = () => {
                       <td className="px-4 py-3">{sum.status || 'OK'}</td>
                       <td className="px-4 py-3 text-right">
                         {rec && (
-                          <>
-                            <button type="button" onClick={() => handleEditRecord(rec)} className="p-1.5 text-slate-500 hover:text-indigo-600 rounded" title="Editar registro"><Pencil className="w-4 h-4 inline" /></button>
-                            <button type="button" onClick={() => handleDeleteRecord(rec.id)} className="p-1.5 text-slate-500 hover:text-red-600 rounded" title="Excluir registro"><Trash2 className="w-4 h-4 inline" /></button>
-                          </>
+                          rec.nsr != null ? (
+                            <span className="text-xs text-slate-400 dark:text-slate-500" title="Registro REP-P (Portaria 671) - correções via Ajustes de Ponto">REP-P</span>
+                          ) : (
+                            <>
+                              <button type="button" onClick={() => handleEditRecord(rec)} className="p-1.5 text-slate-500 hover:text-indigo-600 rounded" title="Editar registro"><Pencil className="w-4 h-4 inline" /></button>
+                              <button type="button" onClick={() => handleDeleteRecord(rec.id)} className="p-1.5 text-slate-500 hover:text-red-600 rounded" title="Excluir registro"><Trash2 className="w-4 h-4 inline" /></button>
+                            </>
+                          )
                         )}
                       </td>
                     </tr>

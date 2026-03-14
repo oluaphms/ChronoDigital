@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import TimeClockButtons from '../components/TimeClockButtons';
 import { useToast } from '../components/ToastProvider';
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { registerPunch } from '../rep/repEngine';
 import { LogType, PunchMethod } from '../../types';
 import { LoggingService } from '../../services/loggingService';
 import { NotificationService } from '../../services/notificationService';
@@ -66,27 +67,24 @@ const TimeClockPage: React.FC = () => {
         });
       });
 
-      const now = new Date().toISOString();
-      const payload = {
-        id: crypto.randomUUID(),
-        user_id: user.id,
-        company_id: user.companyId,
-        type,
+      const result = await registerPunch({
+        userId: user.id,
+        companyId: user.companyId,
+        type: type as string,
         method: PunchMethod.GPS,
-        created_at: now,
+        recordId: crypto.randomUUID(),
         location: {
           lat: position.coords.latitude,
           lng: position.coords.longitude,
           accuracy: position.coords.accuracy,
         },
-      };
-
-      await db.insert('time_records', payload);
+        source: 'web',
+      });
 
       setLastRecord({
-        id: payload.id,
+        id: result.id,
         type,
-        created_at: now,
+        created_at: result.timestamp,
       });
 
       await LoggingService.log({
