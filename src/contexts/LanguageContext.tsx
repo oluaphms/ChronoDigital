@@ -1,4 +1,8 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
+/**
+ * Contexto de idioma. Store externo + useSyncExternalStore no consumer para evitar
+ * "Cannot read properties of null (reading 'useState')" no provider (múltiplas instâncias de React).
+ */
+import { createContext, useSyncExternalStore, type ReactNode } from 'react';
 import { i18n } from '../../lib/i18n';
 
 export type Language = 'pt-BR' | 'en-US';
@@ -14,41 +18,53 @@ export function getDefaultLanguage(): Language {
   return saved === 'pt-BR' || saved === 'en-US' ? saved : 'pt-BR';
 }
 
+let currentLanguage: Language = getDefaultLanguage();
+const listeners = new Set<() => void>();
+
+function subscribe(callback: () => void) {
+  listeners.add(callback);
+  return () => { listeners.delete(callback); };
+}
+
+function getSnapshot(): Language {
+  return currentLanguage;
+}
+
+function getServerSnapshot(): Language {
+  return 'pt-BR';
+}
+
+function setLanguageStore(next: Language) {
+  if (currentLanguage === next) return;
+  currentLanguage = next;
+  i18n.setLanguage(next);
+  try {
+    localStorage.setItem('smartponto_language', next);
+  } catch {}
+  listeners.forEach((l) => l());
+}
+
+const defaultSetLanguage = (lang: Language) => {
+  const next = lang === 'pt-BR' || lang === 'en-US' ? lang : 'pt-BR';
+  setLanguageStore(next);
+};
+
 export const LanguageContext = createContext<LanguageContextValue>({
   language: getDefaultLanguage(),
-  setLanguage: () => {},
+  setLanguage: defaultSetLanguage,
 });
 
 export function useLanguage(): LanguageContextValue {
-  const ctx = useContext(LanguageContext);
-  if (!ctx) {
-    return {
-      language: getDefaultLanguage(),
-      setLanguage: (lang: Language) => {
-        i18n.setLanguage(lang);
-        localStorage.setItem('smartponto_language', lang);
-      },
-    };
-  }
-  return ctx;
+  const language = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return { language, setLanguage: defaultSetLanguage };
 }
 
+/** Provider sem hooks: só repassa children. O estado fica no store e no useLanguage(). */
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => getDefaultLanguage());
-
-  useEffect(() => {
-    i18n.setLanguage(language);
-  }, [language]);
-
-  const setLanguage = useCallback((lang: Language) => {
-    const next = lang === 'pt-BR' || lang === 'en-US' ? lang : 'pt-BR';
-    setLanguageState(next);
-    i18n.setLanguage(next);
-    localStorage.setItem('smartponto_language', next);
-  }, []);
-
-  const value = useMemo(() => ({ language, setLanguage }), [language, setLanguage]);
-
+  const value: LanguageContextValue = {
+    language: getSnapshot(),
+    setLanguage: defaultSetLanguage,
+  };
   return (
     <LanguageContext.Provider value={value}>
       {children}

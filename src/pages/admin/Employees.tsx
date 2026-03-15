@@ -359,7 +359,7 @@ const AdminEmployees: React.FC = () => {
       return;
     }
     if (!editingId && !form.password.trim()) {
-      setError('Informe a senha inicial para o funcionário.');
+      setError('Informe a senha provisória para o funcionário fazer o primeiro login.');
       return;
     }
     if (!form.pis_pasep?.trim()) {
@@ -413,7 +413,7 @@ const AdminEmployees: React.FC = () => {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
-        setSuccess('Funcionário cadastrado. Ele pode acessar com o e-mail e a senha informados.');
+        setSuccess('Funcionário cadastrado. Ele pode fazer login com o e-mail e a senha provisória informada.');
         setModalOpen(false);
         setForm({ ...form, password: '' });
         loadData();
@@ -960,7 +960,7 @@ const AdminEmployees: React.FC = () => {
                   </div>
                 </section>
 
-                {/* Acesso (e-mail e senha - apenas na criação) */}
+                {/* Acesso (e-mail e senha provisória - apenas na criação) */}
                 <section>
                   <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Acesso ao sistema</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -970,11 +970,19 @@ const AdminEmployees: React.FC = () => {
                     </div>
                     {!editingId && (
                       <div className="sm:col-span-2">
-                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Senha inicial</label>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Senha provisória <span className="text-red-500">*</span></label>
                         <div className="relative">
-                          <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Senha para primeiro acesso" autoComplete="new-password" />
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            value={form.password}
+                            onChange={(e) => setForm({ ...form, password: e.target.value })}
+                            className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                            placeholder="Senha para o funcionário fazer o primeiro login"
+                            autoComplete="new-password"
+                          />
                           <button type="button" onClick={() => setShowPassword((p) => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}>{showPassword ? <Eye size={18} /> : <EyeOff size={18} />}</button>
                         </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">O funcionário fará login com o e-mail acima e esta senha provisória. Recomende que ele altere a senha em Configurações após o primeiro acesso.</p>
                       </div>
                     )}
                     <div>
