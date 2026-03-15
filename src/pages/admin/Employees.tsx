@@ -451,6 +451,79 @@ const AdminEmployees: React.FC = () => {
     }
   };
 
+  /**
+   * Parse texto no formato de backup/relatório: blocos "Funcionário N" com linhas Label/Valor
+   * ou "Label Valor" na mesma linha. Aceita dados parciais (apenas nome, ou nome+email, etc.).
+   */
+  const parseLabelValueBackup = (text: string): ImportRow[] => {
+    const blocks = text.split(/\s*Funcionário\s+\d+\s*/i).filter((b) => b.trim());
+    const labels = [
+      'nome', 'email', 'senha inicial', 'cpf', 'telefone', 'função', 'departamento', 'horário', 'cargo', 'escala',
+    ] as const;
+    const fieldByLabel: Record<string, keyof ImportRow> = {
+      'nome': 'nome', 'email': 'email', 'senha inicial': 'senha', 'cpf': 'cpf', 'telefone': 'telefone',
+      'função': 'cargo', 'departamento': 'departamento', 'horário': 'escala', 'cargo': 'cargo', 'escala': 'escala',
+    };
+    const rows: ImportRow[] = [];
+    for (const block of blocks) {
+      const raw: Record<string, string> = {};
+      const lines = block.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lineLower = line.toLowerCase();
+        const matched = labels.find((k) => lineLower === k || lineLower.startsWith(k + ' ') || lineLower.startsWith(k + ':'));
+        if (matched) {
+          const rest = line.slice(lineLower.indexOf(matched) + matched.length).replace(/^[\s:]+/, '').trim();
+          if (rest) {
+            raw[fieldByLabel[matched]] = rest;
+          } else if (i + 1 < lines.length) {
+            raw[fieldByLabel[matched]] = lines[i + 1].trim();
+            i++;
+          }
+        }
+      }
+      // Também tenta padrão "Label Valor" em texto contínuo (ex.: PDF sem quebras)
+      if (Object.keys(raw).length === 0) {
+        const cont = block.replace(/\s+/g, ' ').trim();
+        const re = /\b(Nome|Email|Senha inicial|CPF|Telefone|Função|Departamento|Horário|Cargo|Escala)\s*[:]?\s*([^\n]+?)(?=\s*(?:Nº|Nome|Email|CPF|Telefone|Função|Departamento|Horário|Empresa|Estrutura|Acesso|Assinatura|Funcionário)|$)/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(cont)) !== null) {
+          const key = m[1].toLowerCase().replace(/\s+/, ' ').trim();
+          const val = m[2].trim();
+          if (key === 'senha inicial') raw.senha = val;
+          else if (key === 'nome') raw.nome = val;
+          else if (key === 'email') raw.email = val;
+          else if (key === 'cpf') raw.cpf = val;
+          else if (key === 'telefone') raw.telefone = val;
+          else if (key === 'função' || key === 'cargo') raw.cargo = val;
+          else if (key === 'departamento') raw.departamento = val;
+          else if (key === 'horário' || key === 'escala') raw.escala = val;
+        }
+      }
+      const nome = (raw.nome || '').trim();
+      const email = (raw.email || '').trim().toLowerCase();
+      const cpf = (raw.cpf || '').trim();
+      const senha = (raw.senha || '').trim();
+      const cargo = (raw.cargo || '').trim() || 'Colaborador';
+      const telefone = (raw.telefone || '').trim();
+      const departamento = (raw.departamento || '').trim();
+      const escala = (raw.escala || '').trim();
+      if (nome || email || cpf) {
+        rows.push({
+          nome: nome || 'Sem nome',
+          email,
+          senha,
+          cargo,
+          telefone,
+          cpf,
+          departamento,
+          escala,
+        });
+      }
+    }
+    return rows;
+  };
+
   /** Parse CSV simples: suporta vírgula ou ponto-e-vírgula; campos entre aspas opcional. */
   const parseCSV = (text: string): ImportRow[] => {
     const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
@@ -505,7 +578,7 @@ const AdminEmployees: React.FC = () => {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     const mime = (file.type || '').toLowerCase();
 
-    // CSV ou TXT: texto
+    // CSV ou TXT: texto (tenta CSV; se não houver linhas, tenta formato backup label/valor)
     if (ext === 'csv' || ext === 'txt' || mime.includes('text/plain') || mime.includes('text/csv') || mime.includes('application/csv')) {
       const text = await new Promise<string>((resolve, reject) => {
         const r = new FileReader();
@@ -513,7 +586,8 @@ const AdminEmployees: React.FC = () => {
         r.onerror = () => reject(new Error('Falha ao ler arquivo'));
         r.readAsText(file, 'UTF-8');
       });
-      const rows = parseCSV(text);
+      let rows = parseCSV(text);
+      if (rows.length === 0) rows = parseLabelValueBackup(text);
       return { rows };
     }
 
@@ -555,7 +629,7 @@ const AdminEmployees: React.FC = () => {
       return { rows };
     }
 
-    // PDF: extrair texto e interpretar como linhas CSV-like
+    // PDF: extrair texto preservando quebras de linha, depois tentar CSV ou formato backup (label/valor)
     if (ext === 'pdf' || mime.includes('pdf')) {
       try {
         const buffer = await file.arrayBuffer();
@@ -566,25 +640,39 @@ const AdminEmployees: React.FC = () => {
         for (let p = 1; p <= numPages; p++) {
           const page = await pdf.getPage(p);
           const content = await page.getTextContent();
-          fullText += (content.items as { str?: string }[]).map((it) => it.str || '').join(' ') + '\n';
+          const items = (content.items as { str?: string; transform?: number[] }[]) || [];
+          let lastY: number | null = null;
+          const lineHeight = 12;
+          for (const it of items) {
+            const y = it.transform?.[5] ?? 0;
+            if (lastY !== null && Math.abs(y - lastY) > lineHeight) fullText += '\n';
+            lastY = y;
+            fullText += (it.str || '') + ' ';
+          }
+          fullText += '\n';
         }
-        const rows = parseCSV(fullText);
+        let rows = parseCSV(fullText);
+        if (rows.length === 0) rows = parseLabelValueBackup(fullText);
         return { rows };
       } catch (err: any) {
-        return { rows: [], error: `PDF não pôde ser lido: ${err?.message || 'formato inválido'}. Use CSV ou Excel.` };
+        return { rows: [], error: `PDF não pôde ser lido: ${err?.message || 'formato inválido'}. Tente CSV ou Excel.` };
       }
     }
 
-    // Outros: tentar como texto
+    // Outros: tentar como texto (CSV ou formato backup)
     const text = await new Promise<string>((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve((r.result as string) || '');
       r.onerror = () => reject(new Error('Falha ao ler arquivo'));
       r.readAsText(file, 'UTF-8');
     });
-    const rows = parseCSV(text);
+    let rows = parseCSV(text);
+    if (rows.length === 0) rows = parseLabelValueBackup(text);
     return { rows };
   };
+
+  /** Pausa entre cada signUp para respeitar rate limit do Supabase Auth (evitar 429). */
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const runBulkImport = async (toImport: ImportRow[]) => {
     if (!user?.companyId) return;
@@ -592,33 +680,34 @@ const AdminEmployees: React.FC = () => {
     let success = 0;
     const deptByName = new Map(departments.map((d) => [d.name.trim().toLowerCase(), d.id]));
     const schedByName = new Map(schedules.map((s) => [s.name.trim().toLowerCase(), s.id]));
+    const stripCpf = (s: string) => (s || '').replace(/\D/g, '');
+    const DELAY_BETWEEN_MS = 2500; // ~24 signups/min; Supabase free tier é restritivo
+    const RETRY_AFTER_429_MS = 6000; // esperar 6s antes de retry ou antes de continuar
     for (let i = 0; i < toImport.length; i++) {
       const row = toImport[i];
       const rowNum = i + 2;
-      if (!row.nome.trim()) {
-        failed.push({ row: rowNum, email: row.email || '—', reason: 'Nome obrigatório' });
+      const nome = row.nome.trim();
+      if (!nome && !row.email.trim() && !row.cpf.trim()) {
+        failed.push({ row: rowNum, email: '—', reason: 'Informe ao menos nome, e-mail ou CPF' });
         continue;
       }
-      if (!row.email.trim()) {
-        failed.push({ row: rowNum, email: '—', reason: 'E-mail obrigatório' });
-        continue;
-      }
+      const emailFinal = row.email.trim()
+        || (row.cpf.trim() ? `import.${stripCpf(row.cpf)}@temp.local` : `import.${Date.now().toString(36)}.${i}@temp.local`);
+      const nomeFinal = nome || 'Sem nome';
       const senha = row.senha.trim() || `Smart${Date.now().toString(36)}!`;
       const cargoFinal = row.cargo || 'Colaborador';
       const departmentId = row.departamento ? deptByName.get(row.departamento.trim().toLowerCase()) || '' : '';
       const scheduleId = row.escala ? schedByName.get(row.escala.trim().toLowerCase()) || '' : '';
-      try {
-        const authData = await auth.signUp(row.email.trim().toLowerCase(), senha, { nome: row.nome, cargo: cargoFinal });
-        if (!authData?.user?.id) {
-          failed.push({ row: rowNum, email: row.email, reason: 'Conta criada mas ID não retornado' });
-          continue;
-        }
+
+      const doSignUpAndInsert = async (): Promise<boolean> => {
+        const authData = await auth.signUp(emailFinal.toLowerCase(), senha, { nome: nomeFinal, cargo: cargoFinal });
+        if (!authData?.user?.id) return false;
         await db.insert('users', {
           id: authData.user.id,
-          nome: row.nome.trim(),
-          cpf: row.cpf || null,
-          email: row.email.trim().toLowerCase(),
-          phone: row.telefone || null,
+          nome: nomeFinal,
+          cpf: row.cpf?.trim() || null,
+          email: emailFinal.toLowerCase(),
+          phone: row.telefone?.trim() || null,
           cargo: cargoFinal,
           role: 'employee',
           company_id: user.companyId,
@@ -628,17 +717,40 @@ const AdminEmployees: React.FC = () => {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
-        success++;
+        return true;
+      };
+
+      try {
+        let ok = await doSignUpAndInsert();
+        if (!ok) {
+          failed.push({ row: rowNum, email: emailFinal, reason: 'Conta criada mas ID não retornado' });
+        } else {
+          success++;
+        }
       } catch (err: any) {
         const msg = String(err?.message ?? '');
         const code = err?.code ?? '';
+        const is429 = msg.includes('429') || (err?.status === 429);
         const isDup = code === '23505' || msg.includes('duplicate') || /already registered|already exists|user already/i.test(msg);
-        failed.push({
-          row: rowNum,
-          email: row.email,
-          reason: isDup ? 'E-mail já cadastrado' : (msg || 'Erro ao criar'),
-        });
+        if (is429) {
+          await delay(RETRY_AFTER_429_MS);
+          try {
+            const retryOk = await doSignUpAndInsert();
+            if (retryOk) success++;
+            else failed.push({ row: rowNum, email: emailFinal, reason: 'Limite de requisições (429) após retry' });
+          } catch (retryErr: any) {
+            failed.push({ row: rowNum, email: emailFinal, reason: 'Limite de requisições (429). Importe em lotes menores ou tente mais tarde.' });
+            await delay(RETRY_AFTER_429_MS);
+          }
+        } else {
+          failed.push({
+            row: rowNum,
+            email: emailFinal,
+            reason: isDup ? 'E-mail já cadastrado' : (msg || 'Erro ao criar'),
+          });
+        }
       }
+      await delay(DELAY_BETWEEN_MS);
     }
     setImportResult({ success, failed });
     if (success > 0) loadData();

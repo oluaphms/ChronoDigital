@@ -1,4 +1,4 @@
-import * as React from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
 import { i18n } from '../../lib/i18n';
 
 export type Language = 'pt-BR' | 'en-US';
@@ -14,13 +14,13 @@ export function getDefaultLanguage(): Language {
   return saved === 'pt-BR' || saved === 'en-US' ? saved : 'pt-BR';
 }
 
-export const LanguageContext = React.createContext<LanguageContextValue>({
+export const LanguageContext = createContext<LanguageContextValue>({
   language: getDefaultLanguage(),
   setLanguage: () => {},
 });
 
 export function useLanguage(): LanguageContextValue {
-  const ctx = React.useContext(LanguageContext);
+  const ctx = useContext(LanguageContext);
   if (!ctx) {
     return {
       language: getDefaultLanguage(),
@@ -33,21 +33,21 @@ export function useLanguage(): LanguageContextValue {
   return ctx;
 }
 
-export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = React.useState<Language>(getDefaultLanguage);
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [language, setLanguageState] = useState<Language>(getDefaultLanguage);
 
-  React.useEffect(() => {
+  useEffect(() => {
     i18n.setLanguage(language);
   }, [language]);
 
-  const setLanguage = React.useCallback((lang: Language) => {
+  const setLanguage = useCallback((lang: Language) => {
     const next = lang === 'pt-BR' || lang === 'en-US' ? lang : 'pt-BR';
     setLanguageState(next);
     i18n.setLanguage(next);
     localStorage.setItem('smartponto_language', next);
   }, []);
 
-  const value = React.useMemo(() => ({ language, setLanguage }), [language, setLanguage]);
+  const value = useMemo(() => ({ language, setLanguage }), [language, setLanguage]);
 
   return (
     <LanguageContext.Provider value={value}>
