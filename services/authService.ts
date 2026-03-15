@@ -285,22 +285,13 @@ class AuthService {
 
   /**
    * Login com email e senha.
-   * Só limpa sessão local se já existir sessão, para não quebrar logins seguintes (ex.: após HMR ou segundo login).
+   * Não faz signOut antes do signIn para evitar loop e falha no segundo login (sessão é substituída pelo Supabase).
    */
   async signInWithEmail(identifier: string, password: string): Promise<AuthResult> {
     try {
       // Resolver identificador (email, CPF, nome) para um email válido
       const email = await this.resolveLoginEmail(identifier);
 
-      // Limpar sessão local apenas se houver sessão (evita side effects desnecessários que podem atrapalhar o próximo signIn)
-      try {
-        const session = await auth.getSession();
-        if (session) {
-          await auth.signOut({ scope: 'local' });
-        }
-      } catch {
-        // Ignora; segue para signIn
-      }
       const data = await auth.signIn(email, password);
       
       if (!data || !data.user) {
@@ -498,15 +489,29 @@ class AuthService {
   }
 
   /**
-   * Logout
+   * Logout: limpa sessão no Supabase e todo rastro local (evita loop ao logar novamente).
    */
   async signOut(): Promise<void> {
     try {
       await auth.signOut();
-      localStorage.removeItem('current_user');
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
-      throw error;
+    } finally {
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('current_user');
+          if (window.sessionStorage) {
+            const keys: string[] = [];
+            for (let i = 0; i < window.sessionStorage.length; i++) {
+              const k = window.sessionStorage.key(i);
+              if (k && k.startsWith('sb-')) keys.push(k);
+            }
+            keys.forEach((k) => window.sessionStorage.removeItem(k));
+          }
+        }
+      } catch {
+        // ignora falha ao limpar storage
+      }
     }
   }
 
@@ -676,21 +681,28 @@ class AuthService {
   }
 
   /**
-   * Observar mudanças no estado de autenticação
+   * Observar mudanças no estado de autenticação.
+   * Em erro ao converter sessão (ex.: timeout no DB), limpa e chama callback(null) para evitar estado inconsistente e loop.
    */
   onAuthStateChanged(callback: (user: User | null) => void) {
     return auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const appUser = await this.supabaseUserToAppUser(session.user);
-        callback(appUser);
-      } else {
-        // Sem sessão: limpa usuário atual e força retorno ao fluxo de login
-        try {
-          if (typeof window !== 'undefined') {
-            window.localStorage.removeItem('current_user');
+      try {
+        if (session?.user) {
+          const appUser = await this.supabaseUserToAppUser(session.user);
+          callback(appUser ?? null);
+        } else {
+          try {
+            if (typeof window !== 'undefined') window.localStorage.removeItem('current_user');
+          } catch {
+            // ignora
           }
+          callback(null);
+        }
+      } catch (err) {
+        try {
+          if (typeof window !== 'undefined') window.localStorage.removeItem('current_user');
         } catch {
-          // ignora erro de limpeza
+          // ignora
         }
         callback(null);
       }

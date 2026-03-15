@@ -46,15 +46,21 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': projectRoot,
-        // Garante que todas as importações usem a MESMA instância de React
+        // Garante que todas as importações usem a MESMA instância de React (evita "useState of null")
         react: path.resolve(projectRoot, 'node_modules/react'),
         'react-dom': path.resolve(projectRoot, 'node_modules/react-dom'),
+        'react-dom/client': path.resolve(projectRoot, 'node_modules/react-dom/client'),
+        'react-is': path.resolve(projectRoot, 'node_modules/react-is'),
       },
-      dedupe: ['react', 'react-dom', 'react-is']
+      dedupe: ['react', 'react-dom', 'react-dom/client', 'react-is']
     },
 
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react-is', 'recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
+      include: ['react', 'react-dom', 'react-dom/client', 'react-is', 'recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
+      esbuildOptions: {
+        // Garante um único bundle de React na pré-bundlagem
+        mainFields: ['module', 'main'],
+      },
     },
 
     publicDir: 'public',

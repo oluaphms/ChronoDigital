@@ -900,13 +900,21 @@ const AppMain: React.FC = () => {
                     {i18n.t('login.enterSystem')}
                   </Button>
 
-                  <p className="text-center">
+                  <p className="text-center space-x-4">
                     <button
                       type="button"
                       onClick={() => setShowForgotPassword(true)}
                       className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
                     >
                       {i18n.t('login.forgotPassword')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearSessionAndRetry}
+                      disabled={isResettingSession}
+                      className="text-sm text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 underline disabled:opacity-50"
+                    >
+                      {isResettingSession ? i18n.t('app.clearing') : i18n.t('app.clearSessionRetry')}
                     </button>
                   </p>
                 </form>

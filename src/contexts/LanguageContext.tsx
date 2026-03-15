@@ -34,7 +34,7 @@ export function useLanguage(): LanguageContextValue {
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(getDefaultLanguage);
+  const [language, setLanguageState] = useState<Language>(() => getDefaultLanguage());
 
   useEffect(() => {
     i18n.setLanguage(language);
