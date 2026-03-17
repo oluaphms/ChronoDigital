@@ -28,6 +28,7 @@
     "list": "^2.0.19",
     "lucide-react": "^0.562.0",
     "mammoth": "^1.12.0",
+    "motion-utils": "^12.36.0",
     "papaparse": "^5.5.3",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^5.5.207",

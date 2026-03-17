@@ -47,13 +47,11 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': projectRoot,
       },
-      // Deixe o Vite gerenciar React/ReactDOM normalmente (evita conflitos de múltiplas instâncias).
-      dedupe: [],
+      dedupe: ['react', 'react-dom'],
     },
 
     optimizeDeps: {
-      // Não é mais necessário forçar o pré-bundle de React aqui; usamos apenas bibliotecas de UI.
-      include: ['recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
+      include: ['react', 'react-dom', 'recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
       esbuildOptions: {
         mainFields: ['module', 'main'],
       },

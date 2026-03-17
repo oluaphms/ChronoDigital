@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { User, LogType, DailySummary, PunchMethod, Company } from './types';
 import Layout from './components/Layout';
@@ -266,7 +266,7 @@ const AppMain: React.FC = () => {
         const connectionTimeoutMs = 15000;
         testSupabaseConnection(connectionTimeoutMs).then((result) => {
           if (result.ok && import.meta.env?.DEV) {
-            console.log('[SmartPonto] Conexão Supabase OK');
+            console.log('[ChronoDigital] Conexão Supabase OK');
           }
           // Não loga falha aqui para não poluir o console; login mostrará erro se precisar.
         });
@@ -770,7 +770,7 @@ const AppMain: React.FC = () => {
             <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-600 rounded-3xl text-white shadow-2xl shadow-indigo-500/40 mb-6 animate-in zoom-in duration-700">
               <Fingerprint size={40} />
             </div>
-            <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight transition-colors">Smart<span className="text-indigo-600 dark:text-indigo-500">Ponto</span></h1>
+            <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight transition-colors">Chrono<span className="text-indigo-600 dark:text-indigo-500">Digital</span></h1>
             <p className="text-slate-600 dark:text-slate-500 text-sm mt-2 font-medium transition-colors">{i18n.t('login.slogan')}</p>
           </div>
 
