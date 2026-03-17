@@ -274,12 +274,12 @@ const AdminRepDevices: React.FC = () => {
       )}
 
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] overflow-y-auto p-6 flex flex-col">
             <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
               {editingId ? 'Editar relógio' : 'Novo relógio REP'}
             </h2>
-            <div className="space-y-4">
+            <div className="space-y-4 flex-1">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome *</label>
                 <input
@@ -359,7 +359,7 @@ const AdminRepDevices: React.FC = () => {
                 </label>
               </div>
             </div>
-            <div className="flex gap-2 mt-6">
+            <div className="flex gap-2 mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
               <Button variant="secondary" onClick={() => setModalOpen(false)}>
                 Cancelar
               </Button>
