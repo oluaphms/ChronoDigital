@@ -355,6 +355,16 @@ const AppMain: React.FC = () => {
     };
   }, []);
 
+  // Ao exibir tela de login (user null), garantir formulário em estado inicial
+  useEffect(() => {
+    if (!user) {
+      setLoginStep('choice');
+      setLoginRole(null);
+      setLoginData({ identifier: '', password: '' });
+      setLoginError(null);
+    }
+  }, [user]);
+
   const fetchInsights = useCallback(async () => {
     if (records.length >= 2 && !insights) {
       const summary: DailySummary = {
@@ -640,6 +650,7 @@ const AppMain: React.FC = () => {
     setLoginStep('choice');
     setLoginRole(null);
     setLoginData({ identifier: '', password: '' });
+    setLoginError(null);
     try {
       await authService.signOut();
       // Em PWA, caches podem manter respostas/artefatos antigos em memória.
@@ -656,8 +667,15 @@ const AppMain: React.FC = () => {
       } catch {
         // ignora falha ao limpar caches
       }
+      // Recarrega a página na raiz para estado limpo e login na mesma aba
+      if (typeof window !== 'undefined') {
+        window.location.replace(window.location.origin + '/');
+      }
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
+      if (typeof window !== 'undefined') {
+        window.location.replace(window.location.origin + '/');
+      }
     }
   }, []);
 

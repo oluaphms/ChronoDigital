@@ -116,6 +116,8 @@ const EmployeeClockIn: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
+      const fingerprint: DeviceFingerprint = generateDeviceFingerprint();
+
       const today = new Date().toISOString().slice(0, 10);
       const dayRecords = await getDayRecords(user.id, today);
       const typeStr = type === LogType.IN ? 'entrada' : type === LogType.OUT ? 'saída' : 'pausa';
