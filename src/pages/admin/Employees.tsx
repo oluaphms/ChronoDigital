@@ -671,7 +671,8 @@ const AdminEmployees: React.FC = () => {
       const emailFinal = row.email.trim()
         || (row.cpf.trim() ? `import.${stripCpf(row.cpf)}@temp.local` : `import.${Date.now().toString(36)}.${i}@temp.local`);
       const nomeFinal = nome || 'Sem nome';
-      const senha = row.senha.trim() || `Smart${Date.now().toString(36)}!`;
+      // Se a planilha não trouxer senha, usa padrão 123456
+      const senha = row.senha && row.senha.trim() ? row.senha.trim() : '123456';
       const cargoFinal = row.cargo || 'Colaborador';
       const departmentId = row.departamento ? deptByName.get(row.departamento.trim().toLowerCase()) || '' : '';
       const scheduleId = row.escala ? schedByName.get(row.escala.trim().toLowerCase()) || '' : '';
