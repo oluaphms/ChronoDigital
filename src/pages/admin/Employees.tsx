@@ -24,8 +24,18 @@ async function confirmEmployeeEmailInAuth(email: string): Promise<void> {
   }
 }
 
-/** Cria usuário no Supabase Auth via API server (não troca sessão do admin no client). */
-async function createEmployeeAuthUser(params: { email: string; password: string; metadata?: Record<string, any> }): Promise<{ userId: string }> {
+/** Código de erro retornado pela API create-employee-auth (para mensagens consistentes). */
+const AUTH_ERROR_CODES: Record<string, string> = {
+  USER_ALREADY_EXISTS: 'E-mail já cadastrado.',
+  INVALID_PASSWORD: 'Senha inválida (mínimo 6 caracteres).',
+  INVALID_EMAIL: 'E-mail inválido.',
+  FORBIDDEN: 'Erro de permissão.',
+  RATE_LIMIT: 'Limite de requisições atingido. Tente novamente em alguns minutos.',
+  CREATE_FAILED: 'Falha ao criar usuário no Auth.',
+};
+
+/** Cria usuário no Supabase Auth via API server (não troca sessão do admin no client). Retorno estruturado; erros com motivo real. */
+async function createEmployeeAuthUser(params: { email: string; password: string; metadata?: Record<string, any> }): Promise<{ userId: string; existing?: boolean }> {
   const email = params.email.trim().toLowerCase();
   if (!email) throw new Error('E-mail é obrigatório.');
   if (!params.password?.trim()) throw new Error('Senha é obrigatória.');
@@ -44,10 +54,19 @@ async function createEmployeeAuthUser(params: { email: string; password: string;
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || data?.message || res.statusText || 'Falha ao criar usuário no Auth.');
+    const apiMessage = typeof data?.error === 'string' ? data.error.trim() : '';
+    const apiCode = data?.code ?? '';
+    const friendlyMessage =
+      apiMessage ||
+      (apiCode && AUTH_ERROR_CODES[apiCode]) ||
+      res.statusText ||
+      'Falha ao criar usuário no Auth.';
+    const err = new Error(friendlyMessage) as Error & { code?: string };
+    err.code = apiCode || 'CREATE_FAILED';
+    throw err;
   }
   if (!data?.userId) throw new Error('Conta criada mas ID não retornado.');
-  return { userId: String(data.userId) };
+  return { userId: String(data.userId), existing: !!data?.existing };
 }
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
@@ -649,6 +668,17 @@ const AdminEmployees: React.FC = () => {
   /** Pausa entre cada criação para respeitar rate limit do Supabase Auth (evitar 429). */
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  /** Log estruturado por linha (importação) — nunca quebra o fluxo. */
+  const logImportRow = (rowNum: number, email: string, outcome: 'ok' | 'fail', reason?: string) => {
+    try {
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[Import]', { row: rowNum, email, outcome, reason: reason ?? undefined });
+      }
+    } catch {
+      // ignora falha de log
+    }
+  };
+
   const runBulkImport = async (toImport: ImportRow[]) => {
     if (!user?.companyId) {
       throw new Error('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
@@ -660,18 +690,20 @@ const AdminEmployees: React.FC = () => {
     const stripCpf = (s: string) => (s || '').replace(/\D/g, '');
     const DELAY_BETWEEN_MS = 2500; // ~24 criações/min; Supabase free tier é restritivo
     const RETRY_AFTER_429_MS = 6000; // esperar 6s antes de retry ou antes de continuar
+
     for (let i = 0; i < toImport.length; i++) {
       const row = toImport[i];
       const rowNum = i + 2;
       const nome = row.nome.trim();
       if (!nome && !row.email.trim() && !row.cpf.trim()) {
-        failed.push({ row: rowNum, email: '—', reason: 'Informe ao menos nome, e-mail ou CPF' });
+        const reason = 'Informe ao menos nome, e-mail ou CPF';
+        failed.push({ row: rowNum, email: '—', reason });
+        logImportRow(rowNum, '—', 'fail', reason);
         continue;
       }
       const emailFinal = row.email.trim()
         || (row.cpf.trim() ? `import.${stripCpf(row.cpf)}@temp.local` : `import.${Date.now().toString(36)}.${i}@temp.local`);
       const nomeFinal = nome || 'Sem nome';
-      // Se a planilha não trouxer senha, usa padrão 123456
       const senha = row.senha && row.senha.trim() ? row.senha.trim() : '123456';
       const cargoFinal = row.cargo || 'Colaborador';
       const departmentId = row.departamento ? deptByName.get(row.departamento.trim().toLowerCase()) || '' : '';
@@ -680,7 +712,6 @@ const AdminEmployees: React.FC = () => {
       const doCreateAndInsert = async (): Promise<boolean> => {
         let authUserId: string | null = null;
         try {
-          // Fluxo ideal: criar conta no Auth primeiro
           const { userId } = await createEmployeeAuthUser({
             email: emailFinal.toLowerCase(),
             password: senha,
@@ -698,12 +729,10 @@ const AdminEmployees: React.FC = () => {
             code === '404' ||
             lower.includes('404') ||
             lower.includes('not found');
-
           if (!is404) {
-            // Para outros erros (duplicado, 429, etc.) deixa o chamador tratar.
+            // Motivo real do erro (não genérico); quem chama vai push em failed e continuar.
             throw authErr;
           }
-          // 404: backend de Auth não está disponível -> segue sem Auth.
         }
 
         let userIdLocal: string;
@@ -737,9 +766,12 @@ const AdminEmployees: React.FC = () => {
       try {
         let ok = await doCreateAndInsert();
         if (!ok) {
-          failed.push({ row: rowNum, email: emailFinal, reason: 'Conta criada mas ID não retornado' });
+          const reason = 'Conta criada mas ID não retornado';
+          failed.push({ row: rowNum, email: emailFinal, reason });
+          logImportRow(rowNum, emailFinal, 'fail', reason);
         } else {
           success++;
+          logImportRow(rowNum, emailFinal, 'ok');
         }
       } catch (err: any) {
         const msg = String(err?.message ?? '');
@@ -747,27 +779,40 @@ const AdminEmployees: React.FC = () => {
         const status = err?.status ?? err?.statusCode ?? null;
         const lower = msg.toLowerCase();
         const is429 = status === 429 || code === '429' || lower.includes('429') || lower.includes('rate limit') || lower.includes('too many requests');
-        const isDup = code === '23505' || msg.includes('duplicate') || /already registered|already exists|user already/i.test(msg);
+        const isDup = code === '23505' || code === 'USER_ALREADY_EXISTS' || msg.includes('duplicate') || /already registered|already exists|já cadastrado/i.test(msg);
+
         if (is429) {
           await delay(RETRY_AFTER_429_MS);
           try {
             const retryOk = await doCreateAndInsert();
-            if (retryOk) success++;
-            else failed.push({ row: rowNum, email: emailFinal, reason: 'Limite de requisições (429) após retry' });
+            if (retryOk) {
+              success++;
+              logImportRow(rowNum, emailFinal, 'ok');
+            } else {
+              const reason = 'Limite de requisições (429) após retry';
+              failed.push({ row: rowNum, email: emailFinal, reason });
+              logImportRow(rowNum, emailFinal, 'fail', reason);
+            }
           } catch (retryErr: any) {
-            failed.push({ row: rowNum, email: emailFinal, reason: 'Limite de requisições (429). Importe em lotes menores ou tente mais tarde.' });
+            const reason = (retryErr?.message && String(retryErr.message).trim()) || 'Limite de requisições (429). Importe em lotes menores ou tente mais tarde.';
+            failed.push({ row: rowNum, email: emailFinal, reason });
+            logImportRow(rowNum, emailFinal, 'fail', reason);
             await delay(RETRY_AFTER_429_MS);
           }
         } else {
-          failed.push({
-            row: rowNum,
-            email: emailFinal,
-            reason: isDup ? 'E-mail já cadastrado' : (msg || 'Erro ao criar conta/funcionário'),
-          });
+          const reason = isDup ? 'E-mail já cadastrado' : (msg.trim() || 'Erro ao criar conta/funcionário');
+          failed.push({ row: rowNum, email: emailFinal, reason });
+          logImportRow(rowNum, emailFinal, 'fail', reason);
         }
       }
-      await delay(DELAY_BETWEEN_MS);
+
+      try {
+        await delay(DELAY_BETWEEN_MS);
+      } catch {
+        // evita loop quebrado por falha no delay
+      }
     }
+
     setImportResult({ success, failed });
     if (success > 0) loadData();
   };

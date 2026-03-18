@@ -16,6 +16,36 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+/** Mapeia erros do GoTrue/Supabase Auth para mensagem e código amigáveis (nunca silencioso). */
+function mapAuthErrorToFriendly(
+  rawMessage: string,
+  rawCode: string,
+  status: number
+): { message: string; code: string } {
+  const lower = (rawMessage || '').toLowerCase();
+  const codeLower = (rawCode || '').toLowerCase();
+
+  if (status === 422 || /already registered|already exists|user already|duplicate|email.*taken|already_registered|user_already_exists/i.test(lower) || /already_registered|user_already_exists|duplicate/i.test(codeLower)) {
+    return { message: 'E-mail já cadastrado.', code: 'USER_ALREADY_EXISTS' };
+  }
+  if (status === 403 || /forbidden|permission|access denied/i.test(lower) || /forbidden|access_denied/i.test(codeLower)) {
+    return { message: 'Erro de permissão. Verifique se a chave de serviço tem permissão para criar usuários.', code: 'FORBIDDEN' };
+  }
+  if (status === 429 || /rate limit|too many requests|429/i.test(lower)) {
+    return { message: 'Limite de requisições atingido. Aguarde alguns minutos e tente novamente.', code: 'RATE_LIMIT' };
+  }
+  if (/password|senha|invalid password|weak password|min.*character/i.test(lower) || /invalid_password|weak_password/i.test(codeLower)) {
+    return { message: 'Senha inválida (mínimo 6 caracteres, conforme política do projeto).', code: 'INVALID_PASSWORD' };
+  }
+  if (/invalid email|email.*invalid|malformed/i.test(lower) || /invalid_email/i.test(codeLower)) {
+    return { message: 'E-mail inválido.', code: 'INVALID_EMAIL' };
+  }
+  if (rawMessage && rawMessage.trim()) {
+    return { message: rawMessage.trim(), code: rawCode && rawCode.trim() ? rawCode : 'CREATE_FAILED' };
+  }
+  return { message: 'Falha ao criar usuário no Auth.', code: 'CREATE_FAILED' };
+}
+
 export default async function handler(request: Request): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -142,10 +172,45 @@ export default async function handler(request: Request): Promise<Response> {
 
     const createBody = await createRes.json().catch(() => ({}));
     if (!createRes.ok) {
-      const errMsg =
-        createBody?.msg ?? createBody?.error_description ?? createBody?.message ?? createBody?.error ?? 'Falha ao criar usuário no Auth.';
+      const rawMsg =
+        createBody?.msg ?? createBody?.error_description ?? createBody?.message ?? createBody?.error;
+      const errStr = typeof rawMsg === 'string' ? rawMsg : '';
+      const code = createBody?.code ?? createBody?.error_code ?? '';
+      const { message: friendlyMessage, code: friendlyCode } = mapAuthErrorToFriendly(errStr, code, createRes.status);
+
+      // Se usuário já existe: tentar obter ID existente e retornar sucesso para não travar importação
+      const isAlreadyRegistered =
+        createRes.status === 422 ||
+        /already registered|already exists|user already|duplicate|email.*taken/i.test(errStr) ||
+        /already_registered|user_already_exists|duplicate/i.test(String(code));
+      if (isAlreadyRegistered) {
+        try {
+          const listUrl = `${supabaseUrl.replace(/\/$/, '')}/auth/v1/admin/users?per_page=1000`;
+          const listRes = await fetch(listUrl, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${serviceKey}`,
+              apikey: serviceKey,
+            },
+          });
+          const listBody = await listRes.json().catch(() => ({}));
+          const users = listBody?.users ?? [];
+          const existing = Array.isArray(users)
+            ? users.find((u: any) => (String(u?.email ?? '').toLowerCase() === email))
+            : null;
+          if (existing?.id) {
+            return Response.json(
+              { success: true, userId: existing.id, existing: true },
+              { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+            );
+          }
+        } catch {
+          // mantém resposta de erro abaixo
+        }
+      }
+
       return Response.json(
-        { error: typeof errMsg === 'string' ? errMsg : 'Falha ao criar usuário no Auth.', code: 'CREATE_FAILED' },
+        { error: friendlyMessage, code: friendlyCode },
         { status: createRes.status >= 500 ? 500 : 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
