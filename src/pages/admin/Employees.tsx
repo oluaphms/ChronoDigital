@@ -611,7 +611,9 @@ const AdminEmployees: React.FC = () => {
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const runBulkImport = async (toImport: ImportRow[]) => {
-    if (!user?.companyId) return;
+    if (!user?.companyId) {
+      throw new Error('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
+    }
     const failed: ImportResult['failed'] = [];
     let success = 0;
     const deptByName = new Map(departments.map((d) => [d.name.trim().toLowerCase(), d.id]));
@@ -750,12 +752,21 @@ const AdminEmployees: React.FC = () => {
   };
 
   const handleConfirmImport = async () => {
-    if (!importPreview || importPreview.valid.length === 0 || !user?.companyId) return;
+    if (!importPreview || importPreview.valid.length === 0) {
+      setImportError('Nenhum registro válido para importar.');
+      return;
+    }
+    if (!user?.companyId) {
+      setImportError('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
+      return;
+    }
     setImporting(true);
     setImportError(null);
     try {
       await runBulkImport(importPreview.valid as ImportRow[]);
       setImportStep('result');
+      // Fecha o modal após importar com sucesso para o usuário já ver a lista atualizada
+      setImportModalOpen(false);
       setImportPreview(null);
       setImportParseError(null);
       setImportRawRows(null);
@@ -1291,7 +1302,7 @@ const AdminEmployees: React.FC = () => {
                       disabled={importing || importPreview.valid.length === 0}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {importing ? 'Importando...' : `Importar (${importPreview.valid.length})`}
+                      {importing ? 'Importando...' : `Confirmar e importar (${importPreview.valid.length})`}
                     </button>
                   </div>
                   {importError && (
