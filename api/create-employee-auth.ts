@@ -102,11 +102,17 @@ export default async function handler(request: Request): Promise<Response> {
         const authUser = await authRes.json();
         const callerId = authUser?.id;
         if (callerId) {
-          // Busca por id (admin antigo) ou auth_user_id (admin com id local)
-          const byId = await adminSup.from('users').select('role').eq('id', callerId).maybeSingle();
-          const byAuthId = await adminSup.from('users').select('role').eq('auth_user_id', callerId).maybeSingle();
-          const row = byId?.data ?? byAuthId?.data;
-          if (row?.role) callerRole = String(row.role).toLowerCase();
+          try {
+            const byId = await adminSup.from('users').select('role').eq('id', callerId).maybeSingle();
+            if (byId?.data?.role) {
+              callerRole = String(byId.data.role).toLowerCase();
+            } else {
+              const byAuthId = await adminSup.from('users').select('role').eq('auth_user_id', callerId).maybeSingle();
+              if (byAuthId?.data?.role) callerRole = String(byAuthId.data.role).toLowerCase();
+            }
+          } catch {
+            // ignora falha na coluna auth_user_id ou RLS
+          }
         }
       }
     }
@@ -117,29 +123,34 @@ export default async function handler(request: Request): Promise<Response> {
       );
     }
 
-    const adminAuth = (adminSup.auth as any)?.admin;
-    if (!adminAuth || typeof adminAuth.createUser !== 'function') {
-      return Response.json(
-        { error: 'Configuração do Auth admin indisponível.', code: 'ADMIN_AUTH_MISSING' },
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
-
-    const { data, error } = await adminAuth.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: metadata,
+    // Criar usuário no Auth via API REST do GoTrue (evita problemas com auth.admin no serverless)
+    const authApiUrl = `${supabaseUrl.replace(/\/$/, '')}/auth/v1/admin/users`;
+    const createRes = await fetch(authApiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: serviceKey,
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        email_confirm: true,
+        ...(metadata && Object.keys(metadata).length > 0 ? { user_metadata: metadata } : {}),
+      }),
     });
 
-    if (error) {
+    const createBody = await createRes.json().catch(() => ({}));
+    if (!createRes.ok) {
+      const errMsg =
+        createBody?.msg ?? createBody?.error_description ?? createBody?.message ?? createBody?.error ?? 'Falha ao criar usuário no Auth.';
       return Response.json(
-        { error: error.message || 'Falha ao criar usuário no Auth.', code: 'CREATE_FAILED' },
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        { error: typeof errMsg === 'string' ? errMsg : 'Falha ao criar usuário no Auth.', code: 'CREATE_FAILED' },
+        { status: createRes.status >= 500 ? 500 : 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    const userId = data?.user?.id;
+    const userId = createBody?.id ?? createBody?.user?.id;
     if (!userId) {
       return Response.json(
         { error: 'Conta criada mas ID não retornado.', code: 'NO_ID' },
