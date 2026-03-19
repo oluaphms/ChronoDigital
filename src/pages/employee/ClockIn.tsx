@@ -112,7 +112,15 @@ const EmployeeClockIn: React.FC = () => {
   };
 
   const handlePunch = async (type: LogType) => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
+    if (!user) return;
+    if (!isSupabaseConfigured) {
+      setError('Sistema de ponto indisponível. Tente mais tarde.');
+      return;
+    }
+    if (!user.companyId || String(user.companyId).trim() === '') {
+      setError('Seu cadastro está incompleto (empresa não vinculada). Entre em contato com o administrador.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -271,6 +279,12 @@ const EmployeeClockIn: React.FC = () => {
       {error && (
         <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm">
           {error}
+        </div>
+      )}
+
+      {user && (!user.companyId || String(user.companyId).trim() === '') && (
+        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm">
+          Seu cadastro está sem empresa vinculada. Os botões de ponto só funcionarão após o administrador corrigir isso.
         </div>
       )}
 

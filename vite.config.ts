@@ -56,6 +56,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': projectRoot,
         ...reactAlias,
+        // recharts (DataUtils.js) usa "import get from 'es-toolkit/compat/get'" mas es-toolkit só expõe named export
+        'es-toolkit/compat/get': path.resolve(projectRoot, 'src/shim/es-toolkit-compat-get.js'),
+        // shim importa daqui (evita caminho relativo frágil)
+        'es-toolkit-compat-get-internal': path.resolve(projectRoot, 'node_modules/es-toolkit/dist/compat/object/get.js'),
         // victory-vendor: pacote não inclui ./es/d3-*.js no npm
         'victory-vendor/d3-shape': path.resolve(projectRoot, 'node_modules/d3-shape'),
         'victory-vendor/d3-scale': path.resolve(projectRoot, 'node_modules/d3-scale'),

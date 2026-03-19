@@ -666,14 +666,15 @@ const AppMain: React.FC = () => {
       } catch {
         // ignora falha ao limpar caches
       }
-      // Recarrega a página na raiz para estado limpo e login na mesma aba
+      // Força recarregamento completo na raiz para estado limpo e permitir novo login na mesma aba
+      // (evita sessão Supabase em memória que impedia login após sair sem fechar o navegador)
       if (typeof window !== 'undefined') {
-        window.location.replace(window.location.origin + '/');
+        window.location.href = window.location.origin + '/';
       }
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
       if (typeof window !== 'undefined') {
-        window.location.replace(window.location.origin + '/');
+        window.location.href = window.location.origin + '/';
       }
     }
   }, []);
@@ -1013,9 +1014,8 @@ const AppMain: React.FC = () => {
       <LayoutComponent user={user} activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout}>
         <React.Suspense fallback={<LoadingState message="Carregando módulo inteligente..." />}>
           <Routes>
-            {/* Redirecionamentos para dashboard */}
+            {/* Redirecionamentos para dashboard (apenas path exato; /employee/* usa rota aninhada abaixo) */}
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
-            <Route path="/employee" element={<Navigate to="/employee/dashboard" replace />} />
             {/* Rotas Admin: protegidas por RBAC (apenas admin/hr) */}
             <Route path="/admin" element={<ProtectedRoute user={user} allowedRoles={['admin', 'hr']}><Outlet /></ProtectedRoute>}>
               <Route index element={<Navigate to="/admin/dashboard" replace />} />
@@ -1065,16 +1065,19 @@ const AppMain: React.FC = () => {
               <Route path="ajuda" element={<AdminAjuda />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>
-            {/* Rotas Funcionário */}
-            <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
-            <Route path="/employee/clock" element={<EmployeeClockIn />} />
-            <Route path="/employee/timesheet" element={<EmployeeTimesheet />} />
-            <Route path="/employee/monitoring" element={<EmployeeMonitoring />} />
-            <Route path="/employee/requests" element={<RequestsPage />} />
-            <Route path="/employee/absences" element={<AbsencesPage />} />
-            <Route path="/employee/profile" element={<EmployeeProfile />} />
-            <Route path="/employee/settings" element={<EmployeeSettings />} />
-            <Route path="/employee/time-balance" element={<TimeBalancePage />} />
+            {/* Rotas Funcionário: agrupadas sob /employee com Outlet para evitar loop de redirecionamento */}
+            <Route path="/employee" element={<Outlet />}>
+              <Route index element={<Navigate to="/employee/dashboard" replace />} />
+              <Route path="dashboard" element={<EmployeeDashboard />} />
+              <Route path="clock" element={<EmployeeClockIn />} />
+              <Route path="timesheet" element={<EmployeeTimesheet />} />
+              <Route path="monitoring" element={<EmployeeMonitoring />} />
+              <Route path="requests" element={<RequestsPage />} />
+              <Route path="absences" element={<AbsencesPage />} />
+              <Route path="profile" element={<EmployeeProfile />} />
+              <Route path="settings" element={<EmployeeSettings />} />
+              <Route path="time-balance" element={<TimeBalancePage />} />
+            </Route>
             {/* Rotas legadas: /dashboard redireciona pela role para evitar confusão */}
             <Route path="/dashboard" element={<Navigate to={isAdminOrHr ? '/admin/dashboard' : '/employee/dashboard'} replace />} />
             <Route path="/dashboard-admin" element={<AdminDashboard />} />

@@ -1,3 +1,4 @@
+
 # Debugging Rules
 
 - Sempre identificar a CAUSA do erro, não apenas corrigir o sintoma
