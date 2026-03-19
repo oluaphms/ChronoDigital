@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X, Camera, User } from 'lucide-react';
+import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X, Camera, User, AlertTriangle } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, auth, isSupabaseConfigured, resetSession } from '../../services/supabaseClient';
@@ -192,6 +192,7 @@ const AdminEmployees: React.FC = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const scrollModalTopRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState<EmployeeRow[]>([]);
   const [schedules, setSchedules] = useState<ScheduleOption[]>([]);
   const [cargos, setCargos] = useState<{ id: string; name: string }[]>([]);
@@ -500,16 +501,15 @@ const AdminEmployees: React.FC = () => {
     if (!user?.companyId || !isSupabaseConfigured) return;
     if (!form.nome.trim()) {
       setError('Nome é obrigatório.');
+      scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
     if (!editingId && !form.email.trim()) {
       setError('E-mail é obrigatório.');
+      scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
-    if (!form.pis_pasep?.trim()) {
-      setError('Nº PIS/PASEP é obrigatório (aparece nos relatórios e é enviado ao REP).');
-      return;
-    }
+    // PIS/PASEP opcional para não bloquear salvamento; recomendado para REP/relatórios
     const cargoFinal = form.cargo === OUTRO_CARGO_VALUE ? (form.cargoOutro.trim() || 'Colaborador') : form.cargo;
     setSaving(true);
     setError(null);
@@ -660,6 +660,7 @@ const AdminEmployees: React.FC = () => {
       } else {
         setError(msg || 'Erro ao salvar');
       }
+      scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } finally {
       setSaving(false);
     }
@@ -1164,6 +1165,7 @@ const AdminEmployees: React.FC = () => {
         {modalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={() => !saving && setModalOpen(false)}>
             <div
+              ref={scrollModalTopRef}
               className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 space-y-6"
               onClick={(e) => e.stopPropagation()}
             >
@@ -1176,7 +1178,15 @@ const AdminEmployees: React.FC = () => {
                   <p className="text-xs text-slate-500 dark:text-slate-400">Cadastro de funcionários</p>
                 </div>
               </div>
-              {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+              {error && (
+                <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-red-800 dark:text-red-200">Corrija para salvar</p>
+                    <p className="text-sm text-red-700 dark:text-red-300 mt-0.5">{error}</p>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-6">
                 {/* Dados de Identificação + Fotografia (lado a lado como no print) */}
@@ -1214,8 +1224,8 @@ const AdminEmployees: React.FC = () => {
                   <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados Genéricos</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Nº PIS/PASEP <span className="text-red-500">*</span> <span className="text-xs font-normal text-blue-500">(Portaria 1510)</span></label>
-                      <input type="text" value={form.pis_pasep} onChange={(e) => setForm({ ...form, pis_pasep: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Obrigatório, enviado ao REP" />
+                      <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Nº PIS/PASEP <span className="text-xs font-normal text-slate-500">(recomendado para REP/relatórios)</span></label>
+                      <input type="text" value={form.pis_pasep} onChange={(e) => setForm({ ...form, pis_pasep: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" placeholder="Enviado ao REP e relatórios" />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nº Identificador</label>
