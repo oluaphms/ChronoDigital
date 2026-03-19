@@ -274,31 +274,48 @@ const EmployeeClockIn: React.FC = () => {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-slate-100 dark:bg-slate-800/50">
-        <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Método:</span>
-        <button
-          type="button"
-          onClick={() => setUseDigital(false)}
-          onTouchEnd={(e) => e.currentTarget.blur()}
-          className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-medium border-2 touch-manipulation cursor-pointer select-none transition-colors ${!useDigital ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-        >
-          <Camera className="w-4 h-4 shrink-0" /> Foto
-        </button>
-        <button
-          type="button"
-          onClick={() => setUseDigital(true)}
-          onTouchEnd={(e) => e.currentTarget.blur()}
-          className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-medium border-2 touch-manipulation cursor-pointer select-none transition-colors ${useDigital ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-        >
-          <Fingerprint className="w-4 h-4 shrink-0" /> Digital (WebAuthn)
-        </button>
-        <span className="text-xs text-slate-500 dark:text-slate-500 ml-1">Se não suportado, usa foto.</span>
+      <div className="space-y-2">
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Escolha como deseja comprovar o registro (ao clicar em um dos botões de ação abaixo, esse método será usado).
+        </p>
+        <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-slate-100 dark:bg-slate-800/50">
+          <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Método:</span>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!useDigital}
+            aria-label="Usar foto para comprovar o ponto"
+            onClick={() => setUseDigital(false)}
+            onTouchEnd={(e) => e.currentTarget.blur()}
+            className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-medium border-2 touch-manipulation cursor-pointer select-none transition-colors ${!useDigital ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-400/50 ring-offset-2 dark:ring-offset-slate-900' : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+          >
+            <Camera className="w-4 h-4 shrink-0" /> Foto
+            {!useDigital && <span className="text-xs font-normal opacity-90">(selecionado)</span>}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={useDigital}
+            aria-label="Usar impressão digital WebAuthn para comprovar o ponto"
+            onClick={() => setUseDigital(true)}
+            onTouchEnd={(e) => e.currentTarget.blur()}
+            className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-xl text-sm font-medium border-2 touch-manipulation cursor-pointer select-none transition-colors ${useDigital ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 ring-2 ring-emerald-400/50 ring-offset-2 dark:ring-offset-slate-900' : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800/50 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+          >
+            <Fingerprint className="w-4 h-4 shrink-0" /> Digital (WebAuthn)
+            {useDigital && <span className="text-xs font-normal opacity-90">(selecionado)</span>}
+          </button>
+          <span className="text-xs text-slate-500 dark:text-slate-500 ml-1">Se não suportado, usa foto.</span>
+        </div>
       </div>
 
+      <p className="text-sm text-slate-500 dark:text-slate-400">
+        Sequência do dia: Entrada → Saída, ou Entrada → Iniciar Intervalo → Finalizar Intervalo → Saída. Os botões habilitam conforme o último registro.
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <button
           type="button"
           disabled={saving || isIn}
+          title={isIn ? 'Você já registrou entrada hoje' : saving ? 'Registrando...' : undefined}
           onClick={() => handlePunch(LogType.IN)}
           className={`${buttonBase} border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30`}
         >
@@ -308,6 +325,7 @@ const EmployeeClockIn: React.FC = () => {
         <button
           type="button"
           disabled={saving || !isIn}
+          title={!isIn ? 'Registre uma entrada antes' : saving ? 'Registrando...' : undefined}
           onClick={() => handlePunch(LogType.OUT)}
           className={`${buttonBase} border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30`}
         >
@@ -317,6 +335,7 @@ const EmployeeClockIn: React.FC = () => {
         <button
           type="button"
           disabled={saving || !isIn || isBreak}
+          title={!isIn ? 'Registre uma entrada antes' : isBreak ? 'Você já está em intervalo' : saving ? 'Registrando...' : undefined}
           onClick={() => handlePunch(LogType.BREAK)}
           className={`${buttonBase} border-amber-500 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30`}
         >
@@ -326,6 +345,7 @@ const EmployeeClockIn: React.FC = () => {
         <button
           type="button"
           disabled={saving || !isBreak}
+          title={!isBreak ? 'Inicie um intervalo antes' : saving ? 'Registrando...' : undefined}
           onClick={() => handlePunch(LogType.BREAK)}
           className={`${buttonBase} border-sky-500 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/30`}
         >

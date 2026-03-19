@@ -4,6 +4,15 @@ import path from 'path';
 
 const projectRoot = path.resolve(__dirname);
 
+// Garantir uma única instância de React: forçar resolução sempre para o mesmo path (evita useState of null)
+const reactAlias = {
+  react: path.resolve(projectRoot, 'node_modules/react'),
+  'react-dom': path.resolve(projectRoot, 'node_modules/react-dom'),
+  'react-dom/client': path.resolve(projectRoot, 'node_modules/react-dom/client'),
+  'react/jsx-runtime': path.resolve(projectRoot, 'node_modules/react/jsx-runtime.js'),
+  'react/jsx-dev-runtime': path.resolve(projectRoot, 'node_modules/react/jsx-dev-runtime.js'),
+};
+
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production'
 
@@ -29,7 +38,7 @@ export default defineConfig(({ mode }) => {
 
     server: {
       port: 3010,
-      strictPort: true,
+      strictPort: false,
       host: true,
       open: true
     },
@@ -46,12 +55,19 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': projectRoot,
+        ...reactAlias,
+        // victory-vendor: pacote não inclui ./es/d3-*.js no npm
+        'victory-vendor/d3-shape': path.resolve(projectRoot, 'node_modules/d3-shape'),
+        'victory-vendor/d3-scale': path.resolve(projectRoot, 'node_modules/d3-scale'),
       },
       dedupe: ['react', 'react-dom'],
     },
 
     optimizeDeps: {
-      include: ['react', 'react-dom', 'recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
+      // Só pre-bundlar React: libs que usam React ficam de fora e importam o mesmo react (evita useState of null)
+      // es-toolkit NÃO deve estar em include: o pacote usa named exports; pre-bundlar quebra "does not provide an export named 'default'"
+      include: ['react', 'react-dom', 'scheduler', 'cookie', 'set-cookie-parser'],
+      exclude: ['recharts', 'lucide-react', 'framer-motion', 'react-router-dom'],
       esbuildOptions: {
         mainFields: ['module', 'main'],
       },
@@ -76,8 +92,11 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks: (id) => {
-            // Evita chunk separado de React para prevenir "useState of null" (múltiplas instâncias)
-            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) return undefined
+            // Uma única instância de React: colocar react/react-dom/scheduler no mesmo chunk
+            // para evitar "Cannot read properties of null (reading 'useState')"
+            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/') || id.includes('node_modules/scheduler/')) {
+              return 'react-vendor'
+            }
             if (id.includes('node_modules/@supabase/supabase-js')) return 'supabase-vendor'
             if (id.includes('node_modules/lucide-react') || id.includes('node_modules/recharts')) return 'ui-vendor'
             return undefined

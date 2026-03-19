@@ -174,7 +174,6 @@ VITE_SUPABASE_ANON_KEY=sua-chave-anon`}
 }
 
 const AppMain: React.FC = () => {
-  console.log('React instance:', React);
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [insights, setInsights] = useState<{ insight: string, score: number } | null>(null);
