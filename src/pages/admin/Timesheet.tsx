@@ -232,7 +232,7 @@ const AdminTimesheet: React.FC = () => {
           {message.text}
         </div>
       )}
-      <div className="flex flex-wrap gap-4 items-end p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+      <div className="flex flex-wrap gap-4 items-end p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 print:hidden">
         <div>
           <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Funcionário</label>
           <select value={filterUserId} onChange={(e) => setFilterUserId(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white min-w-[180px]">
@@ -275,7 +275,7 @@ const AdminTimesheet: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-x-auto">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-x-auto print:border-0 print:shadow-none print:bg-transparent print:overflow-visible">
         {loadingData ? (
           <div className="p-12 text-center text-slate-500">Carregando...</div>
         ) : (
@@ -290,7 +290,7 @@ const AdminTimesheet: React.FC = () => {
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Horas Trabalhadas</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Localização</th>
                 <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Status</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Ações</th>
+                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400 print:hidden">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -308,7 +308,7 @@ const AdminTimesheet: React.FC = () => {
                       <td className="px-4 py-3 tabular-nums">{sum.workedHours || '—'}</td>
                       <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs font-mono">{sum.location ?? '—'}</td>
                       <td className="px-4 py-3">{sum.status || 'OK'}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right print:hidden">
                         {rec && (
                           rec.nsr != null ? (
                             <span className="text-xs text-slate-400 dark:text-slate-500" title="Registro REP-P (Portaria 671) - correções via Ajustes de Ponto">REP-P</span>
