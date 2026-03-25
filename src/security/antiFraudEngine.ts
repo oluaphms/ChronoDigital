@@ -165,13 +165,14 @@ export function validateLocation(
  */
 export function generateDeviceFingerprint(): DeviceFingerprint {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  const screen =
-    typeof screen !== 'undefined'
-      ? `${screen.width}x${screen.height}`
+  // Não nomear como `screen`: sombreia o global e causa TDZ ("Cannot access before initialization").
+  const screenResolution =
+    typeof window !== 'undefined' && window.screen
+      ? `${window.screen.width}x${window.screen.height}`
       : '';
   const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '';
   const platform = typeof navigator !== 'undefined' ? navigator.platform : '';
-  const str = [ua, screen, tz, platform].join('|');
+  const str = [ua, screenResolution, tz, platform].join('|');
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const c = str.charCodeAt(i);
@@ -186,7 +187,7 @@ export function generateDeviceFingerprint(): DeviceFingerprint {
     os: typeof navigator !== 'undefined' ? (navigator as any).userAgentData?.platform : undefined,
     platform,
     timezone: tz,
-    screenResolution: screen,
+    screenResolution,
   };
 }
 

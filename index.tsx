@@ -10,7 +10,11 @@ import { ToastProvider } from './src/components/ToastProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import { LanguageProvider } from './src/contexts/LanguageContext';
 
-initSentry();
+try {
+  initSentry();
+} catch (e) {
+  console.warn('[Sentry] init falhou (ignorado no dev):', e);
+}
 ThemeService.init();
 i18n.init();
 

@@ -38,9 +38,10 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('ErrorBoundary capturou um erro:', error, errorInfo);
-    this.setState({ error, errorInfo });
-    captureException(error, { react: { componentStack: errorInfo.componentStack } });
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error('ErrorBoundary capturou um erro:', err.message, err.stack, errorInfo);
+    this.setState({ error: err, errorInfo });
+    captureException(err, { react: { componentStack: errorInfo.componentStack } });
   }
 
   handleReset = () => {
@@ -61,6 +62,11 @@ class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
+      const isDevUi =
+        (typeof import.meta !== 'undefined' && !!import.meta.env?.DEV) ||
+        (typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'));
+
       return (
         <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-6">
           <div className="max-w-2xl w-full glass-card rounded-[3rem] p-10 md:p-14 space-y-8">
@@ -79,13 +85,14 @@ class ErrorBoundary extends Component<Props, State> {
               </p>
             </div>
 
-            {((typeof import.meta !== 'undefined' && import.meta.env?.DEV) || process.env.NODE_ENV === 'development') && this.state.error && (
+            {isDevUi && this.state.error && (
               <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl p-6 space-y-4">
                 <h3 className="font-bold text-slate-900 dark:text-white text-sm">
-                  Detalhes do Erro (Desenvolvimento):
+                  Detalhes do Erro (ambiente local / dev):
                 </h3>
-                <pre className="text-xs text-red-600 dark:text-red-400 overflow-auto max-h-64 custom-scrollbar">
+                <pre className="text-xs text-red-600 dark:text-red-400 overflow-auto max-h-64 custom-scrollbar whitespace-pre-wrap break-words">
                   {this.state.error.toString()}
+                  {this.state.error.stack ? `\n\n${this.state.error.stack}` : ''}
                   {this.state.errorInfo?.componentStack}
                 </pre>
               </div>
