@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -17,7 +18,6 @@ const SmartDock: React.FC = () => {
   const { groups, dockFloatingGroupKey, openDockGroup, setRadialOpen, onLogout } = useSmartNavigation();
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const cardRef = useRef<HTMLDivElement | null>(null);
   const [cardStyle, setCardStyle] = useState<{ left: number; bottom: number; width: number } | null>(null);
 
   const dockEntries = Object.entries(groups);
@@ -139,7 +139,6 @@ const SmartDock: React.FC = () => {
             const isOpen = dockFloatingGroupKey === groupKey;
             const label = i18n.t(group.labelKey);
             const isSmart = groupKey === 'smart';
-            const isDashboard = groupKey === 'dashboard';
 
             return (
               <div
@@ -169,75 +168,80 @@ const SmartDock: React.FC = () => {
                     {label}
                   </span>
                 </motion.button>
-
-                {/* Submenu flutuante acima deste botão (posição fixa responsiva) */}
-                {openGroup && dockFloatingGroupKey === groupKey && !isDashboard && cardStyle && (
-                  <AnimatePresence>
-                    <>
-                      <motion.div
-                        className="fixed inset-0 z-40"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ duration: 0.15 }}
-                        onClick={() => openDockGroup(null)}
-                        aria-hidden
-                      />
-                      <motion.div
-                        ref={cardRef}
-                        className="fixed z-50 px-4 py-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl"
-                        style={{ left: cardStyle.left, bottom: cardStyle.bottom, width: cardStyle.width }}
-                        initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                        role="menu"
-                        aria-label={i18n.t(openGroup.labelKey)}
-                      >
-                        <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-2 pb-2 border-b border-slate-100 dark:border-slate-800 mb-2">
-                          {i18n.t(openGroup.labelKey)}
-                        </p>
-                        <div className="flex flex-col gap-0.5 max-h-[min(60vh,320px)] overflow-y-auto">
-                          {openGroup.items.map((item) => {
-                            const isActive = location.pathname === item.path;
-                            return (
-                              <button
-                                key={item.path}
-                                type="button"
-                                onClick={() => handleItemClick(item.path)}
-                                className={`
-                                  flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors
-                                  ${isActive ? 'bg-indigo-600 text-white' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}
-                                `}
-                                role="menuitem"
-                              >
-                                {i18n.t(item.nameKey)}
-                              </button>
-                            );
-                          })}
-                          {dockFloatingGroupKey === 'smart' && onLogout && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                openDockGroup(null);
-                                onLogout();
-                              }}
-                              className="flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors border-t border-slate-100 dark:border-slate-800 mt-2 pt-2"
-                              role="menuitem"
-                            >
-                              {i18n.t('layout.logout')}
-                            </button>
-                          )}
-                        </div>
-                      </motion.div>
-                    </>
-                  </AnimatePresence>
-                )}
               </div>
             );
           })}
         </div>
       </nav>
+
+      {/* Portal no body: fixed dentro de <nav> com transform (ex.: lg:-translate-x-1/2) quebrava posição em produção */}
+      {typeof document !== 'undefined' &&
+        openGroup &&
+        dockFloatingGroupKey &&
+        dockFloatingGroupKey !== 'dashboard' &&
+        cardStyle &&
+        createPortal(
+          <AnimatePresence>
+            <motion.div
+              key="dock-backdrop"
+              className="fixed inset-0 z-[90]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={() => openDockGroup(null)}
+              aria-hidden
+            />
+            <motion.div
+              key="dock-menu"
+              className="fixed z-[100] px-4 py-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl pointer-events-auto"
+              style={{ left: cardStyle.left, bottom: cardStyle.bottom, width: cardStyle.width }}
+              initial={{ opacity: 0, y: 8, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.96 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              role="menu"
+              aria-label={i18n.t(openGroup.labelKey)}
+            >
+              <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-2 pb-2 border-b border-slate-100 dark:border-slate-800 mb-2">
+                {i18n.t(openGroup.labelKey)}
+              </p>
+              <div className="flex flex-col gap-0.5 max-h-[min(60vh,320px)] overflow-y-auto">
+                {openGroup.items.map((item) => {
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <button
+                      key={item.path}
+                      type="button"
+                      onClick={() => handleItemClick(item.path)}
+                      className={`
+                        flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-colors
+                        ${isActive ? 'bg-indigo-600 text-white' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'}
+                      `}
+                      role="menuitem"
+                    >
+                      {i18n.t(item.nameKey)}
+                    </button>
+                  );
+                })}
+                {dockFloatingGroupKey === 'smart' && onLogout && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openDockGroup(null);
+                      onLogout();
+                    }}
+                    className="flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors border-t border-slate-100 dark:border-slate-800 mt-2 pt-2"
+                    role="menuitem"
+                  >
+                    {i18n.t('layout.logout')}
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </AnimatePresence>,
+          document.body
+        )}
     </>
   );
 };
