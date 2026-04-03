@@ -300,11 +300,16 @@ const EmployeeClockIn: React.FC = () => {
       if (!proofModalOpen) stopCamera();
       return;
     }
+    // Com foto já capturada: parar o stream para “congelar” o preview (mostramos <img> abaixo).
+    if (photoDataUrl) {
+      stopCamera();
+      return;
+    }
     void startCameraPreview();
     return () => {
       stopCamera();
     };
-  }, [needsCameraPreview, proofModalOpen, startCameraPreview, stopCamera]);
+  }, [needsCameraPreview, proofModalOpen, photoDataUrl, startCameraPreview, stopCamera]);
 
   const resolveMethod = (
     hadBiometric: boolean,
@@ -944,16 +949,30 @@ const EmployeeClockIn: React.FC = () => {
                       : 'Foto de apoio'}
                 </div>
                 <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-black">
-                  <video ref={modalVideoRef} className="w-full h-full object-cover" playsInline muted autoPlay />
+                  {photoDataUrl ? (
+                    <img
+                      src={photoDataUrl}
+                      alt="Pré-visualização da foto capturada para o registro de ponto"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <video ref={modalVideoRef} className="w-full h-full object-cover" playsInline muted autoPlay />
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2 items-center">
                   <button
                     type="button"
                     disabled={saving}
-                    onClick={() => void handleCapturePhotoClick()}
+                    onClick={() => {
+                      if (photoDataUrl) {
+                        setPhotoDataUrl(null);
+                        return;
+                      }
+                      void handleCapturePhotoClick();
+                    }}
                     className="px-4 py-2.5 rounded-xl bg-sky-600 text-white text-sm font-medium min-h-[44px]"
                   >
-                    Capturar foto
+                    {photoDataUrl ? 'Tirar outra foto' : 'Capturar foto'}
                   </button>
                   {canUseManualPunch && !manualBypassActive && (
                     <button
