@@ -48,7 +48,6 @@ export const adminNavigation: NavItem[] = [
   { name: 'Relatórios', nameKey: 'menu.reports', path: '/admin/reports', icon: BarChart3 },
   { name: 'Relógios REP', nameKey: 'menu.repDevices', path: '/admin/rep-devices', icon: Clock },
   { name: 'Monitor REP', nameKey: 'menu.repMonitor', path: '/admin/rep-monitor', icon: Activity },
-  { name: 'Presença em tempo real', nameKey: 'menu.liveAttendance', path: '/admin/live-attendance', icon: Users },
   { name: 'Importar AFD', nameKey: 'menu.importRep', path: '/admin/import-rep', icon: Upload },
   { name: 'Fiscalização REP-P', nameKey: 'menu.fiscalizacao', path: '/admin/fiscalizacao', icon: ShieldCheck },
   { name: 'Segurança e Antifraude', nameKey: 'menu.securityAntifraud', path: '/admin/security', icon: ShieldAlert },
@@ -59,6 +58,7 @@ export const adminNavigation: NavItem[] = [
 /** Navegação funcionário: rotas /employee/* */
 export const employeeNavigation: NavItem[] = [
   { name: 'Dashboard', nameKey: 'menu.dashboard', path: '/employee/dashboard', icon: Home },
+  { name: 'Horário e escala', nameKey: 'menu.myWorkSchedule', path: '/employee/work-schedule', icon: CalendarClock },
   { name: 'Registrar Ponto', nameKey: 'menu.registrarPonto', path: '/employee/clock', icon: Clock },
   { name: 'Meu Espelho de Ponto', nameKey: 'menu.espelhoPonto', path: '/employee/timesheet', icon: Clock },
   { name: 'Minhas Solicitações', nameKey: 'menu.myRequests', path: '/employee/requests', icon: ClipboardList },

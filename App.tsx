@@ -109,7 +109,6 @@ import ImportEmployees from './src/pages/admin/ImportEmployees';
 import AdminRepDevices from './src/pages/admin/RepDevices';
 import AdminRepMonitor from './src/pages/admin/RepMonitor';
 import AdminImportRep from './src/pages/admin/ImportRep';
-import AdminLiveAttendance from './src/pages/admin/LiveAttendance';
 import AdminAusencias from './src/pages/Ausencias';
 import AdminAjuda from './src/pages/admin/Ajuda';
 import EmployeeDashboard from './src/pages/employee/Dashboard';
@@ -118,6 +117,7 @@ import EmployeeTimesheet from './src/pages/employee/Timesheet';
 import EmployeeMonitoring from './src/pages/employee/Monitoring';
 import EmployeeProfile from './src/pages/employee/Profile';
 import EmployeeSettings from './src/pages/employee/Settings';
+import MyWorkSchedule from './src/pages/employee/MyWorkSchedule';
 import TimeBalancePage from './src/pages/TimeBalance';
 
 // Lazy loading of complex views
@@ -674,17 +674,9 @@ const AppMain: React.FC = () => {
   };
 
   const handleLogout = useCallback(async () => {
-    setUser(null);
-    setCompany(null);
-    setInsights(null);
-    setLoginStep('choice');
-    setLoginRole(null);
-    setLoginData({ identifier: '', password: '' });
-    setLoginError(null);
     try {
       await authService.signOut();
       // Em PWA, caches podem manter respostas/artefatos antigos em memória.
-      // Limpar caches no logout reduz casos de “login travado até fechar o app”.
       try {
         if (typeof window !== 'undefined' && 'caches' in window) {
           const names = await caches.keys();
@@ -697,18 +689,20 @@ const AppMain: React.FC = () => {
       } catch {
         // ignora falha ao limpar caches
       }
-      // Força recarregamento completo na raiz para estado limpo e permitir novo login na mesma aba
-      // (evita sessão Supabase em memória que impedia login após sair sem fechar o navegador)
-      if (typeof window !== 'undefined') {
-        window.location.href = window.location.origin + '/';
-      }
     } catch (error) {
       console.error('Erro ao fazer logout:', error);
-      if (typeof window !== 'undefined') {
-        window.location.href = window.location.origin + '/';
-      }
+    } finally {
+      setUser(null);
+      setCompany(null);
+      setInsights(null);
+      setLoginStep('choice');
+      setLoginRole(null);
+      setLoginData({ identifier: '', password: '' });
+      setLoginError(null);
+      // Uma única transição para login na raiz (evita piscar: React login + reload completo).
+      navigate('/', { replace: true });
     }
-  }, []);
+  }, [navigate]);
 
   useSessionTimeout(
     globalSettings?.session_timeout_minutes ?? 60,
@@ -1092,7 +1086,7 @@ const AppMain: React.FC = () => {
               <Route path="rep-devices" element={<AdminRepDevices />} />
               <Route path="rep-monitor" element={<AdminRepMonitor />} />
               <Route path="import-rep" element={<AdminImportRep />} />
-              <Route path="live-attendance" element={<AdminLiveAttendance />} />
+              <Route path="live-attendance" element={<Navigate to="/admin/monitoring" replace />} />
               <Route path="fiscalizacao" element={<AdminFiscalizacao />} />
               <Route path="security" element={<AdminSecurity />} />
               <Route path="company" element={<AdminCompany />} />
@@ -1110,6 +1104,7 @@ const AppMain: React.FC = () => {
             <Route path="/employee" element={<Outlet />}>
               <Route index element={<Navigate to="/employee/dashboard" replace />} />
               <Route path="dashboard" element={<EmployeeDashboard />} />
+              <Route path="work-schedule" element={<MyWorkSchedule />} />
               <Route path="clock" element={<EmployeeClockIn />} />
               <Route path="timesheet" element={<EmployeeTimesheet />} />
               <Route path="monitoring" element={<EmployeeMonitoring />} />

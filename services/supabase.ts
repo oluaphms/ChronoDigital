@@ -64,6 +64,11 @@ let authExpiredEventPending = false;
 
 let client: SupabaseClient | null = null;
 
+/** Instantâneo do carregamento da página: nas primeiras requisições o JWT pode ainda não estar anexado → 401 falso. */
+const PAGE_LOAD_AT = typeof window !== 'undefined' ? Date.now() : 0;
+/** Não disparar “sessão expirada” durante este intervalo (evita reload/flash ao iniciar). */
+const AUTH_401_GRACE_MS = 4500;
+
 // Wrapper de fetch com timeout. 401 em REST não desloga se a sessão ainda existir (evita logout por race no refresh/RLS).
 const fetchWithTimeout = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
   Promise.race([
@@ -72,10 +77,18 @@ const fetchWithTimeout = (input: RequestInfo | URL, init?: RequestInit): Promise
         const u = String(input);
         if (u.includes('/rest/v1/') && !u.includes('/auth/v1/') && client) {
           void (async () => {
+            // Durante a hidratação da sessão (localStorage/IndexedDB), o primeiro GET pode ir sem Bearer → 401.
+            if (Date.now() - PAGE_LOAD_AT < AUTH_401_GRACE_MS) return;
             try {
-              const {
+              let {
                 data: { session },
               } = await client!.auth.getSession();
+              if (session) return;
+              // Segunda tentativa após um tique: corrida com refresh do token.
+              await new Promise((r) => setTimeout(r, 200));
+              ({
+                data: { session },
+              } = await client!.auth.getSession());
               if (session) return;
             } catch {
               // segue: sessão inválida

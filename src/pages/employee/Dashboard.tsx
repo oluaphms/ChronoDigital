@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
-import { Clock, CalendarDays, Activity, Scale, ClipboardList, LogIn, LogOut, FileEdit, FileText } from 'lucide-react';
+import { Clock, CalendarDays, Activity, Scale, ClipboardList, LogIn, LogOut, FileEdit, FileText, CalendarClock } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
@@ -227,6 +227,10 @@ const EmployeeDashboard: React.FC = () => {
           <Button type="button" variant="outline" onClick={() => navigate('/employee/timesheet')} className="flex items-center gap-2">
             <FileText className="w-4 h-4" />
             {i18n.t('dashboard.viewTimesheetEmployee')}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => navigate('/employee/work-schedule')} className="flex items-center gap-2">
+            <CalendarClock className="w-4 h-4" />
+            {i18n.t('dashboard.myScheduleCta')}
           </Button>
         </div>
       </div>

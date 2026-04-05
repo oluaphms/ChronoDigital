@@ -50,6 +50,7 @@ export const navigationGroups: Record<string, NavigationGroupSchema> = {
     labelKey: 'nav.groupTime',
     icon: 'clock',
     items: [
+      { name: 'Horário e escala', nameKey: 'menu.myWorkSchedule', path: '/employee/work-schedule', roles: ['employee'] },
       { name: 'Registrar Ponto', nameKey: 'menu.registrarPonto', path: '/employee/clock', roles: ['employee'] },
       { name: 'Espelho de Ponto', nameKey: 'menu.espelhoPonto', path: '/admin/timesheet', roles: ['admin', 'hr'] },
       { name: 'Meu Espelho de Ponto', nameKey: 'menu.espelhoPonto', path: '/employee/timesheet', roles: ['employee'] },
@@ -84,7 +85,6 @@ export const navigationGroups: Record<string, NavigationGroupSchema> = {
     items: [
       { name: 'Relógios REP', nameKey: 'menu.repDevices', path: '/admin/rep-devices', roles: ['admin', 'hr'] },
       { name: 'Monitor REP', nameKey: 'menu.repMonitor', path: '/admin/rep-monitor', roles: ['admin', 'hr'] },
-      { name: 'Presença em tempo real', nameKey: 'menu.liveAttendance', path: '/admin/live-attendance', roles: ['admin', 'hr'] },
       { name: 'Importar AFD', nameKey: 'menu.importRep', path: '/admin/import-rep', roles: ['admin', 'hr'] },
       { name: 'Fiscalização REP-P', nameKey: 'menu.fiscalizacao', path: '/admin/fiscalizacao', roles: ['admin', 'hr'] },
       { name: 'Segurança e Antifraude', nameKey: 'menu.securityAntifraud', path: '/admin/security', roles: ['admin', 'hr'] },

@@ -59,7 +59,6 @@ const ADMIN_ITEMS = [
   { label: 'Arquivos Fiscais', path: '/admin/arquivos-fiscais', icon: FileText },
   { label: 'Relógios REP', path: '/admin/rep-devices', icon: Timer },
   { label: 'Monitor REP', path: '/admin/rep-monitor', icon: Activity },
-  { label: 'Presença em tempo real', path: '/admin/live-attendance', icon: Users },
   { label: 'Importar AFD', path: '/admin/import-rep', icon: Upload },
   { label: 'Monitoramento', path: '/admin/monitoring', icon: Activity },
   { label: 'Escalas', path: '/admin/schedules', icon: Calendar },
