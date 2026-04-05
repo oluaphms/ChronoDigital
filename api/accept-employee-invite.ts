@@ -163,15 +163,18 @@ export default async function handler(request: Request): Promise<Response> {
       const code = String((userInsertError as any)?.code || '');
       const msg = String((userInsertError as any)?.message || '').toLowerCase();
       if (code === '23505' || msg.includes('duplicate') || msg.includes('unique')) {
-        await adminSup
-          .from('users')
-          .update({
-            nome: name,
-            role,
-            preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' },
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', authUserId);
+        // Perfis criados antes sem empresa (ou só no Auth) precisam receber o tenant do convite;
+        // sem company_id o colaborador não aparece na lista do admin/RH (filtro por empresa).
+        const patch: Record<string, unknown> = {
+          nome: name,
+          role,
+          preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' },
+          updated_at: new Date().toISOString(),
+        };
+        if (companyId && String(companyId).trim() !== '') {
+          patch.company_id = companyId;
+        }
+        await adminSup.from('users').update(patch).eq('id', authUserId);
       } else {
         return Response.json(
           { error: userInsertError.message || 'Erro ao criar perfil', code: 'DB_ERROR' },

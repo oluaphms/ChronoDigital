@@ -1197,6 +1197,13 @@ const AdminEmployees: React.FC = () => {
           )}
         </div>
 
+        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-3xl leading-relaxed">
+          A lista mostra apenas quem está em <code className="text-[11px] bg-slate-100 dark:bg-slate-800 px-1 rounded">public.users</code> com o
+          mesmo <strong className="font-medium text-slate-600 dark:text-slate-300">company_id</strong> da empresa atual. Quem existe só no Auth ou com
+          empresa vazia/errada consegue entrar no app, mas não aparece aqui até o vínculo ser corrigido no Supabase (SQL Editor: atualizar{' '}
+          <code className="text-[11px] bg-slate-100 dark:bg-slate-800 px-1 rounded">company_id</code> para o ID da empresa).
+        </p>
+
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-hidden">
           {loadingData ? (
             <div className="p-12 text-center text-slate-500">Carregando...</div>
