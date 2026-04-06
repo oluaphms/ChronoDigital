@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import {
   Camera,
   MapPin,
-  Fingerprint,
+  ScanLine,
   Clock,
   Shield,
   Keyboard,
@@ -588,7 +588,7 @@ const EmployeeClockIn: React.FC = () => {
     toast.addToast('success', 'Foto capturada.');
   };
 
-  const beginPunch = async (type: LogType) => {
+  const beginPunch = async (type: LogType, mode: VerificationMode) => {
     if (!user) return;
     if (!isSupabaseConfigured) {
       setError('Sistema de ponto indisponível. Tente mais tarde.');
@@ -610,6 +610,7 @@ const EmployeeClockIn: React.FC = () => {
       toast.addToast('error', validation.error || 'Sequência inválida.');
       return;
     }
+    setVerificationMode(mode);
     setPendingLogType(type);
     setGeo(null);
     setGpsFailReason(null);
@@ -619,8 +620,8 @@ const EmployeeClockIn: React.FC = () => {
     setProofModalOpen(true);
   };
 
-  const handlePunch = (type: LogType) => {
-    void beginPunch(type);
+  const handlePunch = (type: LogType, mode: VerificationMode) => {
+    void beginPunch(type, mode);
   };
 
   /** Em jornada: última batida do dia foi entrada (trabalhando ou após retorno de intervalo) */
@@ -716,7 +717,7 @@ const EmployeeClockIn: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
             { mode: 'photo' as const, label: '📸 Foto', icon: Camera, color: 'sky' },
-            { mode: 'digital' as const, label: '🔐 Digital', icon: Fingerprint, color: 'indigo' },
+            { mode: 'digital' as const, label: '🔐 Digital', icon: ScanLine, color: 'indigo' },
             ...(canUseManualPunch ? [{ mode: 'manual' as const, label: '⌨️ Manual', icon: Keyboard, color: 'amber' }] : []),
           ].map((card) => {
             const Icon = card.icon;
@@ -743,28 +744,28 @@ const EmployeeClockIn: React.FC = () => {
 
                 <div className="mt-6 space-y-2">
                   <button
-                    onClick={() => handlePunch(LogType.IN)}
-                    disabled={saving || (isIn && !isBreak && verificationMode !== 'manual')}
+                    onClick={() => handlePunch(LogType.IN, card.mode)}
+                    disabled={saving || (isIn && !isBreak && card.mode !== 'manual')}
                     className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
                   >
                     Registrar Entrada
                   </button>
                   <button
-                    onClick={() => handlePunch(LogType.BREAK)}
+                    onClick={() => handlePunch(LogType.BREAK, card.mode)}
                     disabled={saving || !isIn || isBreak}
                     className="w-full py-3 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
                   >
                     Iniciar Intervalo
                   </button>
                   <button
-                    onClick={() => handlePunch(LogType.IN)}
+                    onClick={() => handlePunch(LogType.IN, card.mode)}
                     disabled={saving || !isBreak}
                     className="w-full py-3 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
                   >
                     Finalizar Intervalo
                   </button>
                   <button
-                    onClick={() => handlePunch(LogType.OUT)}
+                    onClick={() => handlePunch(LogType.OUT, card.mode)}
                     disabled={saving || !isIn}
                     className="w-full py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium disabled:opacity-50 transition-colors"
                   >
@@ -897,7 +898,7 @@ const EmployeeClockIn: React.FC = () => {
             {verificationMode === 'digital' && (
               <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-slate-200">
-                  <Fingerprint className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <ScanLine className="w-4 h-4 text-indigo-500 shrink-0" />
                   Comprovação digital (WebAuthn)
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-400">

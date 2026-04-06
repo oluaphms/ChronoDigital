@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { LogType, PunchMethod, User, Company } from '../types';
-import { Camera, MapPin, Keyboard, X, Check, AlertTriangle, ShieldCheck, RefreshCw, Settings2, HelpCircle, Loader2, AlertCircle, Upload, Fingerprint, Navigation, MapPinned } from 'lucide-react';
+import { Camera, MapPin, Keyboard, X, Check, AlertTriangle, ShieldCheck, RefreshCw, Settings2, HelpCircle, Loader2, AlertCircle, Upload, ScanLine, Navigation, MapPinned } from 'lucide-react';
 import { Button, LoadingState, Badge } from './UI';
 import { PontoService } from '../services/pontoService';
 import { BiometricService } from '../services/biometricService';
@@ -617,7 +617,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
   const methodTabs = [
     { id: PunchMethod.PHOTO, icon: Camera, label: company.settings.requirePhoto ? 'Biometria *' : 'Foto', color: 'indigo' },
     { id: PunchMethod.GPS, icon: MapPin, label: 'GPS', color: 'blue' },
-    { id: PunchMethod.BIOMETRIC, icon: Fingerprint, label: 'Digital', color: 'violet' },
+    { id: PunchMethod.BIOMETRIC, icon: ScanLine, label: 'Digital', color: 'violet' },
     ...(company.settings.allowManualPunch ? [{ id: PunchMethod.MANUAL, icon: Keyboard, label: 'Manual', color: 'slate' }] : [])
   ];
 
@@ -915,7 +915,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                           // LOADING - Aguardando biometria
                           <>
                             <div className="w-24 h-24 bg-violet-500/20 border-2 border-violet-500/30 rounded-full flex items-center justify-center mb-6 mx-auto">
-                              <Fingerprint size={48} className="text-violet-400 animate-pulse" />
+                              <ScanLine size={48} className="text-violet-400 animate-pulse" />
                             </div>
                             <h4 className="text-xl font-bold mb-2 text-white tracking-tight">
                               Use seu sensor biométrico
@@ -930,7 +930,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                           <>
                             <div className="w-24 h-24 bg-violet-500/10 border border-violet-500/20 rounded-full flex items-center justify-center mb-6 mx-auto group cursor-pointer hover:bg-violet-500/20 transition-all"
                               onClick={handleBiometricAuth}>
-                              <Fingerprint size={48} className="text-violet-400 group-hover:scale-110 transition-transform" />
+                              <ScanLine size={48} className="text-violet-400 group-hover:scale-110 transition-transform" />
                             </div>
                             <h4 className="text-xl font-bold mb-2 text-white tracking-tight">Autenticação Biométrica</h4>
                             <p className="text-slate-400 text-xs mb-1">{biometricDeviceName}</p>
@@ -942,14 +942,14 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                               size="sm"
                               className="rounded-xl px-8 flex items-center gap-2 bg-violet-600 hover:bg-violet-700 shadow-xl shadow-violet-600/20"
                             >
-                              <Fingerprint size={18} /> Verificar Agora
+                              <ScanLine size={18} /> Verificar Agora
                             </Button>
                           </>
                         ) : (
                           // NÃO REGISTRADO - Primeiro uso
                           <>
                             <div className="w-24 h-24 bg-violet-500/10 border border-violet-500/20 rounded-full flex items-center justify-center mb-6 mx-auto">
-                              <Fingerprint size={48} className="text-violet-400" />
+                              <ScanLine size={48} className="text-violet-400" />
                             </div>
                             <h4 className="text-xl font-bold mb-2 text-white tracking-tight">Configurar Biometria</h4>
                             <p className="text-slate-400 text-xs mb-6 leading-relaxed max-w-xs mx-auto">
@@ -960,7 +960,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                               size="sm"
                               className="rounded-xl px-8 flex items-center gap-2 bg-violet-600 hover:bg-violet-700 shadow-xl shadow-violet-600/20"
                             >
-                              <Fingerprint size={18} /> Registrar Biometria
+                              <ScanLine size={18} /> Registrar Biometria
                             </Button>
                             <p className="text-slate-600 text-[9px] mt-4 font-bold uppercase tracking-widest">
                               Necessário apenas na primeira vez
@@ -1011,7 +1011,7 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
               </div>
               <div className={`p-4 rounded-2xl border-2 transition-all flex items-center gap-3 ${biometricVerified ? 'bg-green-50 dark:bg-green-950/10 border-green-200 dark:border-green-900/30 text-green-700' : 'bg-slate-50 dark:bg-slate-800 border-slate-100 dark:border-slate-700 text-slate-400'}`}>
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${biometricVerified ? 'bg-green-500 text-white' : 'bg-slate-200 dark:bg-slate-700'}`}>
-                  {biometricVerified ? <Check size={14} strokeWidth={3} /> : <Fingerprint size={12} />}
+                  {biometricVerified ? <Check size={14} strokeWidth={3} /> : <ScanLine size={12} />}
                 </div>
                 <span className="text-[10px] font-bold uppercase tracking-widest">Bio</span>
               </div>

@@ -40,18 +40,31 @@ function notConfigured(): never {
   throw new Error(notConfiguredMsg);
 }
 
-// localStorage permite reabrir o app em nova aba com a mesma sessão (sessionStorage é só por aba).
-// Se voltar o erro de lock do IndexedDB em múltiplas abas, avalie voltar a sessionStorage ou storage customizado.
+/**
+ * Onde o Supabase guarda o JWT (sessão).
+ * - localStorage (padrão): ao reabrir o site dias depois, o usuário continua logado — é o comportamento usual de “manter sessão”.
+ * - sessionStorage: ao fechar a aba/janela, a sessão some; ao abrir de novo o link, pede login (melhor em PC compartilhado).
+ * Defina VITE_SUPABASE_AUTH_STORAGE=session no build (ex.: Vercel) se quiser esse modo.
+ */
+const useSessionStorageForAuth =
+  typeof import.meta !== 'undefined' &&
+  String(import.meta.env?.VITE_SUPABASE_AUTH_STORAGE || '').toLowerCase() === 'session';
+
 const authStorage =
   typeof window !== 'undefined'
     ? {
-        getItem: (key: string) => Promise.resolve(window.localStorage.getItem(key)),
+        getItem: (key: string) => {
+          const store = useSessionStorageForAuth ? window.sessionStorage : window.localStorage;
+          return Promise.resolve(store.getItem(key));
+        },
         setItem: (key: string, value: string) => {
-          window.localStorage.setItem(key, value);
+          const store = useSessionStorageForAuth ? window.sessionStorage : window.localStorage;
+          store.setItem(key, value);
           return Promise.resolve();
         },
         removeItem: (key: string) => {
-          window.localStorage.removeItem(key);
+          const store = useSessionStorageForAuth ? window.sessionStorage : window.localStorage;
+          store.removeItem(key);
           return Promise.resolve();
         },
       }
@@ -351,7 +364,12 @@ const realDb = configured
           .eq('id', id)
           .select();
         if (error) throw error;
-        return result?.[0];
+        if (!result?.length) {
+          throw new Error(
+            'Nenhuma linha foi atualizada (registro inexistente ou permissão negada). Verifique o ID e as políticas RLS da tabela.',
+          );
+        }
+        return result[0];
       },
       delete: async (table: string, id: string) => {
         const { error } = await client!.from(table).delete().eq('id', id);

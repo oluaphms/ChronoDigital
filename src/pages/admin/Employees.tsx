@@ -288,7 +288,10 @@ const AdminEmployees: React.FC = () => {
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
 
   const loadData = async () => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
+    if (!user?.companyId || !isSupabaseConfigured) {
+      setLoadingData(false);
+      return;
+    }
     setLoadingData(true);
     try {
       const [usersRows, legacyEmployeesRows, schedRows, shiftRows, deptRows, jobTitlesRows, motivosRows, estruturasRows] = await Promise.all([
@@ -550,7 +553,16 @@ const AdminEmployees: React.FC = () => {
   };
 
   const handleSave = async () => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      setError('Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
+      scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (!user?.companyId) {
+      setError('Empresa não identificada no seu perfil. Atualize a página ou peça ao administrador para vincular sua conta à empresa.');
+      scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     if (!form.nome.trim()) {
       setError('Nome é obrigatório.');
       scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });

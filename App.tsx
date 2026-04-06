@@ -23,7 +23,7 @@ import {
 } from './services/pushReminderService';
 import { ThemeService } from './services/themeService';
 import {
-  Fingerprint,
+  ScanLine,
   ShieldCheck,
   Crown,
   AlertTriangle,
@@ -829,7 +829,7 @@ const AppMain: React.FC = () => {
         <div className="w-full max-w-md relative z-10">
           <div className="text-center mb-10">
             <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-600 rounded-3xl text-white shadow-2xl shadow-indigo-500/40 mb-6 animate-in zoom-in duration-700">
-              <Fingerprint size={40} />
+              <ScanLine size={40} />
             </div>
             <h1 className="text-4xl font-black text-slate-900 dark:text-white tracking-tight transition-colors">Chrono<span className="text-indigo-600 dark:text-indigo-500">Digital</span></h1>
             <p className="text-slate-600 dark:text-slate-500 text-sm mt-2 font-medium transition-colors">{i18n.t('login.slogan')}</p>
@@ -1477,7 +1477,7 @@ const AppMain: React.FC = () => {
                   className="w-full p-5 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-bold text-base flex items-center gap-4 transition-all shadow-xl shadow-violet-600/20 active:scale-95"
                 >
                   <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center shrink-0">
-                    <Fingerprint size={24} />
+                    <ScanLine size={24} />
                   </div>
                   <div className="text-left">
                     <p className="font-bold">Impressão Digital</p>
