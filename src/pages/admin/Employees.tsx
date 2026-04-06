@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
-import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X, Camera, User, AlertTriangle } from 'lucide-react';
+import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X, Camera, User, AlertTriangle, Loader2 } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, auth, isSupabaseConfigured, resetSession } from '../../services/supabaseClient';
+import { resolveTenantId } from '../../services/tenantScope';
 
 /** Chama a API para confirmar o e-mail do funcionário no Auth (permite login sem clicar em link). */
 async function confirmEmployeeEmailInAuth(email: string): Promise<void> {
@@ -213,6 +214,45 @@ Fernanda Lima,fernanda@empresa.com,123456,Financeiro,79999441822,23456789011,Fin
 const AdminEmployees: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const navigate = useNavigate();
+
+  /** Perfil pode ter só tenantId ou JWT com company_id — evita bloquear salvar/lista quando companyId veio vazio no cache. */
+  const [companyIdFromSession, setCompanyIdFromSession] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    if (!isSupabaseConfigured) {
+      setCompanyIdFromSession('');
+      return;
+    }
+    void (async () => {
+      try {
+        const session = await auth.getSession();
+        const u = session?.user;
+        if (!u || cancelled) return;
+        const meta = (u.user_metadata || {}) as Record<string, unknown>;
+        const app = (u.app_metadata || {}) as Record<string, unknown>;
+        const pick = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+        const fromJwt =
+          pick(meta.tenant_id) ||
+          pick(meta.company_id) ||
+          pick(meta.companyId) ||
+          pick(app.company_id) ||
+          pick(app.tenant_id);
+        if (!cancelled) setCompanyIdFromSession(fromJwt);
+      } catch {
+        if (!cancelled) setCompanyIdFromSession('');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const effectiveCompanyId = useMemo(() => {
+    const fromProfile = resolveTenantId(user);
+    if (fromProfile) return fromProfile;
+    return companyIdFromSession;
+  }, [user, companyIdFromSession]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const scrollModalTopRef = useRef<HTMLDivElement>(null);
@@ -288,21 +328,21 @@ const AdminEmployees: React.FC = () => {
   const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
 
   const loadData = async () => {
-    if (!user?.companyId || !isSupabaseConfigured) {
+    if (!effectiveCompanyId || !isSupabaseConfigured) {
       setLoadingData(false);
       return;
     }
     setLoadingData(true);
     try {
       const [usersRows, legacyEmployeesRows, schedRows, shiftRows, deptRows, jobTitlesRows, motivosRows, estruturasRows] = await Promise.all([
-        db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }) as Promise<any[]>,
-        db.select('employees', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
-        db.select('schedules', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-        db.select('work_shifts', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
-        db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-        db.select('job_titles', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-        db.select('motivo_demissao', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
-        db.select('estruturas', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
+        db.select('users', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }], { column: 'created_at', ascending: false }) as Promise<any[]>,
+        db.select('employees', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]).catch(() => []) as Promise<any[]>,
+        db.select('schedules', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]) as Promise<any[]>,
+        db.select('work_shifts', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]).catch(() => []) as Promise<any[]>,
+        db.select('departments', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]) as Promise<any[]>,
+        db.select('job_titles', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]) as Promise<any[]>,
+        db.select('motivo_demissao', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]).catch(() => []) as Promise<any[]>,
+        db.select('estruturas', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }]).catch(() => []) as Promise<any[]>,
       ]);
       const deptMap = new Map((deptRows ?? []).map((d: any) => [d.id, d.name]));
       const schedMap = new Map((schedRows ?? []).map((s: any) => [s.id, s.name]));
@@ -426,7 +466,7 @@ const AdminEmployees: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [user?.companyId]);
+  }, [effectiveCompanyId]);
 
   const defaultForm = () => {
     const firstCargo = cargos[0]?.name || '';
@@ -558,8 +598,10 @@ const AdminEmployees: React.FC = () => {
       scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
-    if (!user?.companyId) {
-      setError('Empresa não identificada no seu perfil. Atualize a página ou peça ao administrador para vincular sua conta à empresa.');
+    if (!effectiveCompanyId) {
+      setError(
+        'Empresa não identificada no seu perfil. Atualize a página, faça login de novo ou peça ao administrador para vincular sua conta à empresa (company_id / tenant no Supabase).',
+      );
       scrollModalTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
@@ -641,7 +683,7 @@ const AdminEmployees: React.FC = () => {
             updated = !!legacyUpdated;
           } else if (legacyEmail) {
             const legacyRows = await db.select('employees', [
-              { column: 'company_id', operator: 'eq', value: user.companyId },
+              { column: 'company_id', operator: 'eq', value: effectiveCompanyId },
               { column: 'email', operator: 'eq', value: legacyEmail },
             ]) as any[];
             const targetLegacy = legacyRows?.[0];
@@ -670,7 +712,7 @@ const AdminEmployees: React.FC = () => {
           ...payload,
           email,
           role: 'employee' as const,
-          company_id: user.companyId,
+          company_id: effectiveCompanyId,
           status: 'active' as const,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -909,7 +951,7 @@ const AdminEmployees: React.FC = () => {
   };
 
   const runBulkImport = async (toImport: ImportRow[]) => {
-    if (!user?.companyId) {
+    if (!effectiveCompanyId) {
       throw new Error('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
     }
     const failed: ImportResult['failed'] = [];
@@ -983,7 +1025,7 @@ const AdminEmployees: React.FC = () => {
           phone: row.telefone?.trim() || null,
           cargo: cargoFinal,
           role: 'employee',
-          company_id: user.companyId,
+          company_id: effectiveCompanyId,
           department_id: departmentId || null,
           schedule_id: scheduleId || null,
           status: 'active',
@@ -1051,7 +1093,7 @@ const AdminEmployees: React.FC = () => {
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !user?.companyId || !isSupabaseConfigured) return;
+    if (!file || !effectiveCompanyId || !isSupabaseConfigured) return;
     setImportResult(null);
     setImportPreview(null);
     setImportParseError(null);
@@ -1106,7 +1148,7 @@ const AdminEmployees: React.FC = () => {
       setImportError('Nenhum registro válido para importar.');
       return;
     }
-    if (!user?.companyId) {
+    if (!effectiveCompanyId) {
       setImportError('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
       return;
     }
@@ -1382,7 +1424,7 @@ const AdminEmployees: React.FC = () => {
                       </div>
                       <div className="sm:col-span-2">
                         <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Empresa <span className="text-xs font-normal text-blue-500">(Portaria 1510)</span></label>
-                        <input type="text" value={user?.companyId ? 'Empresa atual' : ''} readOnly className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400" />
+                        <input type="text" value={effectiveCompanyId ? 'Empresa atual' : ''} readOnly className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Estrutura</label>
@@ -1610,9 +1652,16 @@ const AdminEmployees: React.FC = () => {
                   <button
                     type="submit"
                     disabled={saving}
-                    className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50"
+                    className="group relative flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600 text-white font-medium shadow-md shadow-indigo-600/25 ring-2 ring-transparent ring-offset-2 ring-offset-white dark:ring-offset-slate-900 transition-all duration-200 ease-out hover:bg-indigo-500 hover:shadow-lg hover:shadow-indigo-500/25 hover:scale-[1.02] hover:ring-indigo-400/50 active:scale-[0.98] disabled:opacity-60 disabled:hover:scale-100 disabled:cursor-not-allowed disabled:hover:shadow-md disabled:hover:ring-transparent motion-reduce:transition-none motion-reduce:hover:scale-100"
                   >
-                    {saving ? 'Salvando...' : 'Salvar'}
+                    {saving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 shrink-0 animate-spin" aria-hidden />
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <span className="transition-transform duration-200 group-hover:translate-x-0.5">Salvar</span>
+                    )}
                   </button>
                 </div>
               </form>
