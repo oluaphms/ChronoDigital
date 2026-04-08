@@ -1,8 +1,10 @@
 /**
  * Geocodificação reversa (lat/lng → endereço legível).
- * Usa API pública Photon (komoot), baseada em dados OpenStreetMap.
+ * Em produção (e no dev com middleware Vite), usa /api/reverse-geocode para evitar CORS do Photon.
  * Cache em memória para reduzir requisições.
  */
+
+import { resolveAddressFromCoordinates } from './reverseGeocodeCore';
 
 const CACHE = new Map<string, string>();
 const CACHE_MAX = 400;
@@ -36,51 +38,11 @@ export function extractLatLng(row: {
   return null;
 }
 
-function formatPhotonProperties(p: Record<string, unknown>): string {
-  const housenumber = p.housenumber != null ? String(p.housenumber) : '';
-  const street = p.street != null ? String(p.street) : '';
-  const line1 = [housenumber, street].filter(Boolean).join(', ').trim();
-  const name = p.name != null ? String(p.name) : '';
-  const firstLine = line1 || name;
-
-  const city =
-    (p.city as string) ||
-    (p.town as string) ||
-    (p.village as string) ||
-    (p.district as string) ||
-    '';
-  const state = p.state != null ? String(p.state) : '';
-  const country = p.country != null ? String(p.country) : '';
-
-  const parts: string[] = [];
-  if (firstLine) parts.push(firstLine);
-  if (city && !firstLine.toLowerCase().includes(city.toLowerCase())) parts.push(city);
-  else if (city && !parts.length) parts.push(city);
-  if (state && !parts.join(' ').includes(state)) parts.push(state);
-  if (!parts.length && country) parts.push(country);
-
-  return parts.filter(Boolean).join(' — ') || '';
-}
-
-function formatNominatimAddress(a: Record<string, unknown>): string {
-  const road = a.road != null ? String(a.road) : '';
-  const houseNumber = a.house_number != null ? String(a.house_number) : '';
-  const suburb = a.suburb != null ? String(a.suburb) : '';
-  const city =
-    (a.city as string) ||
-    (a.town as string) ||
-    (a.village as string) ||
-    (a.county as string) ||
-    '';
-  const state = a.state != null ? String(a.state) : '';
-
-  const streetLine = [road, houseNumber].filter(Boolean).join(', ').trim();
-  const parts: string[] = [];
-  if (streetLine) parts.push(streetLine);
-  if (suburb && !parts.join(' ').toLowerCase().includes(suburb.toLowerCase())) parts.push(suburb);
-  if (city && !parts.join(' ').toLowerCase().includes(city.toLowerCase())) parts.push(city);
-  if (state && !parts.join(' ').toLowerCase().includes(state.toLowerCase())) parts.push(state);
-  return parts.join(' — ').trim();
+function getOrigin(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return 'http://localhost:3010';
 }
 
 /**
@@ -91,46 +53,24 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
   const key = cacheKey(lat, lng);
   if (CACHE.has(key)) return CACHE.get(key)!;
 
-  const url = `https://photon.komoot.io/reverse?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&lang=pt`;
-
   let text = '';
   try {
-    const res = await fetch(url, {
+    const u = new URL('/api/reverse-geocode', getOrigin());
+    u.searchParams.set('lat', String(lat));
+    u.searchParams.set('lon', String(lng));
+    const res = await fetch(u.toString(), {
       headers: { Accept: 'application/json' },
     });
-    if (!res.ok) throw new Error(String(res.status));
-    const data = (await res.json()) as {
-      features?: Array<{ properties?: Record<string, unknown> }>;
-    };
-    const props = data?.features?.[0]?.properties;
-    if (props) {
-      text = formatPhotonProperties(props).trim();
+    if (res.ok) {
+      const data = (await res.json()) as { address?: string };
+      if (typeof data.address === 'string') text = data.address.trim();
     }
   } catch {
     text = '';
   }
 
   if (!text) {
-    try {
-      const nominatimUrl =
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&accept-language=pt-BR`;
-      const nomRes = await fetch(nominatimUrl, {
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-      if (nomRes.ok) {
-        const nomData = (await nomRes.json()) as { display_name?: string; address?: Record<string, unknown> };
-        const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
-        text = fromAddress || String(nomData.display_name || '').trim();
-      }
-    } catch {
-      text = '';
-    }
-  }
-
-  if (!text) {
-    text = 'Endereço não disponível para este ponto';
+    text = await resolveAddressFromCoordinates(lat, lng);
   }
 
   if (CACHE.size >= CACHE_MAX) {

@@ -23,6 +23,39 @@ export default defineConfig(({ mode }) => {
       react(),
 
       {
+        name: 'reverse-geocode-api-dev',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const pathname = req.url?.split('?')[0] ?? '';
+            if (pathname !== '/api/reverse-geocode') {
+              next();
+              return;
+            }
+            try {
+              const { default: handler } = await import('./api/reverse-geocode.ts');
+              const host = (req.headers.host as string) || 'localhost:3010';
+              const fullUrl = `http://${host}${req.url ?? ''}`;
+              const response = await handler(
+                new Request(fullUrl, { method: req.method || 'GET', headers: req.headers as HeadersInit })
+              );
+              res.statusCode = response.status;
+              response.headers.forEach((value, key) => {
+                if (key.toLowerCase() === 'transfer-encoding') return;
+                res.setHeader(key, value);
+              });
+              const body = Buffer.from(await response.arrayBuffer());
+              res.end(body);
+            } catch (e) {
+              console.error('[reverse-geocode-api-dev]', e);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'Falha ao carregar handler da API' }));
+            }
+          });
+        },
+      },
+
+      {
         name: 'remove-tailwind-cdn',
         transformIndexHtml(html: string) {
           if (isProduction) {
