@@ -293,8 +293,9 @@ const TimeAttendancePage: React.FC = () => {
           </p>
         )}
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between lg:gap-8">
-          <div className="grid w-full min-w-0 grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4 flex-1">
-            <div className="min-w-0 w-full md:min-w-[200px]">
+          {/* min-w-0 + overflow nos filhos: input[type=date] tem largura mínima nativa e quebrava o grid em md */}
+          <div className="grid w-full min-w-0 flex-1 grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2 md:gap-x-8 xl:grid-cols-4 xl:gap-x-6">
+            <div className="min-w-0 w-full max-w-full overflow-hidden">
               <label
                 htmlFor="time-attendance-filter-employee"
                 className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5"
@@ -303,7 +304,7 @@ const TimeAttendancePage: React.FC = () => {
               </label>
               <select
                 id="time-attendance-filter-employee"
-                className="w-full min-h-11 min-w-0 px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100"
+                className="box-border w-full max-w-full min-h-11 min-w-0 px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100"
                 value={filterEmployeeId}
                 onChange={(e) => setFilterEmployeeId(e.target.value)}
                 disabled={!effectiveCompanyId}
@@ -316,7 +317,7 @@ const TimeAttendancePage: React.FC = () => {
                 ))}
               </select>
             </div>
-            <div className="min-w-0 w-full md:min-w-[160px]">
+            <div className="min-w-0 w-full max-w-full overflow-hidden">
               <label
                 htmlFor="time-attendance-filter-date"
                 className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5"
@@ -326,12 +327,12 @@ const TimeAttendancePage: React.FC = () => {
               <input
                 id="time-attendance-filter-date"
                 type="date"
-                className="w-full min-h-11 min-w-0 px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100"
+                className="box-border w-full max-w-full min-h-11 min-w-0 px-4 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 [color-scheme:light] dark:[color-scheme:dark]"
                 value={filterDate}
                 onChange={(e) => setFilterDate(e.target.value)}
               />
             </div>
-            <div className="flex items-end md:col-span-2 xl:col-span-1">
+            <div className="flex min-w-0 items-end md:col-span-2 xl:col-span-1">
               <Button
                 type="button"
                 variant="outline"
