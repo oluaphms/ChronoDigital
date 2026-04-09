@@ -1,6 +1,6 @@
 import React, { memo, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { LogOut, UserCog } from 'lucide-react';
 import { getMenuItemsForUser, getMenuItemName, type MenuItemConfig } from '../../config/menuItems';
 import { i18n } from '../../../lib/i18n';
 import { useLanguage } from '../../contexts/LanguageContext';
@@ -82,6 +82,7 @@ export const AppSidebarNavContent = memo<AppSidebarNavContentProps>(function App
 });
 
 const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChange }) => {
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
 
   const handleToggle = useCallback(() => {
@@ -134,6 +135,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ user, onLogout, onCollapsedChan
                 {user.nome.charAt(0)}
               </div>
             )}
+            <button
+              type="button"
+              onClick={() => navigate('/trocar-conta')}
+              className={`w-full flex items-center justify-center gap-2 py-2.5 mb-1 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-xl transition-all text-xs font-bold focus-visible:ring-2 focus-visible:ring-indigo-500/50 ${collapsed ? 'px-0' : ''}`}
+              title={collapsed ? i18n.t('layout.switchAccount') : undefined}
+            >
+              <UserCog size={16} aria-hidden /> {!collapsed && <span>{i18n.t('layout.switchAccount')}</span>}
+            </button>
             <button
               type="button"
               onClick={onLogout}

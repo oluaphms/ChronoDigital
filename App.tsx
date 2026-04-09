@@ -45,6 +45,7 @@ import {
   MapPin,
   Eye,
   EyeOff,
+  UserCog,
 } from 'lucide-react';
 import { BiometricService } from './services/biometricService';
 import ForgotPasswordModal from './src/components/auth/ForgotPasswordModal';
@@ -217,6 +218,7 @@ const AppMain: React.FC = () => {
   const [connectionUnavailable, setConnectionUnavailable] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
+  const [accountSwitchLogoutBusy, setAccountSwitchLogoutBusy] = useState(false);
 
   // Theme State (para tela de login)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -894,6 +896,10 @@ const AppMain: React.FC = () => {
                   </div>
                   <ChevronRight size={20} className="text-slate-400 dark:text-slate-600 group-hover:text-white transition-colors" />
                 </button>
+
+                <p className="text-center text-xs text-slate-500 dark:text-slate-400 leading-relaxed px-1">
+                  {i18n.t('login.sharedComputerHint')}
+                </p>
               </div>
             ) : (
               <div className="relative z-10 w-full mt-8 animate-in fade-in slide-in-from-right-4 duration-500">
@@ -1054,6 +1060,64 @@ const AppMain: React.FC = () => {
     path === '/devices';
 
   const isAdminOrHr = user.role === 'admin' || user.role === 'hr';
+
+  if (path === '/trocar-conta') {
+    const roleLabel = isAdminOrHr ? i18n.t('accountSwitch.roleAdmin') : i18n.t('accountSwitch.roleEmployee');
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6">
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="absolute top-5 right-5 z-20 p-3 bg-white/90 dark:bg-slate-900/70 hover:bg-white dark:hover:bg-slate-900 backdrop-blur-md rounded-xl border border-slate-200 dark:border-slate-700/80 transition-all shadow-sm"
+          aria-label={getThemeLabel()}
+          title={getThemeLabel()}
+        >
+          <div className="text-slate-700 dark:text-white">{getThemeIcon()}</div>
+        </button>
+        <div className="w-full max-w-md space-y-6 rounded-[2rem] border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/90 p-8 shadow-xl shadow-slate-900/10">
+          <div className="flex items-center gap-3 text-indigo-600 dark:text-indigo-400">
+            <UserCog className="w-8 h-8 shrink-0" aria-hidden />
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white">{i18n.t('accountSwitch.title')}</h1>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-400">{i18n.t('accountSwitch.intro')}</p>
+          <div className="rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/50 p-4">
+            <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{user.nome}</p>
+            <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mt-1">{roleLabel}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 break-all">{user.email}</p>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">{i18n.t('accountSwitch.hint')}</p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              type="button"
+              className="w-full sm:flex-1"
+              variant="outline"
+              onClick={() =>
+                navigate(isAdminOrHr ? '/admin/dashboard' : '/employee/dashboard', { replace: true })
+              }
+            >
+              {i18n.t('accountSwitch.continue')}
+            </Button>
+            <Button
+              type="button"
+              className="w-full sm:flex-1"
+              loading={accountSwitchLogoutBusy}
+              disabled={accountSwitchLogoutBusy}
+              onClick={async () => {
+                setAccountSwitchLogoutBusy(true);
+                try {
+                  await handleLogout();
+                } finally {
+                  setAccountSwitchLogoutBusy(false);
+                }
+              }}
+            >
+              {i18n.t('accountSwitch.signOut')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Sempre redirecionar raiz para a dashboard correta por role (evita mostrar layout antigo)
   if (path === '/') {
