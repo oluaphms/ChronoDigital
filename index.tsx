@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React, { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import './index.css';
@@ -23,7 +23,7 @@ if (!rootElement) throw new Error('Could not find root element to mount to');
 
 const root = ReactDOM.createRoot(rootElement);
 root.render(
-  <React.StrictMode>
+  <StrictMode>
     <BrowserRouter>
       <LanguageProvider>
         <ToastProvider>
@@ -33,5 +33,5 @@ root.render(
         </ToastProvider>
       </LanguageProvider>
     </BrowserRouter>
-  </React.StrictMode>
+  </StrictMode>
 );

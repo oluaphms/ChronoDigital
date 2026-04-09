@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
-import { autoTable } from 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { PontoService } from '../services/pontoService';
 import { User, Department } from '../types';
 import { Button, Input, LoadingState, Badge } from './UI';

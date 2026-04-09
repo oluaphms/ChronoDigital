@@ -14,15 +14,10 @@
   ],
   "icons": [
     {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    },
-    {
       "src": "/favicon.ico",
-      "sizes": "32x32",
-      "type": "image/x-icon"
+      "sizes": "48x48",
+      "type": "image/x-icon",
+      "purpose": "any"
     },
     {
       "src": "/1024.png",
@@ -45,14 +40,14 @@
       "short_name": "Ponto",
       "description": "Registrar entrada ou saída",
       "url": "/?action=punch",
-      "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [{ "src": "/1024.png", "sizes": "1024x1024", "type": "image/png" }]
     },
     {
       "name": "Histórico",
       "short_name": "Histórico",
       "description": "Ver histórico de registros",
       "url": "/?tab=history",
-      "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [{ "src": "/1024.png", "sizes": "1024x1024", "type": "image/png" }]
     }
   ],
   "share_target": {

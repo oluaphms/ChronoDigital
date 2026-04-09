@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Banknote, Download, Lock, LockOpen, RefreshCw } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { Banknote, Download, FileText, Lock, LockOpen, RefreshCw } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
@@ -189,6 +191,65 @@ const AdminFolhaPagamento: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const exportPdf = () => {
+    try {
+      const doc = new jsPDF({ orientation: 'landscape' });
+      doc.setFontSize(16);
+      doc.text('ChronoDigital — Folha de pagamento (resumo)', 14, 14);
+      doc.setFontSize(10);
+      const competencia = `${String(mes).padStart(2, '0')}/${ano}`;
+      let y = 22;
+      doc.text(`Competência: ${competencia}`, 14, y);
+      y += 6;
+      if (periodo) {
+        doc.text(`Status: ${periodo.status === 'fechada' ? 'Fechada' : 'Rascunho'}`, 14, y);
+        y += 6;
+      }
+
+      const sumBase = itens.reduce((s, r) => s + r.salario_base, 0);
+      const sumProv = itens.reduce((s, r) => s + r.total_proventos, 0);
+      const sumDesc = itens.reduce((s, r) => s + r.total_descontos, 0);
+      const sumLiq = itens.reduce((s, r) => s + r.liquido, 0);
+
+      const head = [['Colaborador', 'E-mail', 'Salário base', 'Proventos (evt.)', 'Descontos', 'Líquido']];
+      const body = itens.map((r) => [
+        r.nome ?? '—',
+        r.email || '—',
+        fmtBRL(r.salario_base),
+        fmtBRL(r.total_proventos),
+        fmtBRL(r.total_descontos),
+        fmtBRL(r.liquido),
+      ]);
+      const foot = [['Totais', '', fmtBRL(sumBase), fmtBRL(sumProv), fmtBRL(sumDesc), fmtBRL(sumLiq)]];
+
+      autoTable(doc, {
+        head,
+        body,
+        foot,
+        startY: y + 2,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [79, 70, 229] },
+        footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
+        margin: { left: 14, right: 14 },
+      });
+
+      const d = doc as jsPDF & { lastAutoTable?: { finalY: number } };
+      const finalY = (d.lastAutoTable?.finalY ?? y) + 10;
+      doc.setFontSize(7);
+      doc.setTextColor(80, 80, 80);
+      doc.text(
+        'Documento informativo: somatórios por lançamentos. Não substitui folha oficial nem discrimina INSS, IRRF, FGTS, férias, 13º ou demais encargos legais.',
+        14,
+        finalY,
+        { maxWidth: 260 },
+      );
+      doc.save(`folha_${ano}_${String(mes).padStart(2, '0')}.pdf`);
+    } catch (e) {
+      console.error('Export PDF falhou:', e);
+      setMessage({ type: 'error', text: 'Não foi possível gerar o PDF. Tente novamente.' });
+    }
+  };
+
   if (loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
 
@@ -276,14 +337,24 @@ const AdminFolhaPagamento: React.FC = () => {
               <LockOpen className="w-4 h-4" /> Reabrir
             </button>
           )}
-          <button
-            type="button"
-            onClick={exportCsv}
-            disabled={itens.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 ml-auto"
-          >
-            <Download className="w-4 h-4" /> Exportar CSV
-          </button>
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
+            <button
+              type="button"
+              onClick={exportPdf}
+              disabled={itens.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" /> Exportar PDF
+            </button>
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={itens.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" /> Exportar CSV
+            </button>
+          </div>
         </div>
 
         <p className="text-xs text-slate-500 dark:text-slate-400 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/40 px-4 py-3 leading-relaxed">

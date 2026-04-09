@@ -11,6 +11,8 @@ const reactAlias = {
   'react-dom/client': path.resolve(projectRoot, 'node_modules/react-dom/client'),
   'react/jsx-runtime': path.resolve(projectRoot, 'node_modules/react/jsx-runtime.js'),
   'react/jsx-dev-runtime': path.resolve(projectRoot, 'node_modules/react/jsx-dev-runtime.js'),
+  /** Evita segunda cópia de scheduler (hooks com dispatcher null) */
+  scheduler: path.resolve(projectRoot, 'node_modules/scheduler'),
 };
 
 export default defineConfig(({ mode }) => {
@@ -113,7 +115,7 @@ export default defineConfig(({ mode }) => {
         'eventemitter3/index.mjs': path.resolve(projectRoot, 'src/shim/eventemitter3.js'),
         'eventemitter3-cjs-entry': path.resolve(projectRoot, 'node_modules/eventemitter3/index.js'),
       },
-      dedupe: ['react', 'react-dom', 'scheduler'],
+      dedupe: ['react', 'react-dom', 'scheduler', 'use-sync-external-store'],
     },
 
     optimizeDeps: {
