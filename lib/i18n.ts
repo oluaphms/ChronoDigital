@@ -170,8 +170,6 @@ const translations: Record<Language, Record<string, string>> = {
     'login.enterSystem': 'Entrar no Sistema',
     'login.forgotPassword': 'Esqueci minha senha',
     'login.footer': '© ChronoDigital Software',
-    'login.sharedComputerHint':
-      'PC compartilhado? A sessão fica salva neste navegador. Quem abrir o app depois no mesmo computador pode ver a conta de quem usou antes até alguém sair ou usar «Trocar de conta» no menu.',
     'accountSwitch.title': 'Trocar de conta',
     'accountSwitch.intro': 'Sessão ativa neste navegador',
     'accountSwitch.roleAdmin': 'Administrador / RH',
@@ -457,8 +455,6 @@ const translations: Record<Language, Record<string, string>> = {
     'login.enterSystem': 'Sign In',
     'login.forgotPassword': 'Forgot my password',
     'login.footer': '© ChronoDigital Software',
-    'login.sharedComputerHint':
-      'Shared computer? The session stays in this browser. The next person on the same device may see the previous account until someone signs out or uses «Switch account» in the menu.',
     'accountSwitch.title': 'Switch account',
     'accountSwitch.intro': 'Active session in this browser',
     'accountSwitch.roleAdmin': 'Administrator / HR',

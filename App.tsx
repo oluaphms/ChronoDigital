@@ -902,10 +902,6 @@ const AppMain: React.FC = () => {
                   </div>
                   <ChevronRight size={20} className="text-slate-400 dark:text-slate-600 group-hover:text-white transition-colors" />
                 </button>
-
-                <p className="text-center text-xs text-slate-500 dark:text-slate-400 leading-relaxed px-1">
-                  {i18n.t('login.sharedComputerHint')}
-                </p>
               </div>
             ) : (
               <div className="relative z-10 w-full mt-8 animate-in fade-in slide-in-from-right-4 duration-500">
