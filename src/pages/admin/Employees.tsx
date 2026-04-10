@@ -170,6 +170,12 @@ interface EmployeeRow {
   naturalidade?: string | null;
   /** Estado civil (texto ou legado resolvido a partir de estado_civil_id). */
   estado_civil_text?: string | null;
+  endereco_rua?: string | null;
+  endereco_numero?: string | null;
+  endereco_bairro?: string | null;
+  endereco_cidade?: string | null;
+  endereco_estado?: string | null;
+  endereco_cep?: string | null;
   // Score de confiabilidade simples (0–100) calculado a partir de atrasos/faltas/ajustes/inconsistências
   reliability_score?: number;
 }
@@ -348,6 +354,12 @@ const AdminEmployees: React.FC = () => {
     rg_orgao: '',
     naturalidade: '',
     estado_civil_text: '',
+    endereco_rua: '',
+    endereco_numero: '',
+    endereco_bairro: '',
+    endereco_cidade: '',
+    endereco_estado: '',
+    endereco_cep: '',
     shift_id: '',
   });
   const [saving, setSaving] = useState(false);
@@ -437,6 +449,12 @@ const AdminEmployees: React.FC = () => {
             (u.estado_civil_text != null && String(u.estado_civil_text).trim()) ||
             (u.estado_civil_id ? estadoCivilMap.get(u.estado_civil_id) : undefined) ||
             undefined,
+          endereco_rua: u.endereco_rua ?? null,
+          endereco_numero: u.endereco_numero ?? null,
+          endereco_bairro: u.endereco_bairro ?? null,
+          endereco_cidade: u.endereco_cidade ?? null,
+          endereco_estado: u.endereco_estado ?? null,
+          endereco_cep: u.endereco_cep ?? null,
         };
       });
 
@@ -505,6 +523,12 @@ const AdminEmployees: React.FC = () => {
               (e.estado_civil_text != null && String(e.estado_civil_text).trim()) ||
               (e.estado_civil_id ? estadoCivilMap.get(e.estado_civil_id) : undefined) ||
               undefined,
+            endereco_rua: e.endereco_rua ?? null,
+            endereco_numero: e.endereco_numero ?? null,
+            endereco_bairro: e.endereco_bairro ?? null,
+            endereco_cidade: e.endereco_cidade ?? null,
+            endereco_estado: e.endereco_estado ?? null,
+            endereco_cep: e.endereco_cep ?? null,
           };
         });
 
@@ -567,6 +591,12 @@ const AdminEmployees: React.FC = () => {
       rg_orgao: '',
       naturalidade: '',
       estado_civil_text: '',
+      endereco_rua: '',
+      endereco_numero: '',
+      endereco_bairro: '',
+      endereco_cidade: '',
+      endereco_estado: '',
+      endereco_cep: '',
     };
   };
 
@@ -617,6 +647,12 @@ const AdminEmployees: React.FC = () => {
       rg_orgao: row.rg_orgao || '',
       naturalidade: row.naturalidade || '',
       estado_civil_text: row.estado_civil_text || '',
+      endereco_rua: row.endereco_rua || '',
+      endereco_numero: row.endereco_numero || '',
+      endereco_bairro: row.endereco_bairro || '',
+      endereco_cidade: row.endereco_cidade || '',
+      endereco_estado: row.endereco_estado || '',
+      endereco_cep: row.endereco_cep || '',
     });
     setModalOpen(true);
     setError(null);
@@ -715,6 +751,12 @@ const AdminEmployees: React.FC = () => {
         estado_civil_text: form.estado_civil_text?.trim() || null,
         cidade_id: null,
         estado_civil_id: null,
+        endereco_rua: form.endereco_rua?.trim() || null,
+        endereco_numero: form.endereco_numero?.trim() || null,
+        endereco_bairro: form.endereco_bairro?.trim() || null,
+        endereco_cidade: form.endereco_cidade?.trim() || null,
+        endereco_estado: form.endereco_estado?.trim() || null,
+        endereco_cep: form.endereco_cep?.trim() || null,
       };
       if (editingId) {
         const editingRow = rows.find((r) => r.id === editingId);
@@ -938,6 +980,7 @@ const AdminEmployees: React.FC = () => {
   };
 
   const searchLower = search.trim().toLowerCase();
+  const searchDigitsOnly = search.replace(/\D/g, '');
   const visibleRows = showInvisiveis ? rows : rows.filter((r) => !r.invisivel);
   const filteredRows = searchLower
     ? visibleRows.filter(
@@ -951,7 +994,14 @@ const AdminEmployees: React.FC = () => {
         (r.rg && r.rg.toLowerCase().includes(searchLower)) ||
         TIPO_VINCULO_LABELS[normalizeTipoVinculo(r.tipo_vinculo)].toLowerCase().includes(searchLower) ||
         (r.naturalidade && r.naturalidade.toLowerCase().includes(searchLower)) ||
-        (r.estado_civil_text && r.estado_civil_text.toLowerCase().includes(searchLower))
+        (r.estado_civil_text && r.estado_civil_text.toLowerCase().includes(searchLower)) ||
+        (r.endereco_rua && r.endereco_rua.toLowerCase().includes(searchLower)) ||
+        (r.endereco_bairro && r.endereco_bairro.toLowerCase().includes(searchLower)) ||
+        (r.endereco_cidade && r.endereco_cidade.toLowerCase().includes(searchLower)) ||
+        (r.endereco_estado && r.endereco_estado.toLowerCase().includes(searchLower)) ||
+        (searchDigitsOnly.length > 0 &&
+          r.endereco_cep &&
+          r.endereco_cep.replace(/\D/g, '').includes(searchDigitsOnly))
     )
     : visibleRows;
 
@@ -1521,9 +1571,9 @@ const AdminEmployees: React.FC = () => {
                     </div>
                   </section>
 
-                  {/* Dados Genéricos */}
+                  {/* Dados gerais */}
                   <section>
-                    <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados Genéricos</h4>
+                    <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Dados gerais</h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Cidade (naturalidade)</label>
@@ -1553,6 +1603,78 @@ const AdminEmployees: React.FC = () => {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      <div className="sm:col-span-2 space-y-3 pt-1 border-t border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-semibold text-slate-600 dark:text-slate-400">Endereço</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
+                          <div className="sm:col-span-4">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Rua</label>
+                            <input
+                              type="text"
+                              value={form.endereco_rua}
+                              onChange={(e) => setForm({ ...form, endereco_rua: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              placeholder="Logradouro"
+                              autoComplete="street-address"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Número</label>
+                            <input
+                              type="text"
+                              value={form.endereco_numero}
+                              onChange={(e) => setForm({ ...form, endereco_numero: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              placeholder="Nº"
+                              autoComplete="off"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Bairro</label>
+                            <input
+                              type="text"
+                              value={form.endereco_bairro}
+                              onChange={(e) => setForm({ ...form, endereco_bairro: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              autoComplete="address-level3"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">CEP</label>
+                            <input
+                              type="text"
+                              value={form.endereco_cep}
+                              onChange={(e) => setForm({ ...form, endereco_cep: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              placeholder="00000-000"
+                              autoComplete="postal-code"
+                              inputMode="numeric"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Cidade</label>
+                            <input
+                              type="text"
+                              value={form.endereco_cidade}
+                              onChange={(e) => setForm({ ...form, endereco_cidade: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              placeholder="Cidade de residência"
+                              autoComplete="address-level2"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Estado (UF)</label>
+                            <input
+                              type="text"
+                              value={form.endereco_estado}
+                              onChange={(e) => setForm({ ...form, endereco_estado: e.target.value })}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              placeholder="Ex.: SE"
+                              autoComplete="address-level1"
+                              maxLength={32}
+                            />
+                          </div>
+                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Nº PIS/PASEP <span className="text-xs font-normal text-slate-500">(recomendado para REP/relatórios)</span></label>
