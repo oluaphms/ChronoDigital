@@ -71,6 +71,7 @@ export const navigationGroups: Record<string, NavigationGroupSchema> = {
     items: [
       { name: 'Ausências', nameKey: 'menu.absences', path: '/admin/absences', roles: ['admin', 'hr'] },
       { name: 'Solicitações', nameKey: 'menu.requests', path: '/admin/requests', roles: ['admin', 'hr'] },
+      { name: 'Justificativas', nameKey: 'menu.justificativas', path: '/admin/justificativas', roles: ['admin', 'hr'] },
       { name: 'Minhas Solicitações', nameKey: 'menu.myRequests', path: '/employee/requests', roles: ['employee'] },
       { name: 'Minhas Ausências', nameKey: 'menu.myAbsences', path: '/employee/absences', roles: ['employee'] },
       { name: 'Monitoramento', nameKey: 'menu.monitoramento', path: '/admin/monitoring', roles: ['admin', 'hr'] },
