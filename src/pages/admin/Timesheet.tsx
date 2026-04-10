@@ -73,6 +73,7 @@ function lastPunchLocationCoords(dayRecs: any[]): { lat: number; lng: number } |
 const AdminTimesheet: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [employees, setEmployees] = useState<{ id: string; nome: string; department_id?: string }[]>([]);
+  const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [records, setRecords] = useState<any[]>([]);
   const [filterUserId, setFilterUserId] = useState<string>('');
   const [filterDept, setFilterDept] = useState<string>('');
@@ -96,12 +97,14 @@ const AdminTimesheet: React.FC = () => {
     const load = async () => {
       setLoadingData(true);
       try {
-        const [usersRows, recordsRows] = await Promise.all([
+        const [usersRows, recordsRows, departmentsRows] = await Promise.all([
           db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
           db.select('time_records', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }, 2000) as Promise<any[]>,
+          db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         ]);
         setEmployees((usersRows ?? []).map((u: any) => ({ id: u.id, nome: u.nome || u.email, department_id: u.department_id })));
         setRecords(recordsRows ?? []);
+        setDepartments((departmentsRows ?? []).map((d: any) => ({ id: d.id, name: d.name })));
       } catch (e) {
         console.error(e);
       } finally {
@@ -257,8 +260,8 @@ const AdminTimesheet: React.FC = () => {
           <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Departamento</label>
           <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white min-w-[180px]">
             <option value="">Todos</option>
-            {[...new Set(employees.map((e) => e.department_id).filter(Boolean))].map((deptId) => (
-              <option key={deptId} value={deptId}>{deptId}</option>
+            {departments.map((dept) => (
+              <option key={dept.id} value={dept.id}>{dept.name}</option>
             ))}
           </select>
         </div>
