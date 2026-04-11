@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, AlertCircle } from 'lucide-react';
-import { Button } from '../../../components/UI';
+import { Button } from '../../components/UI';
 
 interface ManualRecordModalProps {
   isOpen: boolean;
