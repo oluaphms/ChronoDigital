@@ -9,14 +9,12 @@ const corsHeaders: Record<string, string> = {
 const TIMEOUT_MS = 8000; // 8 segundos timeout para APIs externas
 
 async function resolveAddressWithTimeout(lat: number, lon: number): Promise<string> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   try {
     const address = await resolveAddressFromCoordinates(lat, lon);
     return address;
-  } finally {
-    clearTimeout(timeoutId);
+  } catch (e) {
+    console.error('Error in resolveAddressWithTimeout:', e);
+    throw e;
   }
 }
 
@@ -45,6 +43,8 @@ export default async function handler(request: Request): Promise<Response> {
     const address = await resolveAddressWithTimeout(lat, lon);
     return Response.json({ address }, { status: 200, headers: corsHeaders });
   } catch (e: unknown) {
+    console.error('Reverse geocode error:', e);
+    
     // Timeout ou erro de rede → 503 Service Unavailable
     if (e instanceof Error && e.name === 'AbortError') {
       return Response.json(
@@ -52,6 +52,7 @@ export default async function handler(request: Request): Promise<Response> {
         { status: 503, headers: corsHeaders }
       );
     }
+    
     // Outros erros → 500
     const message = e instanceof Error ? e.message : 'Falha na geocodificação';
     return Response.json({ error: message }, { status: 500, headers: corsHeaders });

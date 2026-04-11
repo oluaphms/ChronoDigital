@@ -72,15 +72,15 @@ export async function resolveAddressFromCoordinates(lat: number, lng: number): P
         ...options,
         signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       return res;
     } catch (e) {
+      clearTimeout(timeoutId);
       if (retries < MAX_RETRIES && (e instanceof Error && e.name === 'AbortError')) {
         // Retry on timeout
         return fetchWithTimeout(url, options, retries + 1);
       }
       throw e;
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
@@ -88,7 +88,7 @@ export async function resolveAddressFromCoordinates(lat: number, lng: number): P
 
   // Tentar Photon
   try {
-    const url = `https://photon.komoot.io/reverse?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&lang=pt`;
+    const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=pt`;
     const res = await fetchWithTimeout(url, {
       headers: { Accept: 'application/json' },
     });
@@ -101,15 +101,16 @@ export async function resolveAddressFromCoordinates(lat: number, lng: number): P
         text = formatPhotonProperties(props).trim();
       }
     }
-  } catch {
+  } catch (e) {
     // Photon falhou, tenta Nominatim
+    console.warn('Photon reverse geocode failed:', e instanceof Error ? e.message : e);
   }
 
   // Fallback para Nominatim
   if (!text) {
     try {
       const nominatimUrl =
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&accept-language=pt-BR`;
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=pt-BR`;
       const nomRes = await fetchWithTimeout(nominatimUrl, {
         headers: NOMINATIM_HEADERS,
       });
@@ -118,8 +119,9 @@ export async function resolveAddressFromCoordinates(lat: number, lng: number): P
         const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
         text = fromAddress || String(nomData.display_name || '').trim();
       }
-    } catch {
+    } catch (e) {
       // Ambas APIs falharam
+      console.warn('Nominatim reverse geocode failed:', e instanceof Error ? e.message : e);
     }
   }
 
