@@ -126,6 +126,7 @@ const RequestsPage: React.FC = () => {
       toast.addToast('success', 'Solicitação enviada com sucesso.');
 
       try {
+        // Notificar o colaborador
         await NotificationService.create({
           userId: user.id,
           type: 'info',
@@ -135,6 +136,31 @@ const RequestsPage: React.FC = () => {
         });
       } catch {
         /* notificação opcional */
+      }
+
+      try {
+        // Notificar todos os admins/RH da empresa
+        const admins = await db.select('users', [
+          { column: 'company_id', operator: 'eq', value: user.companyId },
+          { column: 'role', operator: 'in', value: ['admin', 'hr'] },
+        ]);
+
+        for (const admin of admins || []) {
+          try {
+            await NotificationService.create({
+              userId: admin.id,
+              type: 'info',
+              title: 'Nova solicitação',
+              message: `${user.nome} enviou uma nova solicitação de ${form.type === 'adjustment' ? 'ajuste de ponto' : form.type === 'vacation' ? 'férias' : 'mudança de turno'}.`,
+              metadata: { requestId: id },
+              actionUrl: '/requests',
+            });
+          } catch (e) {
+            console.error('Erro ao notificar admin:', e);
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao buscar admins:', e);
       }
 
       try {
