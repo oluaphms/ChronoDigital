@@ -73,17 +73,16 @@ export const NotificationService = {
 
   /**
    * Retorna notificações do usuário.
-   * Por padrão exclui as já resolvidas (status = 'resolved') para não poluir o sino.
+   * Por padrão exclui as já lidas (read = true) para não poluir o sino.
    */
   async getAll(userId: string, includeResolved = false): Promise<InAppNotification[]> {
     if (isSupabaseConfigured) {
       try {
         const filters: { column: string; operator: string; value: unknown }[] = [
           { column: 'user_id', operator: 'eq', value: userId },
+          // Mostrar apenas notificações não lidas (read = false)
+          { column: 'read', operator: 'eq', value: false },
         ];
-        if (!includeResolved) {
-          filters.push({ column: 'status', operator: 'neq', value: 'resolved' });
-        }
         const rows = await db.select(
           'notifications',
           filters,
@@ -116,7 +115,7 @@ export const NotificationService = {
         status: n.status ?? (n.read ? 'read' : 'pending'),
       })) as InAppNotification[];
       return parsed.filter(
-        (n) => n.userId === userId && (includeResolved || n.status !== 'resolved'),
+        (n) => n.userId === userId && !n.read,
       );
     } catch {
       return [];
