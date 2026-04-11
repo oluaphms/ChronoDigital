@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Navigate } from "react-router-dom";
-import { Clock12, CheckCircle2, XCircle, Eye, Plus, History } from "lucide-react";
+import { Clock12, CheckCircle2, XCircle, Eye, Plus, History, Check } from "lucide-react";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import PageHeader from "../components/PageHeader";
 import { Button, LoadingState } from "../../components/UI";
@@ -193,6 +193,45 @@ const AdjustmentsPage: React.FC = () => {
       toast.addToast("success", "Ajuste aprovado e ponto atualizado.");
     } catch (err: any) {
       toast.addToast("error", err?.message || "Erro ao aprovar ajuste.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // ── Admin: apply approved adjustment ──
+  const handleApplyAdjustment = async (row: AdjustmentRequest) => {
+    if (!user) return;
+    setBusyId(row.id);
+    try {
+      const newTimestamp = `${row.date}T${row.requested_time}:00.000Z`;
+      
+      // Atualizar time_record se existir
+      if (row.time_record_id) {
+        await db.update('time_records', [{ column: 'id', operator: 'eq', value: row.time_record_id }], {
+          created_at: newTimestamp,
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      // Registrar auditoria
+      await LoggingService.log({
+        severity: LogSeverity.SECURITY,
+        action: 'ADMIN_APPLY_ADJUSTMENT',
+        userId: user.id,
+        userName: user.nome,
+        companyId: user.companyId,
+        details: {
+          adjustmentId: row.id,
+          employeeId: row.user_id,
+          timeRecordId: row.time_record_id,
+          newTimestamp: newTimestamp,
+        },
+      });
+
+      toast.addToast('success', 'Ajuste aplicado ao ponto com sucesso.');
+      await load();
+    } catch (err: any) {
+      toast.addToast('error', err?.message || 'Erro ao aplicar ajuste.');
     } finally {
       setBusyId(null);
     }
@@ -397,6 +436,16 @@ const AdjustmentsPage: React.FC = () => {
                               <XCircle className="w-4 h-4" />
                             </button>
                           </>
+                        )}
+                        {isAdminView && row.status === "approved" && (
+                          <button
+                            onClick={() => handleApplyAdjustment(row)}
+                            disabled={busyId === row.id}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-40"
+                            title="Efetuar ajuste"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
                         )}
                       </div>
                     </td>

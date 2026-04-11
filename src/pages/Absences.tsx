@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { CircleOff } from 'lucide-react';
+import { CircleOff, Trash2 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
+import { useToast } from '../components/ToastProvider';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 import ModalForm from '../components/ModalForm';
@@ -21,10 +22,12 @@ interface AbsenceRow {
 
 const AbsencesPage: React.FC = () => {
   const { user, loading } = useCurrentUser();
+  const toast = useToast();
   const [rows, setRows] = useState<AbsenceRow[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [form, setForm] = useState<{ absence_date: string; type: string; reason: string }>({
     absence_date: '',
     type: 'justified',
@@ -125,9 +128,36 @@ const AbsencesPage: React.FC = () => {
         details: { absence_date: form.absence_date, type: form.type },
       });
 
+      toast.addToast('success', 'Ausência registrada com sucesso.');
       setIsModalOpen(false);
     } catch (err) {
       console.error('Erro ao registrar ausência:', err);
+      toast.addToast('error', 'Erro ao registrar ausência.');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!user || !isSupabaseConfigured) return;
+    setDeletingId(id);
+    try {
+      await db.delete('absences', [{ column: 'id', operator: 'eq', value: id }]);
+      setRows((prev) => prev.filter((r) => r.id !== id));
+      
+      await LoggingService.log({
+        severity: LogSeverity.INFO,
+        action: 'DELETE_ABSENCE',
+        userId: user.id,
+        userName: user.nome,
+        companyId: user.companyId,
+        details: { absenceId: id },
+      });
+
+      toast.addToast('success', 'Ausência removida com sucesso.');
+    } catch (err) {
+      console.error('Erro ao deletar ausência:', err);
+      toast.addToast('error', 'Erro ao remover ausência.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -170,6 +200,22 @@ const AbsencesPage: React.FC = () => {
             },
             { key: 'type', header: 'Tipo' },
             { key: 'reason', header: 'Motivo' },
+            {
+              key: 'actions',
+              header: 'Ações',
+              render: (row) => (
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => handleDelete(row.id)}
+                    disabled={deletingId === row.id}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-40"
+                    title="Deletar ausência"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ),
+            },
           ]}
           data={rows}
         />
