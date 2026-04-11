@@ -10,7 +10,7 @@ CREATE OR REPLACE FUNCTION public.insert_time_record_for_user(
   p_location JSONB DEFAULT NULL,
   p_photo_url TEXT DEFAULT NULL,
   p_source TEXT DEFAULT 'admin',
-  p_timestamp TIMESTAMPTZ DEFAULT NULL,
+  p_timestamp TEXT DEFAULT NULL,
   p_latitude NUMERIC DEFAULT NULL,
   p_longitude NUMERIC DEFAULT NULL,
   p_accuracy NUMERIC DEFAULT NULL,
@@ -58,7 +58,13 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  v_ts := COALESCE(p_timestamp, NOW());
+  v_ts := COALESCE(
+    CASE 
+      WHEN p_timestamp IS NOT NULL THEN p_timestamp::TIMESTAMPTZ
+      ELSE NOW()
+    END,
+    NOW()
+  );
   v_record_id := gen_random_uuid()::text;
 
   -- Inserir o registro
@@ -83,6 +89,6 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.insert_time_record_for_user(
-  text, text, text, text, jsonb, text, text, timestamptz,
+  text, text, text, text, jsonb, text, text, text,
   numeric, numeric, numeric, text, text, text, numeric, jsonb
-) IS 'Insert time_record with admin/HR authorization. SET row_security=off for RLS bypass. method defaults to admin.';
+) IS 'Insert time_record with admin/HR authorization. SET row_security=off for RLS bypass. method defaults to admin. p_timestamp accepts ISO string or NULL.';

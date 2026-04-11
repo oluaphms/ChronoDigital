@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Navigate } from 'react-router-dom';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, supabase } from '../../services/supabaseClient';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
 import PageHeader from '../../components/PageHeader';
@@ -250,18 +250,24 @@ const AdminTimesheet: React.FC = () => {
   };
 
   const handleAddTimeRecord = async (data: { user_id: string; created_at: string; type: string }) => {
-    if (!user) return;
+    if (!user || !supabase) return;
     try {
-      const id = crypto.randomUUID();
-      await db.insert('time_records', {
-        id,
-        user_id: data.user_id,
-        company_id: user.companyId,
-        created_at: data.created_at,
-        type: data.type,
-        is_manual: true,
-        manual_reason: 'Batida adicionada manualmente via Espelho de Ponto',
+      // Chamar RPC insert_time_record_for_user com bypass de RLS
+      const { data: result, error } = await supabase.rpc('insert_time_record_for_user', {
+        p_user_id: data.user_id,
+        p_company_id: user.companyId,
+        p_type: data.type,
+        p_method: 'admin',
+        p_source: 'admin',
+        p_timestamp: data.created_at,
       });
+
+      if (error) {
+        console.error('RPC error:', error);
+        throw new Error(error.message || 'Erro ao chamar RPC');
+      }
+
+      const recordId = result?.record_id;
 
       // Registrar auditoria
       await LoggingService.log({
@@ -271,7 +277,7 @@ const AdminTimesheet: React.FC = () => {
         userName: user.nome,
         companyId: user.companyId,
         details: {
-          timeRecordId: id,
+          timeRecordId: recordId,
           employeeId: data.user_id,
           createdAt: data.created_at,
           type: data.type,
@@ -291,6 +297,7 @@ const AdminTimesheet: React.FC = () => {
 
       toast.addToast('success', 'Batida adicionada com sucesso.');
     } catch (err: any) {
+      console.error('Error adding time record:', err);
       toast.addToast('error', err?.message || 'Erro ao adicionar batida.');
     }
   };
