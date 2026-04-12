@@ -182,9 +182,18 @@ const AdminTimesheet: React.FC = () => {
   }, [records, filterUserId, filterDept, periodStart, periodEnd, employees]);
 
   const buildRows = useMemo((): TimesheetRow[] => {
+    // Criar mapa de todos os usuários (não apenas os com registros)
     const byUser = new Map<string, { userName: string; departmentId?: string; recs: any[] }>();
     const userNames = new Map<string, string>(employees.map((e) => [e.id, e.nome]));
     
+    // Inicializar com TODOS os funcionários
+    employees.forEach((emp) => {
+      if (!byUser.has(emp.id)) {
+        byUser.set(emp.id, { userName: emp.nome, departmentId: emp.department_id, recs: [] });
+      }
+    });
+    
+    // Adicionar registros filtrados
     filteredRecords.forEach((r: any) => {
       const uid = r.user_id;
       if (!byUser.has(uid)) byUser.set(uid, { userName: userNames.get(uid) || uid.slice(0, 8), departmentId: undefined, recs: [] });
@@ -193,10 +202,19 @@ const AdminTimesheet: React.FC = () => {
     
     const rows: TimesheetRow[] = [];
     byUser.forEach((data, userId) => {
+      // Aplicar filtro de departamento
+      if (filterDept) {
+        const emp = employees.find((e) => e.id === userId);
+        if (emp?.department_id !== filterDept) return;
+      }
+      
+      // Aplicar filtro de usuário
+      if (filterUserId && userId !== filterUserId) return;
+      
       const byDate = new Map<string, DaySummary>();
       const datesSet = new Set<string>();
       
-      // Agrupar por data sem ordenar (mais rápido)
+      // Agrupar por data dos registros existentes
       data.recs.forEach((r: any) => {
         datesSet.add((r.created_at || '').slice(0, 10));
       });
@@ -252,7 +270,7 @@ const AdminTimesheet: React.FC = () => {
     });
     
     return rows.sort((a, b) => a.userName.localeCompare(b.userName));
-  }, [filteredRecords, employees, shiftSchedules, periodStart, periodEnd]);
+  }, [filteredRecords, employees, shiftSchedules, periodStart, periodEnd, filterDept, filterUserId]);
 
   const handleExportPDF = async () => {
     try {
