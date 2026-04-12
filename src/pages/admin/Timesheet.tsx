@@ -766,16 +766,36 @@ const AdminTimesheet: React.FC = () => {
                         />
                       </td>
                       <td className="px-4 py-3 tabular-nums max-w-[100px] align-top">
-                        <ExpandableTextCell label="Intervalo (pausa)" value={sum?.saidaIntervalo || ''} empty="—" />
+                        <ExpandableTextCell 
+                          label="Intervalo (pausa)" 
+                          value={sum?.saidaIntervalo || ''} 
+                          empty={sum?.isDayOff ? 'FOLGA' : (sum?.hasAbsence ? 'FALTA' : '—')}
+                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : (sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : '')}
+                        />
                       </td>
                       <td className="px-4 py-3 tabular-nums max-w-[100px] align-top">
-                        <ExpandableTextCell label="Retorno" value={sum?.voltaIntervalo || ''} empty="—" />
+                        <ExpandableTextCell 
+                          label="Retorno" 
+                          value={sum?.voltaIntervalo || ''} 
+                          empty={sum?.isDayOff ? 'FOLGA' : (sum?.hasAbsence ? 'FALTA' : '—')}
+                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : (sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : '')}
+                        />
                       </td>
                       <td className="px-4 py-3 tabular-nums max-w-[100px] align-top">
-                        <ExpandableTextCell label="Saída (final)" value={sum?.saidaFinal || ''} empty="—" />
+                        <ExpandableTextCell 
+                          label="Saída (final)" 
+                          value={sum?.saidaFinal || ''} 
+                          empty={sum?.isDayOff ? 'FOLGA' : (sum?.hasAbsence ? 'FALTA' : '—')}
+                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : (sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : '')}
+                        />
                       </td>
                       <td className="px-4 py-3 tabular-nums max-w-[100px] align-top">
-                        <ExpandableTextCell label="Horas trabalhadas" value={sum?.workedHours || ''} empty="—" />
+                        <ExpandableTextCell 
+                          label="Horas trabalhadas" 
+                          value={sum?.workedHours || ''} 
+                          empty={sum?.isDayOff ? 'FOLGA' : (sum?.hasAbsence ? 'FALTA' : '—')}
+                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : (sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : '')}
+                        />
                       </td>
                       <td className="px-4 py-3 text-slate-600 dark:text-slate-400 text-xs w-[min(100%,11rem)] max-w-[11rem] min-w-0 align-top">
                         {sum?.locationCoords ? (

@@ -1,5 +1,7 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './src/lib/queryClient';
 import { User, LogType, DailySummary, PunchMethod, Company } from './types';
 import Layout from './components/Layout';
 import { BRAND_IMAGE_1024 } from './components/BrandLogo';
@@ -1672,9 +1674,11 @@ const App: React.FC = () =>
   !isSupabaseConfigured ? (
     <ConfigSupabaseScreen />
   ) : (
-    <SettingsProvider>
-      <AppMain />
-    </SettingsProvider>
+    <QueryClientProvider client={queryClient}>
+      <SettingsProvider>
+        <AppMain />
+      </SettingsProvider>
+    </QueryClientProvider>
   );
 
 export default App;

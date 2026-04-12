@@ -1,32 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TimeRecord, LogType, PunchMethod } from '../../types';
 import { PontoService } from '../../services/pontoService';
 import { OfflinePunchService } from '../../services/offlinePunchService';
+import { timeRecordsQueries } from '../../services/queryOptimizations';
 
 export const useRecords = (userId: string | undefined, companyId: string | undefined) => {
-  const [records, setRecords] = useState<TimeRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  // Track initial load to prevent multiple simultaneous calls
-  const isFetched = useRef(false);
+  // ✅ OTIMIZADO: Usar React Query para cache automático
+  const { data: records = [], isLoading, refetch } = useQuery({
+    queryKey: ['records', userId],
+    queryFn: () => userId ? timeRecordsQueries.getRecordsByUser(userId, 50, 0).then(r => r.data || []) : Promise.resolve([]),
+    enabled: !!userId,
+    staleTime: 1 * 60 * 1000, // 1 minuto
+  });
 
   const refreshRecords = useCallback(async (force = false) => {
-    if (!userId) return;
-    if (isFetched.current && !force) return;
-
-    try {
-      const data = await PontoService.getRecords(userId);
-      setRecords(data);
-      isFetched.current = true;
-    } catch (err) {
-      console.error('Failed to fetch records', err);
+    if (force) {
+      await refetch();
     }
-  }, [userId]);
-
-  useEffect(() => {
-    refreshRecords();
-  }, [refreshRecords]);
+  }, [refetch]);
 
   const lastPunchAt = useRef<number>(0);
   const THROTTLE_MS = 5000;
@@ -45,7 +40,7 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
 
     for (const item of toSync) {
       try {
-        const newRecord = await PontoService.registerPunch(
+        await PontoService.registerPunch(
           item.userId,
           item.companyId,
           item.type,
@@ -55,7 +50,8 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
           item.data.justification
         );
         syncedIds.push(item.id);
-        setRecords((prev) => [newRecord, ...prev]);
+        // ✅ OTIMIZADO: Invalidar cache após sincronizar
+        queryClient.invalidateQueries({ queryKey: ['records', userId] });
       } catch (err) {
         // Se falhar, mantém na fila para tentar depois
         console.warn('Falha ao sincronizar ponto offline, tentando novamente depois.', err);
@@ -65,7 +61,7 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
     if (syncedIds.length) {
       OfflinePunchService.removeByIds(syncedIds);
     }
-  }, [userId, companyId]);
+  }, [userId, companyId, queryClient]);
 
   const addRecord = async (type: LogType, method: PunchMethod, data: any) => {
     if (!userId || !companyId) return;
@@ -75,7 +71,6 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
       return;
     }
     lastPunchAt.current = now;
-    setIsLoading(true);
     setError(null);
     try {
       const newRecord = await PontoService.registerPunch(
@@ -87,7 +82,8 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
         data.photo,
         data.justification
       );
-      setRecords((prev) => [newRecord, ...prev]);
+      // ✅ OTIMIZADO: Invalidar cache após registrar ponto
+      queryClient.invalidateQueries({ queryKey: ['records', userId] });
       return newRecord;
     } catch (err: any) {
       // Modo offline básico: se estiver sem conexão, enfileirar o registro
@@ -103,8 +99,6 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
 
       setError(err.message || 'Erro desconhecido ao registrar ponto.');
       throw err;
-    } finally {
-      setIsLoading(false);
     }
   };
 

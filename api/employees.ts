@@ -37,11 +37,32 @@ export default async function handler(request: Request): Promise<Response> {
 
   const searchParams = new URL(request.url).searchParams;
   const companyId = searchParams.get('companyId') || undefined;
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50', 10)));
+  const offset = (page - 1) * limit;
 
+  // Get total count for pagination metadata
+  const countQuery = supabase
+    .from('users')
+    .select('id', { count: 'exact', head: true })
+    .eq('role', 'employee');
+
+  if (companyId) {
+    countQuery.eq('company_id', companyId);
+  }
+
+  const { count, error: countError } = await countQuery;
+  if (countError) {
+    return Response.json({ error: countError.message }, { status: 500, headers: corsHeaders });
+  }
+
+  // Get paginated data
   let query = supabase
     .from('users')
     .select('id, nome, email, cpf, department_id, schedule_id, estrutura_id, status, company_id')
-    .eq('role', 'employee');
+    .eq('role', 'employee')
+    .order('nome', { ascending: true })
+    .range(offset, offset + limit - 1);
 
   if (companyId) {
     query = query.eq('company_id', companyId);
@@ -52,6 +73,20 @@ export default async function handler(request: Request): Promise<Response> {
     return Response.json({ error: error.message }, { status: 500, headers: corsHeaders });
   }
 
-  return Response.json({ employees: data ?? [] }, { status: 200, headers: corsHeaders });
+  const totalPages = Math.ceil((count || 0) / limit);
+  return Response.json(
+    {
+      employees: data ?? [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+      },
+    },
+    { status: 200, headers: corsHeaders }
+  );
 }
 

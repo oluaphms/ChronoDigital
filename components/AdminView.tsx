@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PontoService } from '../services/pontoService';
 import { LoggingService } from '../services/loggingService';
 import { PermissionService } from '../services/permissionService';
@@ -134,19 +135,25 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
     if (adminTheme !== 'system') applyTheme(adminTheme);
   }, [adminTheme, applyTheme]);
 
-  useEffect(() => {
-    PontoService.getAllEmployees(admin.companyId).then(setEmployees);
-    PontoService.getCompany(admin.companyId).then(setCompany);
-  }, [admin.companyId]);
+  // ✅ OTIMIZADO: Usar React Query para cache automático
+  const queryClient = useQueryClient();
 
-  const handleCreateEmployee = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsCreating(true);
-    setCreateError(null);
-    setCreateSuccess(false);
+  const { data: employees = [], isLoading: employeesLoading } = useQuery({
+    queryKey: ['employees', admin.companyId],
+    queryFn: () => PontoService.getAllEmployees(admin.companyId),
+    staleTime: 5 * 60 * 1000, // 5 minutos
+  });
 
-    try {
-      const result = await adminUserService.createEmployee(admin, createForm);
+  const { data: company } = useQuery({
+    queryKey: ['company', admin.companyId],
+    queryFn: () => PontoService.getCompany(admin.companyId),
+    staleTime: 10 * 60 * 1000, // 10 minutos
+  });
+
+  // ✅ OTIMIZADO: Usar useMutation para criar funcionário
+  const { mutate: createEmployee, isPending: isCreating, error: createErrorMutation } = useMutation({
+    mutationFn: (data: typeof createForm) => adminUserService.createEmployee(admin, data),
+    onSuccess: (result) => {
       if (result.success) {
         setCreateSuccess(true);
         setCreateForm({
@@ -157,8 +164,8 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
           departmentId: '',
           role: 'employee',
         });
-        // Recarregar lista de funcionários
-        PontoService.getAllEmployees(admin.companyId).then(setEmployees);
+        // Invalidar cache de funcionários
+        queryClient.invalidateQueries({ queryKey: ['employees', admin.companyId] });
         setTimeout(() => {
           setShowCreateModal(false);
           setCreateSuccess(false);
@@ -166,34 +173,34 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
       } else {
         setCreateError(result.error || 'Erro ao criar funcionário');
       }
-    } catch (error: any) {
+    },
+    onError: (error: any) => {
       setCreateError(error.message || 'Erro ao criar funcionário');
-    } finally {
-      setIsCreating(false);
-    }
-  };
+    },
+  });
 
-  const handleImportEmployees = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!importFile) return;
-
-    setIsImporting(true);
-    setImportResult(null);
-
-    try {
-      const result = await adminUserService.importEmployees(admin, importFile);
+  // ✅ OTIMIZADO: Usar useMutation para importar funcionários
+  const { mutate: importEmployees, isPending: isImporting } = useMutation({
+    mutationFn: (file: File) => adminUserService.importEmployees(admin, file),
+    onSuccess: (result) => {
       setImportResult(result);
-      // Recarregar lista de funcionários
-      PontoService.getAllEmployees(admin.companyId).then(setEmployees);
-    } catch (error: any) {
+      // Invalidar cache de funcionários
+      queryClient.invalidateQueries({ queryKey: ['employees', admin.companyId] });
+      setShowImportModal(false);
+    },
+    onError: (error: any) => {
       setImportResult({
         total: 0,
         success: 0,
         errors: [{ row: 0, email: '', error: error.message || 'Erro ao importar planilha' }],
       });
-    } finally {
-      setIsImporting(false);
-    }
+    },
+  });
+
+  const handleImportEmployeesForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFile) return;
+    importEmployees(importFile);
   };
 
   const handleDownloadTemplate = async () => {
@@ -530,7 +537,7 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
                 <X size={24} />
               </button>
             </header>
-            <form onSubmit={handleCreateEmployee} className="p-10 space-y-6">
+            <form onSubmit={(e) => { e.preventDefault(); createEmployee(createForm); }} className="p-10 space-y-6">
               {createSuccess && (
                 <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center gap-3 text-green-600 dark:text-green-400 text-sm font-bold">
                   <CheckCircle2 size={20} /> Funcionário criado com sucesso!
@@ -629,7 +636,7 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
                 <X size={24} />
               </button>
             </header>
-            <form onSubmit={handleImportEmployees} className="p-10 space-y-6">
+            <form onSubmit={handleImportEmployeesForm} className="p-10 space-y-6">
               <div className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-2">Planilha (Excel ou CSV) *</label>
