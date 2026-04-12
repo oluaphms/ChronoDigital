@@ -125,17 +125,17 @@ const AdminTimesheet: React.FC = () => {
     const load = async () => {
       setLoadingData(true);
       try {
-        // Calcular data de 30 dias atrás para limitar registros
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const dateFilter = thirtyDaysAgo.toISOString().slice(0, 10);
+        // Calcular data de 7 dias atrás (em vez de 30) para melhor performance
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const dateFilter = sevenDaysAgo.toISOString().slice(0, 10);
 
         const [usersRows, recordsRows, departmentsRows, shiftsRows] = await Promise.all([
           db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
           db.select('time_records', [
             { column: 'company_id', operator: 'eq', value: user.companyId },
             { column: 'created_at', operator: 'gte', value: dateFilter }
-          ], { column: 'created_at', ascending: false }, 500) as Promise<any[]>,
+          ], { column: 'created_at', ascending: false }, 1000) as Promise<any[]>,
           db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
           db.select('employee_shift_schedule', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         ]);
@@ -167,24 +167,31 @@ const AdminTimesheet: React.FC = () => {
   const buildRows = useMemo((): TimesheetRow[] => {
     const byUser = new Map<string, { userName: string; departmentId?: string; recs: any[] }>();
     const userNames = new Map<string, string>(employees.map((e) => [e.id, e.nome]));
+    
     filteredRecords.forEach((r: any) => {
       const uid = r.user_id;
       if (!byUser.has(uid)) byUser.set(uid, { userName: userNames.get(uid) || uid.slice(0, 8), departmentId: undefined, recs: [] });
       byUser.get(uid)!.recs.push(r);
     });
+    
     const rows: TimesheetRow[] = [];
     byUser.forEach((data, userId) => {
       const byDate = new Map<string, DaySummary>();
       const datesSet = new Set<string>();
-      data.recs.sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
+      
+      // Agrupar por data sem ordenar (mais rápido)
       data.recs.forEach((r: any) => {
         datesSet.add((r.created_at || '').slice(0, 10));
       });
-      datesSet.forEach((d) => {
+      
+      // Processar datas em ordem
+      const sortedDates = Array.from(datesSet).sort();
+      sortedDates.forEach((d) => {
         const dayRecs = data.recs.filter((r: any) => (r.created_at || '').slice(0, 10) === d);
         const mirror = buildDayMirrorSummary(dayRecs);
         const locationCoords = lastPunchLocationCoords(dayRecs);
         const isDayOff = isDayOffForEmployee(d, userId, shiftSchedules);
+        
         byDate.set(d, {
           date: d,
           entradaInicio: mirror.entradaInicio,
@@ -199,14 +206,16 @@ const AdminTimesheet: React.FC = () => {
           hasLateEntry: mirror.hasLateEntry,
         });
       });
+      
       rows.push({
         userId,
         userName: data.userName,
         departmentName: data.departmentId,
         byDate: byDate,
-        dates: [...datesSet].sort(),
+        dates: sortedDates,
       });
     });
+    
     return rows.sort((a, b) => a.userName.localeCompare(b.userName));
   }, [filteredRecords, employees, shiftSchedules]);
 
@@ -434,13 +443,30 @@ const AdminTimesheet: React.FC = () => {
       'Status',
     ];
     const lines = [headers.join('\t')];
+    
+    // Cache de geocodificação para evitar requisições duplicadas
+    const geocodeCache = new Map<string, string>();
+    
     for (const row of buildRows) {
       for (const d of row.dates) {
         const sum = row.byDate.get(d);
         let locText = '—';
+        
+        // Usar cache para evitar múltiplas requisições
         if (sum?.locationCoords) {
-          locText = await reverseGeocode(sum.locationCoords.lat, sum.locationCoords.lng);
+          const cacheKey = `${sum.locationCoords.lat.toFixed(5)},${sum.locationCoords.lng.toFixed(5)}`;
+          if (geocodeCache.has(cacheKey)) {
+            locText = geocodeCache.get(cacheKey)!;
+          } else {
+            try {
+              locText = await reverseGeocode(sum.locationCoords.lat, sum.locationCoords.lng);
+              geocodeCache.set(cacheKey, locText);
+            } catch {
+              locText = '—';
+            }
+          }
         }
+        
         lines.push(
           [
             row.userName,
@@ -456,6 +482,7 @@ const AdminTimesheet: React.FC = () => {
         );
       }
     }
+    
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
