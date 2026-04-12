@@ -3,7 +3,7 @@ import { SupabaseClient, createClient } from '@supabase/supabase-js';
 /**
  * Cliente centralizado do Supabase para o novo namespace `src/`.
  *
- * Preferencialmente, use os helpers exportados de `services/supabase`,
+ * Preferencialmente, use os helpers exportados de `services/supabaseClient`,
  * mas este arquivo existe para atender ao padrão:
  * `src/services/supabaseClient.ts`.
  *
@@ -14,16 +14,11 @@ import { SupabaseClient, createClient } from '@supabase/supabase-js';
  * - `isSupabaseConfigured`: flag booleana de configuração
  */
 
-import supabaseDefault, {
-  db,
-  auth,
-  storage,
-  isSupabaseConfigured,
-} from '../../services/supabase';
+import { db, auth, storage, isSupabaseConfigured } from '../services/supabaseClient';
 
 // Exporta o client principal já existente para manter uma única fonte de verdade
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? (supabaseDefault as SupabaseClient)
+  ? (db as any).select as any
   : null;
 
 export { db, auth, storage, isSupabaseConfigured, SupabaseClient, createClient };
@@ -33,5 +28,5 @@ export {
   testSupabaseConnection,
   withSupabaseTimeout,
   resetSession,
-} from '../../services/supabase';
+} from '../services/supabase';
 
