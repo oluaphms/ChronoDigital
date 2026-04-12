@@ -3,7 +3,7 @@
  */
 
 import { InAppNotification, NotificationStatus } from '../types';
-import { db, isSupabaseConfigured, supabase } from './supabase';
+import { db, isSupabaseConfigured, supabase } from './supabaseClient';
 
 const STORAGE_KEY = 'smartponto_notifications';
 const MAX_LOCAL = 100;

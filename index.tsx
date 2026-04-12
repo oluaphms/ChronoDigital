@@ -9,6 +9,7 @@ import App from './App';
 import { ToastProvider } from './src/components/ToastProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import { LanguageProvider } from './src/contexts/LanguageContext';
+import { AppInitializer } from './src/components/AppInitializer';
 
 try {
   initSentry();
@@ -24,14 +25,16 @@ if (!rootElement) throw new Error('Could not find root element to mount to');
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <StrictMode>
-    <BrowserRouter>
-      <LanguageProvider>
-        <ToastProvider>
-          <ErrorBoundary>
-            <App />
-          </ErrorBoundary>
-        </ToastProvider>
-      </LanguageProvider>
-    </BrowserRouter>
+    <AppInitializer>
+      <BrowserRouter>
+        <LanguageProvider>
+          <ToastProvider>
+            <ErrorBoundary>
+              <App />
+            </ErrorBoundary>
+          </ToastProvider>
+        </LanguageProvider>
+      </BrowserRouter>
+    </AppInitializer>
   </StrictMode>
 );
