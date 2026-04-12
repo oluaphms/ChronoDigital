@@ -181,7 +181,9 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
 
   // ✅ OTIMIZADO: Usar useMutation para importar funcionários
   const { mutate: importEmployees, isPending: isImporting } = useMutation({
-    mutationFn: (file: File) => adminUserService.importEmployees(admin, file),
+    mutationFn: async (file: File) => {
+      return await adminUserService.importEmployees(admin, file);
+    },
     onSuccess: (result) => {
       setImportResult(result);
       // Invalidar cache de funcionários
