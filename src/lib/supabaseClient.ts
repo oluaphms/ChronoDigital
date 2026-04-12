@@ -95,3 +95,73 @@ export function resetSupabaseClient(): void {
   supabaseInstance = null;
   initializationAttempted = false;
 }
+
+// Timeout padrão para operações
+export const DEFAULT_CONNECTION_TIMEOUT_MS = 10000;
+export const DB_SELECT_TIMEOUT_MS = 28000;
+
+/**
+ * Testa se o Supabase está acessível
+ */
+export async function testSupabaseConnection(
+  timeoutMs: number = DEFAULT_CONNECTION_TIMEOUT_MS,
+): Promise<{ ok: boolean; message?: string }> {
+  const client = getSupabaseClient();
+  
+  if (!client) {
+    return { 
+      ok: false, 
+      message: 'Supabase não inicializado. Verifique as variáveis de ambiente.' 
+    };
+  }
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('timeout')), timeoutMs),
+  );
+
+  const tablesToTry = ['users', 'employees', 'companies'] as const;
+  
+  for (const table of tablesToTry) {
+    try {
+      const queryPromise = client.from(table).select('*').limit(1);
+      const { error } = await Promise.race([queryPromise, timeoutPromise]);
+      
+      if (error && error.code !== 'PGRST116') {
+        continue;
+      }
+      
+      console.log('[SmartPonto] Supabase conectado (tabela:', table, ')');
+      return { ok: true };
+    } catch (e: any) {
+      if (e?.message === 'timeout') {
+        return {
+          ok: false,
+          message: 'Supabase timeout. Projeto pode estar pausado ou rede lenta.',
+        };
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    message: 'Não foi possível conectar ao Supabase.',
+  };
+}
+
+/**
+ * Executa uma promise do Supabase com timeout
+ */
+export async function withSupabaseTimeout<T>(
+  promise: Promise<{ data: T; error: any }>,
+  ms: number = DEFAULT_CONNECTION_TIMEOUT_MS,
+): Promise<{ data: T; error: any }> {
+  return Promise.race([
+    promise,
+    new Promise<{ data: null; error: { message: string } }>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Supabase timeout (${ms}ms)`)),
+        ms,
+      ),
+    ),
+  ]);
+}
