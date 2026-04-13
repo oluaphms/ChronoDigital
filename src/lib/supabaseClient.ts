@@ -55,7 +55,7 @@ export function getSupabaseClient(): SupabaseClient | null {
   }
 
   try {
-    // Criar a instância com configuração robusta para evitar locks órfãos
+    // Criar a instância com configuração compatível com v2.39+
     supabaseInstance = createClient(url, key, {
       auth: {
         persistSession: true,
@@ -63,10 +63,6 @@ export function getSupabaseClient(): SupabaseClient | null {
         detectSessionInUrl: true,
         flowType: 'pkce',
         storageKey: 'chrono-digital-auth',
-        lock: {
-          acquireTimeout: 3000,
-        },
-        debug: import.meta.env?.DEV === true,
       },
     });
 
