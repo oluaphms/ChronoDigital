@@ -166,8 +166,8 @@ const AdminTimesheet: React.FC = () => {
             { column: 'created_at', operator: 'gte', value: dateFilter }
           ], { column: 'created_at', ascending: false }, 2000) as Promise<any[]>,
           db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-          db.select('employee_shift_schedule', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-          db.select('holidays', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
+          db.select('employee_shift_schedule', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
+          db.select('feriados', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
         ]);
         
         setEmployees((usersRows ?? []).map((u: any) => ({ id: u.id, nome: u.nome || u.email, department_id: u.department_id })));
@@ -196,8 +196,8 @@ const AdminTimesheet: React.FC = () => {
         setShiftSchedules(shiftsRows ?? []);
         setHolidays((holidaysRows ?? []).map((h: any) => ({
           id: h.id,
-          date: (h.date || '').slice(0, 10),
-          name: h.name || h.descricao || 'Feriado',
+          date: (h.data || h.date || '').slice(0, 10),
+          name: h.descricao || h.name || 'Feriado',
         })));
       } catch (e) {
         console.error(e);
