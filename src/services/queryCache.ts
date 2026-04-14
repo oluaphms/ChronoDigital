@@ -41,7 +41,7 @@ export const queryCache = {
    * Deduplicação: chamadas simultâneas com a mesma key compartilham a mesma promise.
    */
   async getOrFetch<T>(key: string, fetcher: () => Promise<T>, ttl: number): Promise<T> {
-    const cached = this.get<T>(key);
+    const cached = queryCache.get<T>(key);
     if (cached !== null) return cached;
 
     // Deduplicação de chamadas em voo

@@ -7,6 +7,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { i18n } from '../../lib/i18n';
 import { useSmartNavigation } from './useSmartNavigation';
 import { getNavIcon } from './iconMap';
+import type { NavigationGroupSchema } from './navigationSchema';
 
 const LONG_PRESS_MS = 500;
 const CARD_MARGIN = 12;
@@ -22,7 +23,7 @@ const SmartDock: React.FC = () => {
   const [cardStyle, setCardStyle] = useState<{ left: number; bottom: number; width: number } | null>(null);
   const [logoutBusy, setLogoutBusy] = useState(false);
 
-  const dockEntries = Object.entries(groups);
+  const dockEntries = Object.entries(groups) as [string, NavigationGroupSchema][];
   const openGroup = dockFloatingGroupKey ? groups[dockFloatingGroupKey] : null;
 
   /** Esconde o rodapé quando algum modal/dialog está aberto para não sobrepor botões */

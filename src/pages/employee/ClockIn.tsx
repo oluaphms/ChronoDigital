@@ -370,7 +370,7 @@ const EmployeeClockIn: React.FC = () => {
       let photoUrl: string | null = null;
       if (localPhotoDataUrl) {
         const validated = validatePunchImageDataUrl(localPhotoDataUrl);
-        if (!validated.ok) {
+        if (validated.ok === false) {
           setError(validated.message);
           toast.addToast('error', validated.message);
           return;

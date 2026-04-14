@@ -14,7 +14,7 @@ export function getRecordCreatedAtDate(record: { createdAt?: unknown }): Date | 
 import { ValidationService } from './validationService';
 import { LoggingService } from './loggingService';
 import { firestoreService } from './firestoreService';
-import { getUserProfileStorage } from './supabaseClient';
+import { db, getUserProfileStorage, isSupabaseConfigured } from './supabaseClient';
 
 // In-memory cache to reduce localStorage access (simulating database indexing and caching)
 const cache = {
@@ -96,7 +96,7 @@ export const PontoService = {
       if (data.cargo) updateData.cargo = data.cargo;
       if (data.preferences) updateData.preferences = data.preferences;
 
-      await firestoreService.db.update('users', userId, updateData);
+      await db.update('users', userId, updateData);
 
       // Atualizar cache local se existir
       try {
@@ -332,27 +332,40 @@ export const PontoService = {
     // Tentar buscar usuários do Firestore
     let allUsers: User[] = [];
     try {
-      const q = firestoreHelpers.queryCollection(
-        'users',
-        [where('companyId', '==', companyId), where('role', '==', 'employee')]
-      );
-      const snapshot = await firestoreHelpers.getDocs(q);
-      allUsers = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id,
-        createdAt: doc.data().createdAt?.toDate() || new Date()
-      })) as User[];
+      if (isSupabaseConfigured) {
+        const rows = await db.select('users', [
+          { column: 'company_id', operator: 'eq', value: companyId },
+          { column: 'role', operator: 'eq', value: 'employee' },
+        ]);
+        allUsers = (rows ?? []).map((row: any) => ({
+          id: row.id,
+          nome: row.nome,
+          email: row.email,
+          cargo: row.cargo,
+          role: row.role,
+          createdAt: row.created_at ? new Date(row.created_at) : new Date(),
+          companyId: row.company_id,
+          tenantId: row.tenant_id ?? row.company_id,
+          departmentId: row.department_id ?? '',
+          preferences: row.preferences ?? {
+            notifications: true,
+            theme: 'light',
+            allowManualPunch: true,
+            language: 'pt-BR',
+          },
+        })) as User[];
+      }
     } catch (error) {
-      console.warn('Erro ao buscar usuários do Firestore, usando mock:', error);
+      console.warn('Erro ao buscar usuários do Supabase, usando mock:', error);
     }
 
     // Fallback para dados mock se Firestore não retornar nada
     if (allUsers.length === 0) {
       allUsers = [
-        { id: 'usr_1', nome: 'Ana Silva', email: 'ana@corp.com', cargo: 'Dev Senior', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_1', preferences: { notifications: true, theme: 'light', allowManualPunch: true } },
-        { id: 'usr_2', nome: 'Bruno Costa', email: 'bruno@corp.com', cargo: 'Product Designer', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_2', preferences: { notifications: true, theme: 'light', allowManualPunch: false } },
-        { id: 'usr_772', nome: 'Lucas Ferreira', email: 'lucas.f@smartponto.com', cargo: 'Eng. Software', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_1', preferences: { notifications: true, theme: 'light', allowManualPunch: true } },
-        { id: 'usr_3', nome: 'Marcos Tech', email: 'marcos@tech.com', cargo: 'Analista Tech', role: 'employee', createdAt: new Date(), companyId: 'comp_2', tenantId: 'comp_2', departmentId: 'dept_4', preferences: { notifications: true, theme: 'light', allowManualPunch: true } },
+        { id: 'usr_1', nome: 'Ana Silva', email: 'ana@corp.com', cargo: 'Dev Senior', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_1', preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' } },
+        { id: 'usr_2', nome: 'Bruno Costa', email: 'bruno@corp.com', cargo: 'Product Designer', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_2', preferences: { notifications: true, theme: 'light', allowManualPunch: false, language: 'pt-BR' } },
+        { id: 'usr_772', nome: 'Lucas Ferreira', email: 'lucas.f@smartponto.com', cargo: 'Eng. Software', role: 'employee', createdAt: new Date(), companyId: 'comp_1', tenantId: 'comp_1', departmentId: 'dept_1', preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' } },
+        { id: 'usr_3', nome: 'Marcos Tech', email: 'marcos@tech.com', cargo: 'Analista Tech', role: 'employee', createdAt: new Date(), companyId: 'comp_2', tenantId: 'comp_2', departmentId: 'dept_4', preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' } },
       ];
     }
 

@@ -7,7 +7,7 @@
  * 13º, encargos patronais etc. — apenas somatórios a partir de lançamentos informados.
  */
 
-import { db, checkSupabaseConfigured } from '../../services/supabaseClient';
+import { db, checkSupabaseConfigured, isSupabaseConfigured } from '../../services/supabaseClient';
 
 export type EventoNatureza = 'provento' | 'desconto' | 'informativo';
 

@@ -140,6 +140,9 @@ export interface TimeRecord {
     userAgent: string;
   };
   adjustments?: Adjustment[];
+  /** Preenchido quando o backend expõe validação antifraude explícita */
+  validated?: boolean;
+  fraudScore?: number;
 }
 
 export type UserRole = 'employee' | 'admin' | 'supervisor' | 'hr';

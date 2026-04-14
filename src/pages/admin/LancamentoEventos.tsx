@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter as DbFilter } from '../../services/supabaseClient';
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
 
@@ -120,7 +120,7 @@ const AdminLancamentoEventos: React.FC = () => {
     }
     setLoadingData(true);
     try {
-      const filters: { column: string; operator: string; value: any }[] = [
+      const filters: DbFilter[] = [
         { column: 'company_id', operator: 'eq', value: user.companyId },
         { column: 'data', operator: 'gte', value: periodStart },
         { column: 'data', operator: 'lte', value: periodEnd },

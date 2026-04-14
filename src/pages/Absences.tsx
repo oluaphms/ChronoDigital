@@ -7,7 +7,7 @@ import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 import ModalForm from '../components/ModalForm';
 import { Button, Input, LoadingState } from '../../components/UI';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
 import { LoggingService } from '../../services/loggingService';
 import { LogSeverity } from '../../types';
 
@@ -44,7 +44,7 @@ const AbsencesPage: React.FC = () => {
       setIsLoadingData(true);
       setLoadError(null);
       try {
-        const filters: { column: string; operator: string; value: any }[] = [];
+        const filters: Filter[] = [];
         if (!isAdminView) {
           filters.push({ column: 'user_id', operator: 'eq', value: user.id });
         }

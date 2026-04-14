@@ -43,7 +43,7 @@ describe('Supabase connection', () => {
   it('storage list runs without throw (if bucket exists)', async () => {
     if (!isSupabaseConfigured) return;
     try {
-      await storage.list('avatars').catch(() => null);
+      await storage.from('avatars').list(undefined, { limit: 1 }).catch(() => null);
     } catch {
       // bucket pode não existir
     }

@@ -7,7 +7,7 @@ import {
   Scale,
   Banknote,
   MapPin,
-  User,
+  User as UserIcon,
   Settings,
   LogOut,
   ChevronLeft,
@@ -27,7 +27,7 @@ const EMPLOYEE_ITEMS = [
   { label: 'Mapa em tempo real', path: '/employee/monitoring', icon: MapPin },
   { label: 'Banco de Horas', path: '/employee/time-balance', icon: Scale },
   { label: 'Contracheque', path: '/employee/holerite', icon: Banknote },
-  { label: 'Perfil', path: '/employee/profile', icon: User },
+  { label: 'Perfil', path: '/employee/profile', icon: UserIcon },
   { label: 'Configurações', path: '/employee/settings', icon: Settings },
 ];
 

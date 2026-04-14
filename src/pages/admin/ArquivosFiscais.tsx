@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { FileText, Download } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../../services/supabaseClient';
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
 
@@ -72,7 +72,7 @@ const AdminArquivosFiscais: React.FC = () => {
     setGenerating(true);
     setMessage(null);
     try {
-      const filters: { column: string; operator: string; value: any }[] = [
+      const filters: Filter[] = [
         { column: 'company_id', operator: 'eq', value: user.companyId },
         { column: 'created_at', operator: 'gte', value: periodStart },
         { column: 'created_at', operator: 'lte', value: `${periodEnd}T23:59:59` },

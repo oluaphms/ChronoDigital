@@ -41,7 +41,7 @@ export default async function handler(request: Request): Promise<Response> {
     auth: { persistSession: false },
   });
 
-  const { data: { user } } = await sup.auth.getUser(token);
+  const { data: { user } } = await supabase.auth.getUser(token);
   if (!user) {
     return Response.json({ error: 'Token inválido ou expirado' }, { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }

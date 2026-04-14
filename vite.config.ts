@@ -114,7 +114,7 @@ export default defineConfig(({ mode }) => {
 
     resolve: {
       alias: {
-        '@': projectRoot,
+        '@': path.resolve(projectRoot, 'src'),
         ...reactAlias,
         // recharts (DataUtils.js) usa "import get from 'es-toolkit/compat/get'" mas es-toolkit só expõe named export
         'es-toolkit/compat/get': path.resolve(projectRoot, 'src/shim/es-toolkit-compat-get.js'),

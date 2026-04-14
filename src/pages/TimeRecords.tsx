@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from '../hooks/useCurrentUser';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
 import PageHeader from '../components/PageHeader';
 import DataTable from '../components/DataTable';
 import { LoadingState, Input } from '../../components/UI';
@@ -33,7 +33,7 @@ const TimeRecordsPage: React.FC = () => {
     const load = async () => {
       setIsLoadingData(true);
       try {
-        const filters: { column: string; operator: string; value: any }[] = [
+        const filters: Filter[] = [
           { column: 'user_id', operator: 'eq', value: user.id },
         ];
         if (dateFrom) {
@@ -45,7 +45,7 @@ const TimeRecordsPage: React.FC = () => {
 
         // Otimização: carregar apenas colunas necessárias com limite
         const res =
-          (await db.select('time_records', filters as any, {
+          (await db.select('time_records', filters, {
             columns: 'id, created_at, type, location, latitude, longitude, device_id',
             orderBy: { column: 'created_at', ascending: false },
             limit: 200,

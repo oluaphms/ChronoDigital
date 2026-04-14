@@ -7,7 +7,7 @@ import TimeClockButtons from '../components/TimeClockButtons';
 import { useToast } from '../components/ToastProvider';
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
 import { registerPunch } from '../rep/repEngine';
-import { LogType, PunchMethod } from '../../types';
+import { LogType, PunchMethod, LogSeverity } from '../../types';
 import { LoggingService } from '../../services/loggingService';
 import { NotificationService } from '../../services/notificationService';
 import { LoadingState } from '../../components/UI';
@@ -88,7 +88,7 @@ const TimeClockPage: React.FC = () => {
       });
 
       await LoggingService.log({
-        severity: 'info',
+        severity: LogSeverity.INFO,
         action: 'EMPLOYEE_CLOCK_EVENT',
         userId: user.id,
         userName: user.nome,

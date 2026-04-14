@@ -25,8 +25,9 @@ export interface ReportHeader {
   generatedAt: string;
 }
 
+/** Resumos podem incluir contagens, strings formatadas ou listas (ex.: ranking de risco). */
 export interface ReportSummary {
-  [key: string]: string | number;
+  [key: string]: string | number | ReadonlyArray<unknown>;
 }
 
 export interface ReportExportOptions {

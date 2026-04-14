@@ -123,7 +123,7 @@ const TimeAttendancePage: React.FC = () => {
         // Tentar carregar time_logs, mas não falhar se não existir
         let logRows: any[] = [];
         try {
-          logRows = (await db.select('time_logs', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }])) as Promise<any[]>;
+          logRows = (await db.select('time_logs', [{ column: 'company_id', operator: 'eq', value: effectiveCompanyId }])) as any[];
         } catch (e) {
           console.warn('time_logs não disponível ou erro ao carregar:', e);
           logRows = [];

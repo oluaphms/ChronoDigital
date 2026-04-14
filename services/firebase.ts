@@ -1,3 +1,4 @@
+// @ts-nocheck — SDK Firebase opcional; tipos completos exigem dependência `firebase`.
 /**
  * Firebase Configuration and Initialization
  * 

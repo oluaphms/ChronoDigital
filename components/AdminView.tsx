@@ -5,7 +5,7 @@ import { PontoService } from '../services/pontoService';
 import { LoggingService } from '../services/loggingService';
 import { PermissionService } from '../services/permissionService';
 import { adminUserService } from '../services/adminUserService';
-import { EmployeeSummary, TimeRecord, User, PunchMethod, LogType, LogSeverity, AuditLog, UserRole } from '../types';
+import { EmployeeSummary, TimeRecord, User, Company, PunchMethod, LogType, LogSeverity, AuditLog, UserRole } from '../types';
 import { Button, Input, Badge, LoadingState } from './UI';
 import ReportsView from './ReportsView';
 import AnalyticsView from './AnalyticsView';
@@ -80,6 +80,7 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
     role: 'employee' as UserRole,
   });
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createSuccess, setCreateSuccess] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<any>(null);
 
@@ -144,6 +145,19 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
     queryFn: () => PontoService.getCompany(admin.companyId),
     staleTime: 10 * 60 * 1000, // 10 minutos
   });
+
+  const patchCompanyFence = (partial: Partial<Company['settings']['fence']>) => {
+    queryClient.setQueryData<Company | undefined>(['company', admin.companyId], (prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        settings: {
+          ...prev.settings,
+          fence: { ...prev.settings.fence, ...partial },
+        },
+      };
+    });
+  };
 
   // ✅ OTIMIZADO: Usar useMutation para criar funcionário
   const { mutate: createEmployee, isPending: isCreating, error: createErrorMutation } = useMutation({
@@ -492,15 +506,15 @@ const AdminView: React.FC<AdminViewProps> = ({ admin }) => {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div className="space-y-3">
                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Latitude</label>
-                        <Input type="number" step="any" value={company.settings.fence.lat} onChange={e => setCompany({...company, settings: {...company.settings, fence: {...company.settings.fence, lat: parseFloat(e.target.value)}}})} />
+                        <Input type="number" step="any" value={company.settings.fence.lat} onChange={e => patchCompanyFence({ lat: parseFloat(e.target.value) })} />
                       </div>
                       <div className="space-y-3">
                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Longitude</label>
-                        <Input type="number" step="any" value={company.settings.fence.lng} onChange={e => setCompany({...company, settings: {...company.settings, fence: {...company.settings.fence, lng: parseFloat(e.target.value)}}})} />
+                        <Input type="number" step="any" value={company.settings.fence.lng} onChange={e => patchCompanyFence({ lng: parseFloat(e.target.value) })} />
                       </div>
                       <div className="space-y-3">
                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Raio (m)</label>
-                        <Input type="number" value={company.settings.fence.radius} onChange={e => setCompany({...company, settings: {...company.settings, fence: {...company.settings.fence, radius: parseInt(e.target.value)}}})} />
+                        <Input type="number" value={company.settings.fence.radius} onChange={e => patchCompanyFence({ radius: parseInt(e.target.value, 10) })} />
                       </div>
                     </div>
                   </div>

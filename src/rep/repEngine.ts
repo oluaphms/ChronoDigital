@@ -123,7 +123,7 @@ export async function registerPunch(params: RegisterPunchParams): Promise<Regist
       p_location: location ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy } : null,
       p_photo_url: photoUrl || null,
       p_source: source,
-    }),
+    }) as unknown as Promise<{ data: unknown; error: unknown }>,
     RPC_TIMEOUT_MS,
     'registrar ponto (REP)',
   );
@@ -184,13 +184,13 @@ export async function registerPunchSecure(params: RegisterPunchSecureParams): Pr
       p_ip_address: ipAddress ?? null,
       p_fraud_score: fraudScore ?? null,
       p_fraud_flags: fraudFlags && fraudFlags.length ? fraudFlags : null,
-    }),
+    }) as unknown as Promise<{ data: unknown; error: unknown }>,
     RPC_TIMEOUT_MS,
     'registrar ponto (REP seguro)',
   );
 
   if (error) {
-    if (error.code === '42883') {
+    if ((error as { code?: string }).code === '42883') {
       return registerPunch(params);
     }
     throw normalizePunchRegistrationError(error);

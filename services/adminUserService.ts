@@ -88,6 +88,7 @@ class AdminUserService {
         role: data.role || 'employee',
         createdAt: new Date(),
         companyId: admin.companyId,
+        tenantId: admin.companyId,
         departmentId: data.departmentId || '',
         avatar: authData.user.user_metadata?.avatar_url,
         preferences: {

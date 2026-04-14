@@ -21,6 +21,7 @@ import { getSupabaseClient } from '../lib/supabaseClient';
 export const supabase: SupabaseClient | null = getSupabaseClient();
 
 export { db, auth, storage, isSupabaseConfigured, checkSupabaseConfigured, SupabaseClient, createClient };
+export type { Filter, FilterOperator } from '../../services/supabaseClient';
 
 // Re-export para uso de timeout em queries críticas e reset de sessão
 export {

@@ -64,8 +64,9 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   type,
   size = 'md',
 }) => {
-  const statusType = type || getStatusType(status);
-  const styles = getStatusStyles(statusType, size);
+  const statusType: StatusType = type ?? getStatusType(status);
+  const resolvedSize = (size ?? 'md') as 'sm' | 'md' | 'lg';
+  const styles = getStatusStyles(statusType, resolvedSize);
 
   return <span className={styles}>{status}</span>;
 };

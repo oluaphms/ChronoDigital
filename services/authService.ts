@@ -112,7 +112,7 @@ class AuthService {
     if ('requestIdleCallback' in window) {
       window.requestIdleCallback(() => run(), { timeout: 3000 });
     } else {
-      window.setTimeout(run, 0);
+      globalThis.setTimeout(run, 0);
     }
   }
 
@@ -965,8 +965,8 @@ class AuthService {
    * Observar mudanças no estado de autenticação.
    * Em erro ao converter sessão (ex.: timeout no DB), limpa e chama callback(null) para evitar estado inconsistente e loop.
    */
-  onAuthStateChanged(callback: (user: User | null) => void) {
-    return auth.onAuthStateChange(async (event, session) => {
+  onAuthStateChanged(callback: (user: User | null) => void): () => void {
+    const { data } = auth.onAuthStateChange(async (event, session) => {
       /**
        * Durante o logout, ignorar qualquer evento do listener para evitar o loop:
        * signOut → SIGNED_OUT → listener tenta recuperar sessão → re-loga o usuário.
@@ -1058,6 +1058,9 @@ class AuthService {
         }
       }
     });
+    return () => {
+      data.subscription.unsubscribe();
+    };
   }
 }
 

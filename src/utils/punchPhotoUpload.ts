@@ -67,7 +67,7 @@ export async function uploadPunchPhotoWithRetry(
   opts?: { maxRetries?: number }
 ): Promise<UploadPunchPhotoResult> {
   const validation = validatePunchImageDataUrl(dataUrl);
-  if (!validation.ok) {
+  if (validation.ok === false) {
     return { publicUrl: null, error: validation.message, transientFailure: false };
   }
 

@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Plus, Pencil, Trash2, Copy, ChevronDown, ChevronRight } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../../services/supabaseClient';
 import { LoadingState } from '../../../components/UI';
 import type { WeeklyScheduleDay, DayScheduleType, DSRConfig, ExtrasConfig, TipoMarcacaoConfig } from '../../../types';
 
@@ -126,7 +126,9 @@ const AdminShifts: React.FC = () => {
     if (!isSupabaseConfigured) return;
     setLoadingData(true);
     try {
-      const filters = user?.companyId ? [{ column: 'company_id', operator: 'eq', value: user.companyId }] : undefined;
+      const filters: Filter[] | undefined = user?.companyId
+        ? [{ column: 'company_id', operator: 'eq', value: user.companyId }]
+        : undefined;
       const data = (await db.select('work_shifts', filters)) as any[];
       setRows(
         (data ?? []).map((r: any) => ({

@@ -43,6 +43,9 @@ const supabaseToTimeRecord = (row: any): TimeRecord => {
     photoUrl: row.photo_url,
     validated: row.validated,
     fraudScore: row.fraud_score,
+    ipAddress: row.ip_address ?? '',
+    deviceId: row.device_id ?? '',
+    deviceInfo: row.device_info ?? { browser: '', os: '', isMobile: false, userAgent: '' },
     adjustments: row.adjustments?.map((adj: any) => ({
       ...adj,
       timestamp: adj.timestamp ? new Date(adj.timestamp) : new Date(),
@@ -366,10 +369,9 @@ class SupabaseService {
       const byteArray = new Uint8Array(byteNumbers);
       const blob = new Blob([byteArray], { type: 'image/jpeg' });
       
-      const path = `photos/${userId}/${Date.now()}.jpg`;
-      await storage.upload('photos', path, blob);
-      
-      return storage.getPublicUrl('photos', path);
+      const relativePath = `${userId}/${Date.now()}.jpg`;
+      await storage.upload('photos', relativePath, blob);
+      return storage.getPublicUrl('photos', relativePath);
     } catch (error) {
       console.error('Erro ao fazer upload da foto:', error);
       // Fallback para base64

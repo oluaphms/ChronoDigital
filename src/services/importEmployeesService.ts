@@ -3,7 +3,7 @@
  * Validação CPF/email, mapeamento de campos, inserção em lote, log de erros.
  */
 
-import { db, supabase, checkSupabaseConfigured } from '../../services/supabaseClient';
+import { db, supabase, checkSupabaseConfigured, isSupabaseConfigured } from '../../services/supabaseClient';
 
 export const REQUIRED_FIELDS = ['nome_completo', 'cpf', 'data_admissao'] as const;
 export const TEMPLATE_HEADERS = [
@@ -24,6 +24,8 @@ export const TEMPLATE_HEADERS = [
 ] as const;
 
 export interface ImportRow {
+  /** Alias ocasional em planilhas */
+  nome?: string;
   nome_completo?: string;
   cpf?: string;
   email?: string;
@@ -38,14 +40,13 @@ export interface ImportRow {
   pis?: string;
   centro_custo?: string;
   supervisor?: string;
-  [key: string]: string | undefined;
 }
 
-export interface ValidatedRow extends ImportRow {
+export type ValidatedRow = ImportRow & {
   _rowIndex: number;
   _valid: boolean;
   _errors: string[];
-}
+};
 
 export interface MappedUser {
   id?: string;

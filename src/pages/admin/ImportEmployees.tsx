@@ -1,9 +1,9 @@
 /**
-import { Navigate } from 'react-router-dom';
  * Importação em massa de funcionários (SmartPonto).
  * Upload CSV/XLSX, preview, validação, confirmação e resumo.
  */
 
+import { Navigate } from 'react-router-dom';
 import React, { useState, useRef } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';

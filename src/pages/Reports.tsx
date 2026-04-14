@@ -4,7 +4,7 @@ import { BarChart3, CalendarRange, Download, FileText, Users } from 'lucide-reac
 import PageHeader from '../components/PageHeader';
 import { Button, LoadingState, EmptyState } from '../../components/UI';
 import { useCurrentUser } from '../hooks/useCurrentUser';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from 'recharts';
 
 type ReportType = 'productivity' | 'employee' | 'time' | 'project';
@@ -95,7 +95,7 @@ const ReportsPage: React.FC = () => {
     setError(null);
     try {
       if (reportType === 'productivity' || reportType === 'project') {
-        const conditions: { column: string; operator: string; value: any }[] = [
+        const conditions: Filter[] = [
           { column: 'company_id', operator: 'eq', value: user.companyId },
           { column: 'date', operator: 'gte', value: startDate },
           { column: 'date', operator: 'lte', value: endDate },
@@ -118,7 +118,7 @@ const ReportsPage: React.FC = () => {
         );
       }
       if (reportType === 'time' || reportType === 'project') {
-        const conditions: { column: string; operator: string; value: any }[] = [
+        const conditions: Filter[] = [
           { column: 'company_id', operator: 'eq', value: user.companyId },
           { column: 'date', operator: 'gte', value: startDate },
           { column: 'date', operator: 'lte', value: endDate },
@@ -139,7 +139,7 @@ const ReportsPage: React.FC = () => {
         );
       }
       if (reportType === 'employee') {
-        const conditions: { column: string; operator: string; value: any }[] = [
+        const conditions: Filter[] = [
           { column: 'company_id', operator: 'eq', value: user.companyId },
         ];
         if (employeeId) {

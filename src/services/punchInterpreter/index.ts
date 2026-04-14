@@ -4,7 +4,7 @@
  * detecta inconsistências e sugere correções (ex: entrada presumida).
  */
 
-import { db, checkSupabaseConfigured } from '../../../services/supabaseClient';
+import { db, isSupabaseConfigured } from '../../../services/supabaseClient';
 
 export type InterpretationStatus = 'normal' | 'corrigido' | 'suspeito';
 

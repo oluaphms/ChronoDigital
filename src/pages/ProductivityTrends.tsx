@@ -7,7 +7,7 @@ import StatCard from '../components/StatCard';
 import DataTable from '../components/DataTable';
 import { Button, LoadingState, EmptyState } from '../../components/UI';
 import { useCurrentUser } from '../hooks/useCurrentUser';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
 
 interface ProductivityLogRow {
   id: string;
@@ -114,7 +114,7 @@ const ProductivityTrendsPage: React.FC = () => {
     setError(null);
 
     try {
-      const conditions: { column: string; operator: string; value: any }[] = [
+      const conditions: Filter[] = [
         { column: 'company_id', operator: 'eq', value: user.companyId },
         { column: 'date', operator: 'gte', value: activeFilters.startDate },
         { column: 'date', operator: 'lte', value: activeFilters.endDate },

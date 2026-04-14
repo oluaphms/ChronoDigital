@@ -35,9 +35,9 @@ export async function enqueue<T>(task: Task<T>): Promise<T> {
     };
 
     if (running < maxConcurrent) {
-      run();
+      void run();
     } else {
-      queue.push({ run: () => run().then(resolve).catch(reject) });
+      queue.push({ run });
     }
   });
 }

@@ -233,7 +233,7 @@ export const PontoServiceOptimized = {
   // MOCK DATA (Replace with actual Supabase queries in production)
   // ========================================================================
 
-  private async getMockEmployees(companyId: string): Promise<EmployeeSummary[]> {
+  async getMockEmployees(companyId: string): Promise<EmployeeSummary[]> {
     return [
       {
         id: 'usr_1',
@@ -242,18 +242,26 @@ export const PontoServiceOptimized = {
         cargo: 'Dev Senior',
         role: 'employee',
         companyId,
+        tenantId: companyId,
         departmentId: 'dept_1',
+        createdAt: new Date(),
+        preferences: {
+          notifications: true,
+          theme: 'light',
+          allowManualPunch: true,
+          language: 'pt-BR',
+        },
         lastRecord: undefined,
         todayHours: '08h 30m',
         status: 'offline',
-        riskScore: 0
-      }
+        riskScore: 0,
+      },
     ];
   },
 
-  private async getMockRecords(userId: string): Promise<TimeRecord[]> {
+  async getMockRecords(_userId: string): Promise<TimeRecord[]> {
     return [];
-  }
+  },
 };
 
 // ============================================================================

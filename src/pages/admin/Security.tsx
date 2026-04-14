@@ -1,8 +1,8 @@
 /**
-import { Navigate } from 'react-router-dom';
  * Dashboard Antifraude – registros suspeitos, alertas, mapa de registros.
  */
 
+import { Navigate } from 'react-router-dom';
 import React, { useEffect, useState, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';

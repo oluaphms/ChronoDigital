@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Scale, User, TrendingUp, TrendingDown } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../../services/supabaseClient';
 import { LoadingState, Input } from '../../../components/UI';
 import { formatDateForTablePtBr } from '../../utils/timeCalculations';
 import RoleGuard from '../../components/auth/RoleGuard';
@@ -66,7 +66,7 @@ const AdminBankHours: React.FC = () => {
         const { bankRows, balanceRows } = await queryCache.getOrFetch(
           cacheKey,
           async () => {
-            const filters: { column: string; operator: string; value: any }[] = [
+            const filters: Filter[] = [
               { column: 'company_id', operator: 'eq', value: cid },
             ];
             if (filterUserId) filters.push({ column: 'employee_id', operator: 'eq', value: filterUserId });
@@ -75,7 +75,7 @@ const AdminBankHours: React.FC = () => {
 
             let balances: any[] = [];
             if (userIds.length > 0) {
-              const balanceFilters: { column: string; operator: string; value: any }[] = [
+              const balanceFilters: Filter[] = [
                 { column: 'month', operator: 'eq', value: monthFilter },
                 { column: 'user_id', operator: 'in', value: userIds },
               ];

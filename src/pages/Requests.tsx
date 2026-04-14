@@ -8,7 +8,7 @@ import ModalForm from '../components/ModalForm';
 import { Button, LoadingState } from '../../components/UI';
 import { formatRequestType, formatWorkflowStatus } from '../../lib/i18n';
 import { useLanguage } from '../contexts/LanguageContext';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
 import { NotificationService } from '../../services/notificationService';
 import { LoggingService } from '../../services/loggingService';
 import { LogSeverity } from '../../types';
@@ -46,7 +46,7 @@ const RequestsPage: React.FC = () => {
     const load = async () => {
       setIsLoadingData(true);
       try {
-        const filters: { column: string; operator: string; value: any }[] = [];
+        const filters: Filter[] = [];
         if (!isAdminView) {
           filters.push({ column: 'user_id', operator: 'eq', value: user.id });
         }
@@ -54,7 +54,7 @@ const RequestsPage: React.FC = () => {
         const res =
           (await db.select(
             'requests',
-            filters as any,
+            filters,
             { 
               columns: 'id, type, status, reason, created_at, user_id',
               orderBy: { column: 'created_at', ascending: false },

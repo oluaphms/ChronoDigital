@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ValidationService } from './validationService';
-import { LogType, TimeRecord, Company, GeoLocation, FraudFlag } from '../types';
+import { LogType, TimeRecord, Company, GeoLocation, FraudFlag, PunchMethod } from '../types';
 
 const baseCompany: Company = {
   id: 'c1',
@@ -21,7 +21,7 @@ function record(type: LogType, createdAt: Date): TimeRecord {
     userId: 'u1',
     companyId: 'c1',
     type,
-    method: 'manual',
+    method: PunchMethod.MANUAL,
     createdAt,
     ipAddress: '127.0.0.1',
     deviceId: 'd1',

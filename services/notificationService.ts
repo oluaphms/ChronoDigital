@@ -3,7 +3,7 @@
  */
 
 import { InAppNotification, NotificationStatus } from '../types';
-import { db, isSupabaseConfigured, supabase } from './supabaseClient';
+import { db, isSupabaseConfigured, supabase, type Filter } from './supabaseClient';
 
 const STORAGE_KEY = 'smartponto_notifications';
 const MAX_LOCAL = 100;
@@ -78,7 +78,7 @@ export const NotificationService = {
   async getAll(userId: string, includeResolved = false): Promise<InAppNotification[]> {
     if (isSupabaseConfigured) {
       try {
-        const filters: { column: string; operator: string; value: unknown }[] = [
+        const filters: Filter[] = [
           { column: 'user_id', operator: 'eq', value: userId },
           // Mostrar apenas notificações não lidas (read = false)
           { column: 'read', operator: 'eq', value: false },

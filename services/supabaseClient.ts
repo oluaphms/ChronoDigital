@@ -50,10 +50,21 @@ async function ensureSupabaseAuthSessionReady(client: SupabaseClient): Promise<v
   await sessionAuthWarmup;
 }
 
-// Tipos para filtros
-type FilterOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'in' | 'is' | 'contains';
+// Tipos para filtros (exportados para uso em páginas/serviços com db.select)
+export type FilterOperator =
+  | 'eq'
+  | 'neq'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'like'
+  | 'ilike'
+  | 'in'
+  | 'is'
+  | 'contains';
 
-interface Filter {
+export interface Filter {
   column: string;
   operator: FilterOperator;
   value: any;
@@ -444,6 +455,16 @@ export const storage = {
     const client = getSupabaseClient();
     if (!client) throw new Error('Supabase não inicializado');
     return client.storage.from(bucket);
+  },
+  upload: (bucket: string, path: string, body: Blob | File | ArrayBuffer | FormData, options?: Record<string, unknown>) => {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase não inicializado');
+    return client.storage.from(bucket).upload(path, body, options as any);
+  },
+  getPublicUrl: (bucket: string, path: string) => {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase não inicializado');
+    return client.storage.from(bucket).getPublicUrl(path).data.publicUrl;
   },
 };
 
