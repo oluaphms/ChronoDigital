@@ -141,7 +141,16 @@ const SmartDock: React.FC = () => {
   return (
     <>
       <nav
-        className={`fixed bottom-0 left-0 right-0 z-40 flex items-center backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-t border-slate-200/80 dark:border-slate-800/80 safe-area-pb py-2 lg:py-3 lg:left-1/2 lg:right-auto lg:bottom-6 lg:-translate-x-1/2 lg:rounded-2xl lg:border lg:border-slate-200/80 dark:lg:border-slate-800/80 lg:shadow-xl lg:max-w-2xl lg:w-full transition-transform duration-200 ease-out ${modalOpen ? 'translate-y-full opacity-0 pointer-events-none' : ''}`}
+        className={`
+          fixed bottom-0 left-0 right-0 z-40 flex items-center backdrop-blur-xl bg-white/80 dark:bg-slate-900/80
+          border-t border-slate-200/80 dark:border-slate-800/80 safe-area-pb py-2
+          /* Desktop: barra no fluxo (Layout coloca entre header e main), largura total — sem pill flutuante sobre o conteúdo */
+          lg:static lg:z-30 lg:bottom-auto lg:left-auto lg:right-auto lg:translate-x-0 lg:w-full
+          lg:rounded-none lg:shadow-none lg:max-w-none lg:border-x-0 lg:border-t-0 lg:border-b
+          lg:py-2.5
+          transition-transform duration-200 ease-out
+          ${modalOpen ? 'translate-y-full opacity-0 pointer-events-none lg:translate-y-0 lg:h-0 lg:min-h-0 lg:py-0 lg:overflow-hidden lg:border-0' : ''}
+        `}
         aria-label={i18n.t('layout.navLabel')}
         aria-hidden={modalOpen}
       >

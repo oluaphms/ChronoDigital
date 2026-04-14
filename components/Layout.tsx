@@ -122,10 +122,15 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
             </div>
           </header>
 
+          {/* Dock: no mobile fica fixo no rodapé; em lg+ entra no fluxo abaixo do header (evita “duas interfaces” + sobreposição da tabela). */}
+          <div className="print:hidden shrink-0">
+            <SmartDock />
+          </div>
+
           <main
             id="main-content"
             tabIndex={-1}
-            className="flex-1 overflow-y-auto custom-scrollbar focus:outline-none pb-24 lg:pb-24 print:overflow-visible print:h-auto print:pb-0 bg-slate-50/30 dark:bg-slate-950/40 min-h-0"
+            className="flex-1 overflow-y-auto custom-scrollbar focus:outline-none pb-24 lg:pb-6 print:overflow-visible print:h-auto print:pb-0 bg-slate-50/30 dark:bg-slate-950/40 min-h-0"
             role="main"
             aria-label={i18n.t('layout.mainContent')}
           >
@@ -135,7 +140,6 @@ const Layout: React.FC<LayoutProps> = ({ user, children, activeTab, setActiveTab
           </main>
 
           <div className="print:hidden">
-            <SmartDock />
             <RadialMenu />
             <CommandPalette />
           </div>

@@ -798,7 +798,9 @@ const AdminTimesheet: React.FC = () => {
 
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 print:border-0 print:shadow-none print:bg-transparent print:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0">
         {loadingData ? (
-          <div className="p-12 text-center text-slate-500">Carregando...</div>
+          <div className="p-12 min-h-[min(50vh,420px)] flex items-center justify-center text-center text-slate-500 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 bg-white/50 dark:bg-slate-900/30">
+            Carregando…
+          </div>
         ) : (
           <div className="overflow-x-auto overscroll-x-contain touch-pan-x rounded-xl border border-slate-100 dark:border-slate-800 md:border-0">
           <table className="w-full text-xs sm:text-sm min-w-[860px] md:min-w-0">
