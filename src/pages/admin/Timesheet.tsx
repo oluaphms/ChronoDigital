@@ -132,7 +132,6 @@ const AdminTimesheet: React.FC = () => {
   const [records, setRecords] = useState<any[]>([]);
   const [shiftSchedules, setShiftSchedules] = useState<any[]>([]);
   const [filterUserId, setFilterUserId] = useState<string>('');
-  const [filterDept, setFilterDept] = useState<string>('');
   const [periodStart, setPeriodStart] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
   const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [loadingData, setLoadingData] = useState(true);
@@ -217,14 +216,10 @@ const AdminTimesheet: React.FC = () => {
   const filteredRecords = useMemo(() => {
     let list = records;
     if (filterUserId) list = list.filter((r: any) => r.user_id === filterUserId);
-    if (filterDept) list = list.filter((r: any) => {
-      const emp = employees.find((e) => e.id === r.user_id);
-      return emp?.department_id === filterDept;
-    });
     if (periodStart) list = list.filter((r: any) => (r.created_at || '').slice(0, 10) >= periodStart);
     if (periodEnd) list = list.filter((r: any) => (r.created_at || '').slice(0, 10) <= periodEnd);
     return list;
-  }, [records, filterUserId, filterDept, periodStart, periodEnd, employees]);
+  }, [records, filterUserId, periodStart, periodEnd]);
 
   const buildRows = useMemo((): TimesheetRow[] => {
     /** Espelho só lista batidas após escolher um colaborador (evita exibir todos na grade). */
@@ -250,12 +245,6 @@ const AdminTimesheet: React.FC = () => {
     
     const rows: TimesheetRow[] = [];
     byUser.forEach((data, userId) => {
-      // Aplicar filtro de departamento
-      if (filterDept) {
-        const emp = employees.find((e) => e.id === userId);
-        if (emp?.department_id !== filterDept) return;
-      }
-      
       // Aplicar filtro de usuário
       if (filterUserId && userId !== filterUserId) return;
       
@@ -318,7 +307,7 @@ const AdminTimesheet: React.FC = () => {
     });
     
     return rows.sort((a, b) => a.userName.localeCompare(b.userName));
-  }, [filteredRecords, employees, shiftSchedules, periodStart, periodEnd, filterDept, filterUserId]);
+  }, [filteredRecords, employees, shiftSchedules, periodStart, periodEnd, filterUserId]);
 
   const handleExportPDF = async () => {
     if (!filterUserId) {
@@ -770,15 +759,6 @@ const AdminTimesheet: React.FC = () => {
             <option value="">Selecione o colaborador</option>
             {employees.map((e) => (
               <option key={e.id} value={e.id}>{e.nome}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Departamento</label>
-          <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white min-w-[180px]">
-            <option value="">Todos</option>
-            {departments.map((dept) => (
-              <option key={dept.id} value={dept.id}>{dept.name}</option>
             ))}
           </select>
         </div>
