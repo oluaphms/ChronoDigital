@@ -9,8 +9,8 @@ import { resolveTenantId } from '../../services/tenantScope';
 /** Chama a API para confirmar o e-mail do funcionário no Auth (permite login sem clicar em link). */
 async function confirmEmployeeEmailInAuth(email: string): Promise<void> {
   try {
-    const session = await auth.getSession();
-    const token = (session as { access_token?: string } | null)?.access_token;
+    const { data: { session } } = await auth.getSession();
+    const token = session?.access_token;
     if (!token) return;
     const base = (import.meta.env.VITE_APP_URL as string) || (typeof window !== 'undefined' ? window.location.origin : '');
     if (!base) return;
@@ -28,8 +28,8 @@ async function confirmEmployeeEmailInAuth(email: string): Promise<void> {
 /** Define ou altera a senha do funcionário no Auth (por e-mail). Usado na edição e na importação (senha provisória 123456). */
 async function setEmployeePasswordInAuth(email: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const session = await auth.getSession();
-    const token = (session as { access_token?: string } | null)?.access_token;
+    const { data: { session } } = await auth.getSession();
+    const token = session?.access_token;
     if (!token) return { success: false, error: 'Sessão do administrador não encontrada.' };
     const base = (import.meta.env.VITE_APP_URL as string) || (typeof window !== 'undefined' ? window.location.origin : '');
     if (!base) return { success: false, error: 'URL do app não resolvida.' };
@@ -65,8 +65,8 @@ async function createEmployeeAuthUser(params: { email: string; password: string;
   if (!email) throw new Error('E-mail é obrigatório.');
   if (!params.password?.trim()) throw new Error('Senha é obrigatória.');
 
-  const session = await auth.getSession();
-  const token = (session as { access_token?: string } | null)?.access_token;
+  const { data: { session } } = await auth.getSession();
+  const token = session?.access_token;
   if (!token) throw new Error('Sessão do administrador não encontrada. Faça login novamente.');
 
   const base = (import.meta.env.VITE_APP_URL as string) || (typeof window !== 'undefined' ? window.location.origin : '');
@@ -263,7 +263,7 @@ const AdminEmployees: React.FC = () => {
     }
     void (async () => {
       try {
-        const session = await auth.getSession();
+        const { data: { session } } = await auth.getSession();
         const u = session?.user;
         if (!u || cancelled) return;
         const meta = (u.user_metadata || {}) as Record<string, unknown>;

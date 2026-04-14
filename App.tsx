@@ -25,6 +25,7 @@ import {
   clearCurrentUserFromAllStorages,
 } from './services/supabaseClient';
 import { checkSupabaseConnection } from './src/services/checkSupabaseConnection';
+import { withTimeout } from './src/utils/withTimeout';
 import { logSupabaseError } from './src/services/errorLogger';
 import { validateLogin } from './lib/validationSchemas';
 import {
@@ -269,8 +270,8 @@ const AppMain: React.FC = () => {
 
     const initApp = async () => {
       try {
-        // Deve ser > tempo de getCurrentUser + db (rede lenta); senão força tela antes do perfil e dispara corrida no lock do Auth.
-        const INIT_APP_MAX_MS = 85000;
+        // Rede de segurança: getSession + getCurrentUser têm timeouts próprios; isto evita spinner eterno se algo travar.
+        const INIT_APP_MAX_MS = 60000;
         timeoutId = setTimeout(() => {
           if (isMounted) {
             console.warn('Initialization timeout - forcing app to load');
@@ -297,10 +298,24 @@ const AppMain: React.FC = () => {
           // Não loga falha aqui para não poluir o console; login mostrará erro se precisar.
         });
 
-        // Sem JWT: abrir login imediatamente (getCurrentUser pode levar ~60s em rede/RLS lenta).
+        // Supabase retorna { data: { session } }; não usar session.user no objeto raiz.
+        // Timeout em getSession evita hang (IndexedDB/rede) que antes só era cortado aos 85s na Vercel.
         try {
-          const session = await auth.getSession();
-          if (!session?.user) {
+          const sessionResult = await withTimeout(auth.getSession(), 15000, 'auth.getSession').catch(
+            (err: unknown) => {
+              console.warn('[App] auth.getSession lento ou indisponível:', err);
+              return null;
+            }
+          );
+          if (!sessionResult) {
+            if (isMounted) {
+              clearTimeout(timeoutId);
+              setIsInitialLoading(false);
+            }
+            return;
+          }
+          const jwtSession = sessionResult.data?.session ?? null;
+          if (!jwtSession?.user) {
             if (isMounted) {
               clearTimeout(timeoutId);
               setIsInitialLoading(false);

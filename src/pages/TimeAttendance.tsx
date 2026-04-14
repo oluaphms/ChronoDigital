@@ -62,7 +62,7 @@ const TimeAttendancePage: React.FC = () => {
     }
     void (async () => {
       try {
-        const session = await auth.getSession();
+        const { data: { session } } = await auth.getSession();
         const u = session?.user;
         if (!u || cancelled) return;
         const meta = (u.user_metadata || {}) as Record<string, unknown>;
