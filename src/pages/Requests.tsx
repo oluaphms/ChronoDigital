@@ -8,13 +8,15 @@ import ModalForm from '../components/ModalForm';
 import { Button, LoadingState } from '../../components/UI';
 import { formatRequestType, formatWorkflowStatus } from '../../lib/i18n';
 import { useLanguage } from '../contexts/LanguageContext';
-import { db, isSupabaseConfigured, type Filter } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, supabase, type Filter } from '../services/supabaseClient';
 import { NotificationService } from '../../services/notificationService';
 import { LoggingService } from '../../services/loggingService';
 import { LogSeverity } from '../../types';
 import { useToast } from '../components/ToastProvider';
 import { ExpandableTextCell } from '../components/ClickableFullContent';
-import { invalidatePendingRequestsCachesForUsers } from '../services/queryCache';
+import { invalidateAfterPunch, invalidatePendingRequestsCachesForUsers } from '../services/queryCache';
+import { mapPunchTypeToDb, TIPOS_BATIDA } from '../constants/punchTypes';
+import { localDateAndTimeToIsoUtc } from '../utils/localDateTimeToIso';
 
 interface RequestRow {
   id: string;
@@ -23,6 +25,23 @@ interface RequestRow {
   reason: string;
   created_at: string;
   user_id: string;
+  company_id?: string;
+  /** Ajuste de ponto: data/hora/tipo da batida solicitada */
+  metadata?: Record<string, unknown> | null;
+}
+
+function getAdjustmentMeta(row: RequestRow): {
+  date: string;
+  time: string;
+  punchType: string;
+} | null {
+  if (row.type !== 'adjustment' || !row.metadata || typeof row.metadata !== 'object') return null;
+  const m = row.metadata as Record<string, unknown>;
+  const date = typeof m.adjustment_date === 'string' ? m.adjustment_date.trim() : '';
+  const time = typeof m.adjustment_time === 'string' ? m.adjustment_time.trim() : '';
+  const punchType = typeof m.punch_type === 'string' ? m.punch_type.trim() : 'ENTRADA';
+  if (!date || !time) return null;
+  return { date, time, punchType };
 }
 
 const RequestsPage: React.FC = () => {
@@ -33,9 +52,18 @@ const RequestsPage: React.FC = () => {
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState<{ type: string; reason: string }>({
+  const [form, setForm] = useState<{
+    type: string;
+    reason: string;
+    adjustment_date: string;
+    adjustment_time: string;
+    punch_type: string;
+  }>({
     type: 'adjustment',
     reason: '',
+    adjustment_date: new Date().toISOString().slice(0, 10),
+    adjustment_time: '09:00',
+    punch_type: 'ENTRADA',
   });
 
   const isAdminView = user?.role === 'admin' || user?.role === 'hr';
@@ -55,8 +83,8 @@ const RequestsPage: React.FC = () => {
           (await db.select(
             'requests',
             filters,
-            { 
-              columns: 'id, type, status, reason, created_at, user_id',
+            {
+              columns: 'id, type, status, reason, created_at, user_id, company_id, metadata',
               orderBy: { column: 'created_at', ascending: false },
               limit: 200,
             },
@@ -70,6 +98,8 @@ const RequestsPage: React.FC = () => {
             reason: r.reason,
             created_at: r.created_at,
             user_id: r.user_id,
+            company_id: r.company_id,
+            metadata: r.metadata ?? null,
           })),
         );
       } catch (e) {
@@ -83,7 +113,13 @@ const RequestsPage: React.FC = () => {
   }, [user, isAdminView]);
 
   const openCreate = () => {
-    setForm({ type: 'adjustment', reason: '' });
+    setForm({
+      type: 'adjustment',
+      reason: '',
+      adjustment_date: new Date().toISOString().slice(0, 10),
+      adjustment_time: '09:00',
+      punch_type: 'ENTRADA',
+    });
     setIsModalOpen(true);
   };
 
@@ -98,6 +134,12 @@ const RequestsPage: React.FC = () => {
       toast.addToast('error', 'Informe o motivo (mínimo 3 caracteres).');
       return;
     }
+    if (form.type === 'adjustment') {
+      if (!form.adjustment_date || !form.adjustment_time) {
+        toast.addToast('error', 'Informe a data e o horário da batida solicitada.');
+        return;
+      }
+    }
     if (!user.companyId) {
       toast.addToast('error', 'Seu cadastro está sem empresa. Contate o RH.');
       return;
@@ -107,7 +149,7 @@ const RequestsPage: React.FC = () => {
     try {
       const id = crypto.randomUUID();
       const createdAt = new Date().toISOString();
-      await db.insert('requests', {
+      const payload: Record<string, unknown> = {
         id,
         user_id: user.id,
         company_id: user.companyId,
@@ -115,7 +157,16 @@ const RequestsPage: React.FC = () => {
         status: 'pending',
         reason,
         created_at: createdAt,
-      });
+      };
+      if (form.type === 'adjustment') {
+        payload.metadata = {
+          adjustment_date: form.adjustment_date,
+          adjustment_time: form.adjustment_time,
+          punch_type: form.punch_type,
+        };
+      }
+
+      await db.insert('requests', payload);
 
       setRows((prev) => [
         {
@@ -125,6 +176,11 @@ const RequestsPage: React.FC = () => {
           status: 'pending',
           reason,
           created_at: createdAt,
+          company_id: user.companyId,
+          metadata:
+            form.type === 'adjustment'
+              ? (payload.metadata as RequestRow['metadata'])
+              : null,
         },
         ...prev,
       ]);
@@ -183,7 +239,13 @@ const RequestsPage: React.FC = () => {
         /* log opcional */
       }
 
-      setForm({ type: 'adjustment', reason: '' });
+      setForm({
+        type: 'adjustment',
+        reason: '',
+        adjustment_date: new Date().toISOString().slice(0, 10),
+        adjustment_time: '09:00',
+        punch_type: 'ENTRADA',
+      });
       setIsModalOpen(false);
     } catch (err: unknown) {
       const msg =
@@ -199,6 +261,50 @@ const RequestsPage: React.FC = () => {
 
   const handleStatusChange = async (row: RequestRow, status: 'approved' | 'rejected') => {
     if (!user || !isSupabaseConfigured) return;
+
+    const companyId = row.company_id ?? user.companyId;
+    if (!companyId) {
+      toast.addToast('error', 'Empresa não identificada para esta solicitação.');
+      return;
+    }
+
+    if (status === 'approved' && row.type === 'adjustment') {
+      const adj = getAdjustmentMeta(row);
+      if (adj) {
+        if (!supabase) {
+          toast.addToast('error', 'Cliente indisponível. Tente novamente.');
+          return;
+        }
+        try {
+          const iso = localDateAndTimeToIsoUtc(adj.date, adj.time);
+          const dbType = mapPunchTypeToDb(adj.punchType);
+          const { error: rpcError } = await supabase.rpc('insert_time_record_for_user', {
+            p_user_id: row.user_id,
+            p_company_id: companyId,
+            p_type: dbType,
+            p_method: 'admin',
+            p_source: 'request',
+            p_timestamp: iso,
+            p_manual_reason: `Aprovado via solicitação ${row.id}: ${row.reason}`,
+          });
+          if (rpcError) throw rpcError;
+          invalidateAfterPunch(row.user_id, companyId);
+        } catch (e: unknown) {
+          console.error('Erro ao inserir batida da solicitação:', e);
+          const msg =
+            e && typeof e === 'object' && 'message' in e
+              ? String((e as { message?: string }).message)
+              : 'Falha ao registrar a batida.';
+          toast.addToast('error', msg);
+          return;
+        }
+      } else {
+        toast.addToast(
+          'info',
+          'Esta solicitação não possui data/hora da batida nos dados. Registre a batida no Espelho de Ponto ou peça um novo pedido com os dados completos.',
+        );
+      }
+    }
 
     try {
       await db.update('requests', row.id, { status });
@@ -229,13 +335,19 @@ const RequestsPage: React.FC = () => {
       await NotificationService.resolveByReference(row.user_id, row.id, 'request');
 
       // Cria nova notificação informando o resultado
+      const approvedAdjustment = status === 'approved' && row.type === 'adjustment';
+      const hadMeta = !!getAdjustmentMeta(row);
       await NotificationService.create({
         userId: row.user_id,
         type: status === 'approved' ? 'success' : 'warning',
         title: 'Solicitação atualizada',
         message:
           status === 'approved'
-            ? 'Sua solicitação foi aprovada.'
+            ? approvedAdjustment && hadMeta
+              ? 'Sua solicitação de ajuste foi aprovada e a batida foi registrada no espelho de ponto.'
+              : approvedAdjustment
+                ? 'Sua solicitação de ajuste foi aprovada. O RH pode registrar a batida no espelho de ponto se ainda não constar.'
+                : 'Sua solicitação foi aprovada.'
             : 'Sua solicitação foi rejeitada.',
         metadata: { requestId: row.id },
       });
@@ -338,6 +450,24 @@ const RequestsPage: React.FC = () => {
               ),
             },
             {
+              key: 'adjustment',
+              header: 'Batida solicitada',
+              render: (row) => {
+                const adj = getAdjustmentMeta(row);
+                if (!adj) {
+                  return <span className="text-slate-400 text-sm">—</span>;
+                }
+                const label =
+                  TIPOS_BATIDA.find((t) => t.value === adj.punchType)?.label ?? adj.punchType;
+                return (
+                  <ExpandableTextCell
+                    label="Batida"
+                    value={`${adj.date} ${adj.time} · ${label}`}
+                  />
+                );
+              },
+            },
+            {
               key: 'reason',
               header: 'Motivo',
               render: (row) => <ExpandableTextCell label="Motivo" value={row.reason} />,
@@ -416,7 +546,16 @@ const RequestsPage: React.FC = () => {
             >
               Cancelar
             </Button>
-            <Button type="submit" size="sm" disabled={submitting || !form.reason.trim()}>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={
+                submitting ||
+                !form.reason.trim() ||
+                (form.type === 'adjustment' &&
+                  (!form.adjustment_date.trim() || !form.adjustment_time.trim()))
+              }
+            >
               {submitting ? 'Enviando…' : 'Enviar'}
             </Button>
           </div>
@@ -435,6 +574,54 @@ const RequestsPage: React.FC = () => {
             <option value="vacation">Férias</option>
             <option value="shift_change">Mudança de turno</option>
           </select>
+          {form.type === 'adjustment' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Data da batida
+                </label>
+                <input
+                  type="date"
+                  className="mt-1 w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm"
+                  value={form.adjustment_date}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, adjustment_date: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Horário
+                </label>
+                <input
+                  type="time"
+                  className="mt-1 w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm"
+                  value={form.adjustment_time}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, adjustment_time: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Tipo de batida
+                </label>
+                <select
+                  className="mt-1 w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm"
+                  value={form.punch_type}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, punch_type: e.target.value }))
+                  }
+                >
+                  {TIPOS_BATIDA.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
               Motivo

@@ -140,6 +140,7 @@ const AdminTimesheet: React.FC = () => {
   const [records, setRecords] = useState<any[]>([]);
   const [shiftSchedules, setShiftSchedules] = useState<any[]>([]);
   const [filterUserId, setFilterUserId] = useState<string>('');
+  const [filterDepartmentId, setFilterDepartmentId] = useState<string>('');
   const [periodStart, setPeriodStart] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
   const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [loadingData, setLoadingData] = useState(true);
@@ -220,6 +221,16 @@ const AdminTimesheet: React.FC = () => {
       cancelled = true;
     };
   }, [user?.companyId, periodStart, periodEnd]);
+
+  const employeesForSelect = useMemo(() => {
+    if (!filterDepartmentId) return employees;
+    return employees.filter((e) => e.department_id === filterDepartmentId);
+  }, [employees, filterDepartmentId]);
+
+  const departmentsSorted = useMemo(
+    () => [...departments].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [departments],
+  );
 
   const filteredRecords = useMemo(() => {
     let list = records;
@@ -783,7 +794,31 @@ const AdminTimesheet: React.FC = () => {
         <div>
           <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-3">Filtros</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 gap-y-3">
-            <div className="sm:col-span-2 lg:col-span-5">
+            <div className="sm:col-span-2 lg:col-span-3">
+              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Departamento</label>
+              <select
+                value={filterDepartmentId}
+                onChange={(e) => {
+                  const nextDept = e.target.value;
+                  setFilterDepartmentId(nextDept);
+                  setFilterUserId((prev) => {
+                    if (!prev) return prev;
+                    const emp = employees.find((x) => x.id === prev);
+                    if (!nextDept || emp?.department_id === nextDept) return prev;
+                    return '';
+                  });
+                }}
+                className="w-full min-w-0 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              >
+                <option value="">Todos</option>
+                {departmentsSorted.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-4">
               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Colaborador</label>
               <select
                 value={filterUserId}
@@ -791,12 +826,12 @@ const AdminTimesheet: React.FC = () => {
                 className="w-full min-w-0 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
               >
                 <option value="">Selecione o colaborador</option>
-                {employees.map((e) => (
+                {employeesForSelect.map((e) => (
                   <option key={e.id} value={e.id}>{e.nome}</option>
                 ))}
               </select>
             </div>
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-2">
               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Período (início)</label>
               <input
                 type="date"
@@ -805,7 +840,7 @@ const AdminTimesheet: React.FC = () => {
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
               />
             </div>
-            <div className="lg:col-span-4">
+            <div className="lg:col-span-3">
               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Período (fim)</label>
               <input
                 type="date"
@@ -881,7 +916,11 @@ const AdminTimesheet: React.FC = () => {
           <div className="p-4 sm:p-6 min-h-[min(50vh,420px)] rounded-2xl border border-slate-200/80 dark:border-slate-700/80 bg-white/50 dark:bg-slate-900/30">
             <TimesheetTableSkeleton variant="admin" />
           </div>
-        ) : !filterUserId && employees.length > 0 ? (
+        ) : filterDepartmentId && employeesForSelect.length === 0 && employees.length > 0 ? (
+          <div className="p-12 sm:p-16 text-center">
+            <p className="text-slate-600 dark:text-slate-400 text-base font-medium">Nenhum colaborador neste departamento</p>
+          </div>
+        ) : !filterUserId && employeesForSelect.length > 0 ? (
           <div className="p-12 sm:p-16 text-center">
             <p className="text-slate-600 dark:text-slate-400 text-base font-medium">Selecione o colaborador</p>
           </div>
@@ -919,54 +958,59 @@ const AdminTimesheet: React.FC = () => {
                       {isExpanded ? 'Ocultar batidas' : 'Batidas do dia'}
                     </button>
                   </div>
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                    <div className="min-w-0">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Entrada</dt>
-                      <dd className="mt-0.5 min-w-0">
-                        <ExpandableTextCell
-                          label="Entrada (início)"
-                          value={sum?.entradaInicio || ''}
-                          empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
-                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : sum?.hasLateEntry ? 'text-red-600 dark:text-red-400' : ''}
-                        />
-                      </dd>
+                  <dl className="space-y-3 text-sm">
+                    {/* Uma linha: quatro marcações (rótulos curtos para caber em telas estreitas) */}
+                    <div className="rounded-lg bg-slate-50/80 dark:bg-slate-800/40 px-1.5 py-2 border border-slate-100 dark:border-slate-700/80">
+                      <div className="grid grid-cols-4 gap-x-1 gap-y-0 min-w-0">
+                        <div className="min-w-0 text-center border-r border-slate-200/80 dark:border-slate-600/50 pr-1 last:border-r-0 last:pr-0">
+                          <dt className="text-[9px] font-bold uppercase tracking-tight text-slate-500 dark:text-slate-400 leading-tight">Entr.</dt>
+                          <dd className="mt-0.5 min-w-0 flex justify-center [&_button]:text-center [&_button]:justify-center">
+                            <ExpandableTextCell
+                              label="Entrada (início)"
+                              value={sum?.entradaInicio || ''}
+                              empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
+                              className={`text-[11px] sm:text-xs tabular-nums ${sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : sum?.hasLateEntry ? 'text-red-600 dark:text-red-400' : ''}`}
+                            />
+                          </dd>
+                        </div>
+                        <div className="min-w-0 text-center border-r border-slate-200/80 dark:border-slate-600/50 pr-1 last:border-r-0 last:pr-0">
+                          <dt className="text-[9px] font-bold uppercase tracking-tight text-slate-500 dark:text-slate-400 leading-tight">Int.</dt>
+                          <dd className="mt-0.5 min-w-0 flex justify-center [&_button]:text-center [&_button]:justify-center">
+                            <ExpandableTextCell
+                              label="Intervalo (pausa)"
+                              value={sum?.saidaIntervalo || ''}
+                              empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
+                              className={`text-[11px] sm:text-xs tabular-nums ${sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}`}
+                            />
+                          </dd>
+                        </div>
+                        <div className="min-w-0 text-center border-r border-slate-200/80 dark:border-slate-600/50 pr-1 last:border-r-0 last:pr-0">
+                          <dt className="text-[9px] font-bold uppercase tracking-tight text-slate-500 dark:text-slate-400 leading-tight">Ret.</dt>
+                          <dd className="mt-0.5 min-w-0 flex justify-center [&_button]:text-center [&_button]:justify-center">
+                            <ExpandableTextCell
+                              label="Retorno"
+                              value={sum?.voltaIntervalo || ''}
+                              empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
+                              className={`text-[11px] sm:text-xs tabular-nums ${sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}`}
+                            />
+                          </dd>
+                        </div>
+                        <div className="min-w-0 text-center border-r border-slate-200/80 dark:border-slate-600/50 pr-1 last:border-r-0 last:pr-0">
+                          <dt className="text-[9px] font-bold uppercase tracking-tight text-slate-500 dark:text-slate-400 leading-tight">Saí.</dt>
+                          <dd className="mt-0.5 min-w-0 flex justify-center [&_button]:text-center [&_button]:justify-center">
+                            <ExpandableTextCell
+                              label="Saída (final)"
+                              value={sum?.saidaFinal || ''}
+                              empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
+                              className={`text-[11px] sm:text-xs tabular-nums ${sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}`}
+                            />
+                          </dd>
+                        </div>
+                      </div>
                     </div>
                     <div className="min-w-0">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Intervalo</dt>
-                      <dd className="mt-0.5 min-w-0">
-                        <ExpandableTextCell
-                          label="Intervalo (pausa)"
-                          value={sum?.saidaIntervalo || ''}
-                          empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
-                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}
-                        />
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Retorno</dt>
-                      <dd className="mt-0.5 min-w-0">
-                        <ExpandableTextCell
-                          label="Retorno"
-                          value={sum?.voltaIntervalo || ''}
-                          empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
-                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}
-                        />
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Saída</dt>
-                      <dd className="mt-0.5 min-w-0">
-                        <ExpandableTextCell
-                          label="Saída (final)"
-                          value={sum?.saidaFinal || ''}
-                          empty={sum?.isDayOff ? 'FOLGA' : sum?.hasAbsence ? 'FALTA' : '—'}
-                          className={sum?.isDayOff ? 'text-green-600 dark:text-green-400 font-bold' : sum?.hasAbsence ? 'text-red-600 dark:text-red-400 font-bold' : ''}
-                        />
-                      </dd>
-                    </div>
-                    <div className="min-w-0 col-span-2">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Horas / status</dt>
-                      <dd className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <dt className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">Horas / status</dt>
+                      <dd className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                         <ExpandableTextCell
                           label="Horas trabalhadas"
                           value={sum?.workedHours || ''}
@@ -977,9 +1021,9 @@ const AdminTimesheet: React.FC = () => {
                         <ExpandableTextCell label="Status" value={sum?.status || 'OK'} />
                       </dd>
                     </div>
-                    <div className="min-w-0 col-span-2">
-                      <dt className="text-[10px] font-bold uppercase text-slate-500">Localização (última batida c/ GPS)</dt>
-                      <dd className="mt-0.5 text-sm min-w-0">
+                    <div className="min-w-0">
+                      <dt className="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">Localização (última batida c/ GPS)</dt>
+                      <dd className="mt-1 text-sm min-w-0">
                         {sum?.locationCoords ? (
                           <ExpandableStreetCell lat={sum.locationCoords.lat} lng={sum.locationCoords.lng} previewMaxLength={56} />
                         ) : (

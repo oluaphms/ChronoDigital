@@ -3,6 +3,7 @@ import { X, MapPin, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '../../components/UI';
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
 import { TIPOS_BATIDA, mapPunchTypeToDb } from '../constants/punchTypes';
+import { localDateAndTimeToIsoUtc } from '../utils/localDateTimeToIso';
 
 interface AddTimeRecordModalProps {
   isOpen: boolean;
@@ -177,7 +178,7 @@ export const AddTimeRecordModal: React.FC<AddTimeRecordModalProps> = ({
     setSubmitHint(null);
     setSubmitting(true);
     try {
-      const created_at = `${form.date}T${form.time}:00.000Z`;
+      const created_at = localDateAndTimeToIsoUtc(form.date, form.time);
       const selectedJustificativa = justificativas.find(j => j.id === form.justificativa_id);
       let reason = form.manual_reason.trim() ||
         (selectedJustificativa ? `${selectedJustificativa.codigo} - ${selectedJustificativa.descricao}` : 'Batida adicionada manualmente');
