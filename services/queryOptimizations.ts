@@ -31,7 +31,7 @@ export const timeRecordsQueries = {
     return getClient()
       .from('time_records')
       .select(
-        'id, user_id, type, method, created_at, location, status'
+        'id, user_id, type, method, created_at, location, company_id'
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -43,7 +43,7 @@ export const timeRecordsQueries = {
     return getClient()
       .from('time_records')
       .select(
-        'id, user_id, type, created_at, status, company_id'
+        'id, user_id, type, created_at, company_id'
       )
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
@@ -339,7 +339,7 @@ export async function getRecordsByIds(recordIds: string[]) {
 
   return getClient()
     .from('time_records')
-    .select('id, user_id, type, created_at, status')
+    .select('id, user_id, type, created_at, company_id')
     .in('id', recordIds);
 }
 

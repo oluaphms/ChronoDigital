@@ -1,3 +1,8 @@
+/** Hobby: máx. 10s; Pro pode aumentar no dashboard ou em vercel.json. */
+export const config = {
+  maxDuration: 10,
+};
+
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -5,8 +10,9 @@ const corsHeaders: Record<string, string> = {
 };
 
 async function resolveAddressFromCoordinates(lat: number, lng: number): Promise<string> {
-  const FETCH_TIMEOUT = 5000; // 5 segundos por API
-  const MAX_RETRIES = 2;
+  /** Duas chamadas em sequência (Nominatim + Photon); sem retry para caber em maxDuration 10s. */
+  const FETCH_TIMEOUT = 4000;
+  const MAX_RETRIES = 0;
 
   async function fetchWithTimeout(url: string, options: RequestInit = {}, retries = 0): Promise<Response> {
     const controller = new AbortController();
@@ -82,48 +88,48 @@ async function resolveAddressFromCoordinates(lat: number, lng: number): Promise<
 
   let text = '';
 
-  // Tentar Photon
+  // 1) Nominatim primeiro (costuma responder melhor de servidores; uso político do OSM)
   try {
-    const photonUrl = new URL('https://photon.komoot.io/reverse');
-    photonUrl.searchParams.set('lat', String(lat));
-    photonUrl.searchParams.set('lon', String(lng));
-    photonUrl.searchParams.set('lang', 'pt');
-    
-    const res = await fetchWithTimeout(photonUrl.toString(), {
-      headers: { Accept: 'application/json' },
+    const nominatimUrl = new URL('https://nominatim.openstreetmap.org/reverse');
+    nominatimUrl.searchParams.set('format', 'jsonv2');
+    nominatimUrl.searchParams.set('lat', String(lat));
+    nominatimUrl.searchParams.set('lon', String(lng));
+    nominatimUrl.searchParams.set('accept-language', 'pt-BR');
+
+    const nomRes = await fetchWithTimeout(nominatimUrl.toString(), {
+      headers: NOMINATIM_HEADERS,
     });
-    if (res.ok) {
-      const data = (await res.json()) as {
-        features?: Array<{ properties?: Record<string, unknown> }>;
-      };
-      const props = data?.features?.[0]?.properties;
-      if (props) {
-        text = formatPhotonProperties(props).trim();
-      }
+    if (nomRes.ok) {
+      const nomData = (await nomRes.json()) as { display_name?: string; address?: Record<string, unknown> };
+      const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
+      text = fromAddress || String(nomData.display_name || '').trim();
     }
   } catch (e) {
-    console.warn('Photon reverse geocode failed:', e instanceof Error ? e.message : e);
+    console.warn('Nominatim reverse geocode failed:', e instanceof Error ? e.message : e);
   }
 
-  // Fallback para Nominatim
+  // 2) Photon como fallback
   if (!text) {
     try {
-      const nominatimUrl = new URL('https://nominatim.openstreetmap.org/reverse');
-      nominatimUrl.searchParams.set('format', 'jsonv2');
-      nominatimUrl.searchParams.set('lat', String(lat));
-      nominatimUrl.searchParams.set('lon', String(lng));
-      nominatimUrl.searchParams.set('accept-language', 'pt-BR');
-      
-      const nomRes = await fetchWithTimeout(nominatimUrl.toString(), {
-        headers: NOMINATIM_HEADERS,
+      const photonUrl = new URL('https://photon.komoot.io/reverse');
+      photonUrl.searchParams.set('lat', String(lat));
+      photonUrl.searchParams.set('lon', String(lng));
+      photonUrl.searchParams.set('lang', 'pt');
+
+      const res = await fetchWithTimeout(photonUrl.toString(), {
+        headers: { Accept: 'application/json' },
       });
-      if (nomRes.ok) {
-        const nomData = (await nomRes.json()) as { display_name?: string; address?: Record<string, unknown> };
-        const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
-        text = fromAddress || String(nomData.display_name || '').trim();
+      if (res.ok) {
+        const data = (await res.json()) as {
+          features?: Array<{ properties?: Record<string, unknown> }>;
+        };
+        const props = data?.features?.[0]?.properties;
+        if (props) {
+          text = formatPhotonProperties(props).trim();
+        }
       }
     } catch (e) {
-      console.warn('Nominatim reverse geocode failed:', e instanceof Error ? e.message : e);
+      console.warn('Photon reverse geocode failed:', e instanceof Error ? e.message : e);
     }
   }
 

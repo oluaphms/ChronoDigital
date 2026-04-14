@@ -97,23 +97,22 @@ function isDayOffForEmployee(date: string, employeeId: string, shiftSchedules: a
     const month = parseInt(parts[1], 10) - 1; // JavaScript months are 0-indexed
     const day = parseInt(parts[2], 10);
     
-    // Criar data em UTC para evitar problemas de timezone
-    const dateObj = new Date(Date.UTC(year, month, day));
-    const utcDayOfWeek = dateObj.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    
-    // Converter para o mapeamento usado em employee_shift_schedule: 0 = Monday, 6 = Sunday
-    // getUTCDay: 0=Sunday, 1=Monday, ..., 6=Saturday
-    // employee_shift_schedule: 0=Monday, 1=Tuesday, ..., 6=Sunday
-    const dayOfWeek = utcDayOfWeek === 0 ? 6 : utcDayOfWeek - 1;
-    
+    // Data civil local (YYYY-MM-DD) → dia da semana no fuso do navegador (alinhado à escala cadastrada)
+    const dateObj = new Date(year, month, day);
+    const jsDay = dateObj.getDay(); // 0=dom … 6=sab
+    const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1; // employee_shift_schedule: 0=seg … 6=dom
+
     const schedule = shiftSchedules.find(
       (s: any) => s.employee_id === employeeId && s.day_of_week === dayOfWeek
     );
-    
-    if (!schedule) {
-      console.warn(`No schedule found for employee ${employeeId} on day ${dayOfWeek} (UTC day: ${utcDayOfWeek})`);
+
+    if (!schedule && import.meta.env.DEV) {
+      console.warn(
+        `[Timesheet] Sem escala para funcionário ${employeeId.slice(0, 8)}… dia ${dayOfWeek} (calendário local)`
+      );
       return false;
     }
+    if (!schedule) return false;
     
     return schedule?.is_day_off === true;
   } catch (e) {
