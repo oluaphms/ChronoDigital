@@ -150,9 +150,10 @@ export function ExpandableStreetCell({
     };
   }, [lat, lng]);
 
+  const coordHint = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   const preview =
     loading && !line
-      ? 'Carregando…'
+      ? coordHint
       : line.length > previewMaxLength
         ? `${line.slice(0, previewMaxLength).trimEnd()}…`
         : line;
@@ -171,7 +172,7 @@ export function ExpandableStreetCell({
       </button>
       <DetailModal title={label} open={open} onClose={() => setOpen(false)}>
         <p className="whitespace-pre-wrap break-words text-base leading-relaxed text-slate-700 dark:text-slate-200">
-          {loading && !line ? 'Carregando endereço…' : line}
+          {loading && !line ? `Buscando endereço… (${coordHint})` : line}
         </p>
         <p className="mt-3 text-xs text-slate-500 tabular-nums">
           {lat.toFixed(6)}, {lng.toFixed(6)}

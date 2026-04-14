@@ -1,14 +1,47 @@
 /**
  * Geocodificação reversa (lat/lng → endereço legível).
- * Em produção (e no dev com middleware Vite), usa /api/reverse-geocode para evitar CORS do Photon.
- * Cache em memória para reduzir requisições.
+ * Em produção, usa /api/reverse-geocode (evita CORS).
+ *
+ * Limita concorrência + deduplica requisições na mesma chave para não disparar
+ * dezenas de chamadas serverless em paralelo (504 no gateway / limite Nominatim).
  */
 
 const CACHE = new Map<string, string>();
 const CACHE_MAX = 400;
 
+/** Promessas em voo por chave (dedupe enquanto carrega). */
+const IN_FLIGHT = new Map<string, Promise<string>>();
+
+/** Máximo de pedidos HTTP ao /api em paralelo (global). */
+const MAX_CONCURRENT = 2;
+let activeRequests = 0;
+const waitQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (activeRequests < MAX_CONCURRENT) {
+    activeRequests += 1;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    waitQueue.push(() => {
+      activeRequests += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseSlot(): void {
+  activeRequests -= 1;
+  const next = waitQueue.shift();
+  if (next) next();
+}
+
 function cacheKey(lat: number, lng: number): string {
   return `${lat.toFixed(5)},${lng.toFixed(5)}`;
+}
+
+function formatCoordFallback(lat: number, lng: number): string {
+  return `Coordenadas: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
 function pairFromNumbers(lat: unknown, lng: unknown): { lat: number; lng: number } | null {
@@ -39,13 +72,11 @@ export function extractLatLng(row: any): { lat: number; lng: number } | null {
 
   if (loc && typeof loc === 'object') {
     const g = loc as Record<string, unknown>;
-    // GeoJSON Point: coordinates [lng, lat]
     if (g.type === 'Point' && Array.isArray(g.coordinates) && g.coordinates.length >= 2) {
       const ln = Number(g.coordinates[0]);
       const la = Number(g.coordinates[1]);
       if (Number.isFinite(la) && Number.isFinite(ln)) return { lat: la, lng: ln };
     }
-    // PostGIS / alguns drivers
     const geom = g.geometry;
     if (geom && typeof geom === 'object') {
       const gg = geom as Record<string, unknown>;
@@ -72,52 +103,86 @@ function getOrigin(): string {
   return 'http://localhost:3010';
 }
 
-/**
- * Fallback quando /api/reverse-geocode falha (504, rede, etc.).
- * Não chama Photon/Nominatim no browser — CORS bloqueia em produção.
- */
-async function resolveAddressFromCoordinates(_lat: number, _lng: number): Promise<string> {
-  return 'Endereço indisponível (tente recarregar ou verifique o mapa)';
+async function fetchAddressFromApi(lat: number, lng: number): Promise<string> {
+  const FETCH_MS = 15000;
+  const u = new URL('/api/reverse-geocode', getOrigin());
+  u.searchParams.set('lat', String(lat));
+  u.searchParams.set('lon', String(lng));
+
+  const ctrl = new AbortController();
+  let tid: number | undefined;
+  if (typeof window !== 'undefined') {
+    tid = window.setTimeout(() => ctrl.abort(), FETCH_MS) as unknown as number;
+  }
+
+  try {
+    const res = await fetch(u.toString(), {
+      headers: { Accept: 'application/json' },
+      signal: ctrl.signal,
+    });
+
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok) {
+      return '';
+    }
+    if (!ct.includes('application/json')) {
+      return '';
+    }
+    const data = (await res.json()) as { address?: string };
+    if (typeof data.address === 'string') {
+      const t = data.address.trim();
+      if (
+        t &&
+        !/^endereço não disponível/i.test(t) &&
+        !/^endereço indisponível/i.test(t) &&
+        !/^endereço não disponível para este ponto$/i.test(t)
+      ) {
+        return t;
+      }
+    }
+  } catch {
+    // rede / abort / 504 HTML
+  } finally {
+    if (typeof window !== 'undefined' && tid !== undefined) window.clearTimeout(tid);
+  }
+  return '';
 }
 
 /**
- * Retorna texto de endereço (rua, bairro, cidade). Sem coordenadas.
- * Em falha ou área sem dados, mensagem neutra — não expõe lat/lng.
+ * Retorna texto de endereço (rua, bairro, cidade). Em falha, texto com coordenadas (sempre útil na UI).
  */
 export async function reverseGeocode(lat: number, lng: number): Promise<string> {
   const key = cacheKey(lat, lng);
   if (CACHE.has(key)) return CACHE.get(key)!;
 
-  let text = '';
-  const FETCH_MS = 12000;
-  try {
-    const u = new URL('/api/reverse-geocode', getOrigin());
-    u.searchParams.set('lat', String(lat));
-    u.searchParams.set('lon', String(lng));
-    const ctrl = new AbortController();
-    const tid =
-      typeof window !== 'undefined' ? window.setTimeout(() => ctrl.abort(), FETCH_MS) : undefined;
-    const res = await fetch(u.toString(), {
-      headers: { Accept: 'application/json' },
-      signal: ctrl.signal,
-    });
-    if (typeof window !== 'undefined' && tid !== undefined) window.clearTimeout(tid);
-    if (res.ok) {
-      const data = (await res.json()) as { address?: string };
-      if (typeof data.address === 'string') text = data.address.trim();
+  const pending = IN_FLIGHT.get(key);
+  if (pending) return pending;
+
+  const run = (async (): Promise<string> => {
+    await acquireSlot();
+    try {
+      if (CACHE.has(key)) return CACHE.get(key)!;
+
+      let text = await fetchAddressFromApi(lat, lng);
+      if (!text) {
+        text = formatCoordFallback(lat, lng);
+      }
+
+      if (CACHE.size >= CACHE_MAX) {
+        const first = CACHE.keys().next().value;
+        if (first !== undefined) CACHE.delete(first);
+      }
+      CACHE.set(key, text);
+      return text;
+    } finally {
+      releaseSlot();
     }
-  } catch {
-    text = '';
-  }
+  })();
 
-  if (!text) {
-    text = await resolveAddressFromCoordinates(lat, lng);
+  IN_FLIGHT.set(key, run);
+  try {
+    return await run;
+  } finally {
+    IN_FLIGHT.delete(key);
   }
-
-  if (CACHE.size >= CACHE_MAX) {
-    const first = CACHE.keys().next().value;
-    if (first !== undefined) CACHE.delete(first);
-  }
-  CACHE.set(key, text);
-  return text;
 }

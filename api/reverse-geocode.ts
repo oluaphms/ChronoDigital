@@ -1,4 +1,4 @@
-/** Hobby: máx. 10s; função deve terminar antes para evitar 504 no gateway. */
+/** Hobby: máx. 10s — manter margem para cold start + Nominatim. */
 export const config = {
   maxDuration: 10,
 };
@@ -10,6 +10,8 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Accept',
+  /** Mesmas coordenadas → cache na CDN (menos 504 por rajada de chamadas). */
+  'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800',
 };
 
 async function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Promise<Response> {
@@ -48,7 +50,7 @@ function formatNominatimAddress(a: Record<string, unknown>): string {
  * Photon removido: segunda chamada frequentemente estourava o orçamento.
  */
 async function resolveAddressFromCoordinates(lat: number, lng: number): Promise<string> {
-  const NOMINATIM_MS = 4000;
+  const NOMINATIM_MS = 3200;
   const NOMINATIM_HEADERS = {
     Accept: 'application/json',
     'User-Agent': 'ChronoDigital/1.0 (reverse-geocode; https://chrono-digital.vercel.app)',
