@@ -14,6 +14,7 @@ import { ExpandableStreetCell, ExpandableTextCell } from '../../components/Click
 import { AddTimeRecordModal } from '../../components/AddTimeRecordModal';
 import { ManualRecordModal } from '../../components/ManualRecordModal';
 import { EditTimeRecordModal } from '../../components/EditTimeRecordModal';
+import { TimesheetTableSkeleton } from '../../components/TimesheetTableSkeleton';
 import { LoggingService } from '../../../services/loggingService';
 import { LogSeverity } from '../../../types';
 
@@ -162,27 +163,39 @@ const AdminTimesheet: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!user?.companyId || !isSupabaseConfigured) return;
-    
+    if (!user?.companyId || !isSupabaseConfigured) {
+      setLoadingData(false);
+      return;
+    }
+
     let cancelled = false;
-    
+
     const loadData = async () => {
       if (cancelled || !mountedRef.current) return;
       setLoadingData(true);
       try {
+        const periodStartTs = `${periodStart}T00:00:00`;
+        const periodEndTs = `${periodEnd}T23:59:59.999`;
+
         const [usersRows, recordsRows, departmentsRows, shiftsRows, holidaysRows] = await Promise.all([
           db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-          db.select('time_records', [
-            { column: 'company_id', operator: 'eq', value: user.companyId },
-            { column: 'created_at', operator: 'gte', value: periodStart }
-          ], { column: 'created_at', ascending: false }, 1000) as Promise<any[]>,
+          db.select(
+            'time_records',
+            [
+              { column: 'company_id', operator: 'eq', value: user.companyId },
+              { column: 'created_at', operator: 'gte', value: periodStartTs },
+              { column: 'created_at', operator: 'lte', value: periodEndTs },
+            ],
+            { column: 'created_at', ascending: false },
+            1000
+          ) as Promise<any[]>,
           db.select('departments', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
           db.select('employee_shift_schedule', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
           db.select('feriados', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []) as Promise<any[]>,
         ]);
-        
+
         if (cancelled || !mountedRef.current) return;
-        
+
         setEmployees((usersRows ?? []).map((u: any) => ({ id: u.id, nome: u.nome || u.email, department_id: u.department_id })));
         setRecords(recordsRows ?? []);
         setDepartments((departmentsRows ?? []).map((d: any) => ({ id: d.id, name: d.name })));
@@ -200,9 +213,9 @@ const AdminTimesheet: React.FC = () => {
         }
       }
     };
-    
+
     loadData();
-    
+
     return () => {
       cancelled = true;
     };
@@ -605,18 +618,22 @@ const AdminTimesheet: React.FC = () => {
 
   const refetchTimesheetRecords = useCallback(async () => {
     if (!user?.companyId) return;
-    const recordsRows = (await db.select(
-      'time_records',
-      [
-        { column: 'company_id', operator: 'eq', value: user.companyId },
-        { column: 'created_at', operator: 'gte', value: periodStart },
-      ],
-      { column: 'created_at', ascending: false },
-      1000
-    )) ?? [];
+    const periodStartTs = `${periodStart}T00:00:00`;
+    const periodEndTs = `${periodEnd}T23:59:59.999`;
+    const recordsRows =
+      (await db.select(
+        'time_records',
+        [
+          { column: 'company_id', operator: 'eq', value: user.companyId },
+          { column: 'created_at', operator: 'gte', value: periodStartTs },
+          { column: 'created_at', operator: 'lte', value: periodEndTs },
+        ],
+        { column: 'created_at', ascending: false },
+        1000
+      )) ?? [];
     setRecords(recordsRows);
     await queryClient.invalidateQueries({ queryKey: ['records'] });
-  }, [user?.companyId, periodStart]);
+  }, [user?.companyId, periodStart, periodEnd]);
 
   const handleAddTimeRecord = async (data: { user_id: string; created_at: string; type: string; manual_reason?: string; latitude?: number; longitude?: number }) => {
     if (!user || !supabase) return;
@@ -797,8 +814,8 @@ const AdminTimesheet: React.FC = () => {
 
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 print:border-0 print:shadow-none print:bg-transparent print:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0">
         {loadingData ? (
-          <div className="p-12 min-h-[min(50vh,420px)] flex items-center justify-center text-center text-slate-500 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 bg-white/50 dark:bg-slate-900/30">
-            Carregando…
+          <div className="p-4 sm:p-6 min-h-[min(50vh,420px)] rounded-2xl border border-slate-200/80 dark:border-slate-700/80 bg-white/50 dark:bg-slate-900/30">
+            <TimesheetTableSkeleton variant="admin" />
           </div>
         ) : (
           <div className="overflow-x-auto overscroll-x-contain touch-pan-x rounded-xl border border-slate-100 dark:border-slate-800 md:border-0">

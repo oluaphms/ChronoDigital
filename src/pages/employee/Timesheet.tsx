@@ -8,6 +8,7 @@ import { LoadingState } from '../../../components/UI';
 import { buildDayMirrorSummary } from '../../utils/timesheetMirror';
 import { extractLatLng } from '../../utils/reverseGeocode';
 import { ExpandableStreetCell, ExpandableTextCell } from '../../components/ClickableFullContent';
+import { TimesheetTableSkeleton } from '../../components/TimesheetTableSkeleton';
 
 const EmployeeTimesheet: React.FC = () => {
   const { user, loading } = useCurrentUser();
@@ -22,7 +23,11 @@ const EmployeeTimesheet: React.FC = () => {
   const [detailOpenByDate, setDetailOpenByDate] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (!user || !isSupabaseConfigured) return;
+    if (!user || !isSupabaseConfigured) {
+      setLoadingData(false);
+      return;
+    }
+    let cancelled = false;
     const load = async () => {
       setLoadingData(true);
       try {
@@ -39,14 +44,17 @@ const EmployeeTimesheet: React.FC = () => {
           { column: 'created_at', ascending: false },
           500
         )) as any[];
-        setRecords(rows ?? []);
+        if (!cancelled) setRecords(rows ?? []);
       } catch (e) {
         console.error(e);
       } finally {
-        setLoadingData(false);
+        if (!cancelled) setLoadingData(false);
       }
     };
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [user?.id, periodStart, periodEnd]);
 
   /** Registros agrupados por dia (ordenados por horário). */
@@ -128,7 +136,9 @@ const EmployeeTimesheet: React.FC = () => {
 
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-x-auto print:border-0 print:shadow-none print:bg-transparent print:overflow-visible">
         {loadingData ? (
-          <div className="p-12 text-center text-slate-500">Carregando...</div>
+          <div className="p-4 sm:p-6 min-h-[min(45vh,380px)]">
+            <TimesheetTableSkeleton variant="employee" />
+          </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
