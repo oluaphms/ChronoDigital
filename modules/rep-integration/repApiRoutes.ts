@@ -1,5 +1,5 @@
 /**
- * Handlers HTTP para /api/rep/:slug (uma única função serverless na Vercel — limite Hobby 12).
+ * Handlers HTTP para /api/rep/* (função serverless em api/rep-bridge.ts — limite Hobby 12).
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -321,7 +321,7 @@ async function handleImportAfd(request: Request): Promise<Response> {
 }
 
 /**
- * Despacha /api/rep/:slug (mantém URLs públicas: status, punches, sync, punch, import-afd).
+ * Despacha slug REP (mantém URLs públicas: status, punches, sync, punch, import-afd).
  */
 export async function handleRepSlug(request: Request, slug: string): Promise<Response> {
   switch (slug) {

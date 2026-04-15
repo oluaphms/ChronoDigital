@@ -97,7 +97,7 @@ export default defineConfig(({ mode }) => {
               return;
             }
             try {
-              const { default: handler } = await import('./api/rep/[slug].ts');
+              const { default: handler } = await import('./api/rep-bridge.ts');
               const host = (req.headers.host as string) || 'localhost:3010';
               const fullUrl = `http://${host}${req.url ?? ''}`;
               const response = await handler(
