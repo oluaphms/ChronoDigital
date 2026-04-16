@@ -13,7 +13,18 @@ import type {
   RepUserFromDevice,
 } from '../types';
 import { deviceFetch } from '../repDeviceHttp';
-import { parseAFD, afdRecordToIsoDateTime } from '../repParser';
+import {
+  parseAFD,
+  parseAfdLine,
+  afdRecordWallTimeToUtcIso,
+  wallTimeInZoneToUtcMs,
+} from '../repParser';
+import {
+  sanitizeDigits,
+  tryNormalizeBrazilianPisTo11Digits,
+  elevenPisDigitsToControlIdApiInteger,
+  validatePisPasep11,
+} from '../pisPasep';
 
 function extra(device: RepDevice): Record<string, unknown> {
   return device.config_extra && typeof device.config_extra === 'object'
@@ -56,15 +67,59 @@ async function controlIdLogin(device: RepDevice): Promise<{ session: string } | 
   return { session };
 }
 
+/** Heurística: conteúdo AFD (NSR + DDMMAAAA + HHMMSS ou NSR+tipo+data), não JSON de status. */
+function looksLikeAfdPayload(s: string): boolean {
+  const t = s.trim();
+  if (t.length < 18) return false;
+  const first = (t.split(/\r?\n/).find(Boolean) || t).replace(/\s/g, '');
+  if (/^\d{9}[37]\d{8}\d{6}/.test(first)) return true;
+  return /^\d/.test(t) && /\d{8}[\s\t]*\d{4,6}/.test(t);
+}
+
+function tryDecodeBase64ToAfd(s: string): string | null {
+  const raw = s.replace(/\s+/g, '');
+  if (raw.length < 32 || raw.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]+=*$/.test(raw)) return null;
+  try {
+    const dec = Buffer.from(raw, 'base64').toString('utf8');
+    if (looksLikeAfdPayload(dec) || parseAFD(dec).length > 0) return dec;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function stringifyAfdFromJsonValue(v: unknown): string | null {
+  if (typeof v === 'string') {
+    const b64 = tryDecodeBase64ToAfd(v);
+    if (b64) return b64;
+    if (looksLikeAfdPayload(v)) return v;
+    return null;
+  }
+  if (Array.isArray(v)) {
+    const lines = v.filter((x): x is string => typeof x === 'string');
+    if (!lines.length) return null;
+    const joined = lines.join('\n');
+    if (looksLikeAfdPayload(joined)) return joined;
+    if (lines.some((l) => parseAfdLine(l.trim()) != null)) return joined;
+  }
+  return null;
+}
+
 /** Corpo do get_afd pode ser texto AFD puro ou JSON com campo de conteúdo. */
 function extractAfdFileText(text: string): string {
   const t = text.trim();
   if (!t.startsWith('{')) return text;
   try {
     const j = JSON.parse(t) as Record<string, unknown>;
-    for (const k of ['afd', 'AFD', 'data', 'file', 'content', 'nfo']) {
-      const v = j[k];
-      if (typeof v === 'string' && v.length > 50) return v;
+    const keys = ['afd', 'AFD', 'data', 'file', 'content', 'nfo', 'records', 'text', 'body', 'file_afd'];
+    for (const k of keys) {
+      const hit = stringifyAfdFromJsonValue(j[k]);
+      if (hit) return hit;
+    }
+    for (const v of Object.values(j)) {
+      const hit = stringifyAfdFromJsonValue(v);
+      if (hit) return hit;
     }
   } catch {
     /* usar texto bruto */
@@ -72,34 +127,18 @@ function extractAfdFileText(text: string): string {
   return text;
 }
 
-function digitsOnly(s: string | null | undefined): string {
-  return String(s ?? '').replace(/\D/g, '');
-}
-
-/** Dígito verificador PIS/PASEP (NIS), 11 dígitos. */
-function validPisPasep11(d: string): boolean {
-  const x = digitsOnly(d);
-  if (x.length !== 11) return false;
-  const digits = x.split('').map((c) => parseInt(c, 10));
-  const w = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-  let s = 0;
-  for (let i = 0; i < 10; i++) s += digits[i] * w[i]!;
-  const r = s % 11;
-  const dv = r < 2 ? 0 : 11 - r;
-  return dv === digits[10];
-}
-
 /**
- * Control iD: em modo legado, `pis` deve ser PIS com dígitos verificadores válidos
- * (um CPF no campo PIS gera "pis em formato incorreto").
- * Se houver CPF com 11 dígitos (ou 11 dígitos no PIS que não sejam PIS válido), usamos
- * `add_users`/`update_users` com `mode=671` e campo `cpf` (documentação Control iD).
- * O DV de CPF não é exigido aqui: muitos cadastros usam número de 11 dígitos aceito pelo relógio.
+ * Control iD (documentação api_idclass):
+ * - Modo legado: `pis` deve ser inteiro JSON (não string); o valor é o NIS/PIS de 11 dígitos com DV válido.
+ * - Modo `mode=671`: usar campo `cpf` (inteiro) com CPF de 11 dígitos do cadastro.
+ * Quando o relógio **não** está em 671 no Chrono mas só há 11 dígitos no CPF: se passarem na validação de PIS,
+ * tratamos como NIS e enviamos no campo `pis` (legado) — comum quem só preencheu um documento no cadastro.
  */
 function resolveControlIdIdentity(
   configMode671: boolean,
   cpfDigits: string,
-  pisDigits: string
+  pisNorm: string | null,
+  pisRawSanitized: string
 ):
   | { ok: true; use671Api: boolean; idDigits: string }
   | { ok: false; message: string } {
@@ -113,23 +152,28 @@ function resolveControlIdIdentity(
     }
     return { ok: true, use671Api: true, idDigits: cpfDigits };
   }
-  /** PIS válido: API legado com campo `pis`. */
-  if (pisDigits.length === 11 && validPisPasep11(pisDigits)) {
-    return { ok: true, use671Api: false, idDigits: pisDigits };
+  if (pisNorm) {
+    return { ok: true, use671Api: false, idDigits: pisNorm };
   }
-  /** CPF com 11 dígitos: API 671 com campo `cpf` (inclui número sem DV válido localmente). */
   if (cpfDigits.length === 11) {
+    const cpfDigitsAsPis = tryNormalizeBrazilianPisTo11Digits(cpfDigits);
+    if (cpfDigitsAsPis) {
+      return { ok: true, use671Api: false, idDigits: cpfDigitsAsPis };
+    }
     return { ok: true, use671Api: true, idDigits: cpfDigits };
   }
-  /** Só PIS preenchido: 11 dígitos que não passam no PIS costumam ser CPF digitado no campo errado. */
-  if (pisDigits.length === 11) {
-    return { ok: true, use671Api: true, idDigits: pisDigits };
+  if (pisRawSanitized.length > 0) {
+    return {
+      ok: false,
+      message:
+        'PIS/PASEP informado é inválido (dígitos ou dígito verificador). Corrija o cadastro, ou preencha CPF com 11 dígitos para envio em modo Portaria 671 no relógio.',
+    };
   }
   return {
     ok: false,
     message:
-      'Informe PIS/PASEP com 11 dígitos válidos (dígitos verificadores corretos) ou CPF com 11 dígitos. ' +
-      'Se o identificador no relógio é o CPF, prefira preencher o CPF no cadastro e deixe o PIS vazio ou use «AFD Portaria 671» no relógio.',
+      'Informe PIS/PASEP válido (11 dígitos com dígito verificador correto) ou CPF com 11 dígitos. ' +
+      'Se o relógio usa apenas CPF (Portaria 671), marque a opção correspondente no cadastro do dispositivo e informe o CPF.',
   };
 }
 
@@ -148,25 +192,55 @@ function controlIdJsonIndicatesSuccess(text: string): boolean {
   }
 }
 
+/**
+ * Documentação Control iD (add_users / update_users): `pis` e `cpf` são **inteiro** em JSON.
+ * Enviar string (ex.: "17033259504") costuma gerar HTTP 400 «'pis' em formato incorreto».
+ */
+function controlIdCpfToApiInteger(digits11: string): number {
+  const d = sanitizeDigits(digits11);
+  if (d.length !== 11) {
+    throw new Error('CPF: informe 11 dígitos numéricos para envio ao Control iD (modo 671).');
+  }
+  const n = parseInt(d, 10);
+  if (!Number.isSafeInteger(n)) {
+    throw new Error('CPF numérico fora do intervalo suportado.');
+  }
+  return n;
+}
+
+/** Modo legado: documentação fala em `pis` inteiro; alguns firmwares aceitam só string de 11 dígitos. */
+type LegacyPisWire = 'integer' | 'string11';
+
 /** use671Api: JSON com `cpf`; senão `pis` (modo legado Control iD). */
 function buildUserPayloadForAddAndUpdate(
   use671Api: boolean,
   nome: string,
   idDigits: string,
-  matDigits: string
+  matDigits: string,
+  legacyPisWire: LegacyPisWire = 'integer'
 ): { add: Record<string, unknown>; update: Record<string, unknown> } {
   const add: Record<string, unknown> = { name: nome };
   const update: Record<string, unknown> = { name: nome };
-  const n = parseInt(idDigits, 10);
   if (use671Api) {
-    add.cpf = n;
-    update.cpf = n;
+    const idNum = controlIdCpfToApiInteger(idDigits);
+    add.cpf = idNum;
+    update.cpf = idNum;
   } else {
-    add.pis = n;
-    update.pis = n;
+    const d11 = sanitizeDigits(idDigits);
+    if (d11.length !== 11 || !validatePisPasep11(d11)) {
+      throw new Error('PIS interno inválido ao montar payload Control iD.');
+    }
+    if (legacyPisWire === 'string11') {
+      add.pis = d11;
+      update.pis = d11;
+    } else {
+      const idNum = elevenPisDigitsToControlIdApiInteger(d11);
+      add.pis = idNum;
+      update.pis = idNum;
+    }
   }
   if (matDigits) {
-    const reg = parseInt(matDigits, 10);
+    const reg = parseInt(sanitizeDigits(matDigits), 10);
     if (!Number.isNaN(reg) && reg > 0) {
       add.registration = reg;
       update.registration = reg;
@@ -255,53 +329,186 @@ const ControlIdAdapter: RepVendorAdapter = {
     }
     const ex = extra(device);
     const configMode671 = ex.mode_671 === true;
-    const cpfDigits = digitsOnly(employee.cpf);
-    const pisDigits = digitsOnly(employee.pis);
-    const resolved = resolveControlIdIdentity(configMode671, cpfDigits, pisDigits);
+    const cpfDigits = sanitizeDigits(employee.cpf);
+    const pisOriginal = employee.pis;
+    const pisRawSanitized = sanitizeDigits(employee.pis);
+    const pisNorm = tryNormalizeBrazilianPisTo11Digits(pisRawSanitized);
+
+    console.debug('[Control iD][pushEmployee] PIS — rastreio', {
+      funcionario: nome,
+      pisOriginal,
+      pisSanitized: pisRawSanitized,
+      pisNormalized: pisNorm,
+    });
+
+    if (pisRawSanitized.length > 0 && !pisNorm) {
+      console.warn('[Control iD][pushEmployee] PIS inválido; não será enviado ao relógio.', {
+        funcionario: nome,
+        pisOriginal,
+        pisSanitized: pisRawSanitized,
+      });
+    }
+
+    const resolved = resolveControlIdIdentity(configMode671, cpfDigits, pisNorm, pisRawSanitized);
     if (!resolved.ok) {
       return { ok: false, message: resolved.message };
     }
     const { use671Api, idDigits } = resolved;
 
-    const matDigits = digitsOnly(employee.matricula);
-    const { add: userAdd, update: userUpdate } = buildUserPayloadForAddAndUpdate(
-      use671Api,
-      nome,
-      idDigits,
-      matDigits
-    );
+    const fonteIdentificador =
+      pisNorm != null
+        ? 'pis_pasep (NIS com DV válido)'
+        : cpfDigits.length === 11 && !use671Api
+          ? 'cpf no cadastro (mesmos 11 dígitos são NIS/PIS válido — envio legado campo pis)'
+          : use671Api
+            ? 'cpf (modo Portaria 671 no relógio)'
+            : '—';
 
-    let addPath = `/add_users.fcgi?session=${encodeURIComponent(logged.session)}`;
-    if (use671Api) addPath += '&mode=671';
+    const matDigits = sanitizeDigits(employee.matricula);
 
-    const addRes = await deviceFetch(device, addPath, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ do_match: false, users: [userAdd] }),
-    });
-    const addText = await addRes.text();
-    if (addRes.ok && controlIdJsonIndicatesSuccess(addText)) {
-      return { ok: true, message: 'Funcionário cadastrado no relógio (Control iD).' };
+    /** Alguns firmwares ignoram `do_match` em REP não facial; outros exigem corpo só com `users`. */
+    type UsersEnvelopeStyle = 'do_match_false' | 'users_only';
+
+    const usersJsonBody = (users: Record<string, unknown>[], envelope: UsersEnvelopeStyle): string => {
+      if (envelope === 'do_match_false') {
+        return JSON.stringify({ do_match: false, users });
+      }
+      return JSON.stringify({ users });
+    };
+
+    const pushAttempt = async (
+      use671: boolean,
+      addUser: Record<string, unknown>,
+      updateUser: Record<string, unknown>,
+      envelope: UsersEnvelopeStyle = 'do_match_false'
+    ): Promise<
+      | { ok: true; message: string }
+      | { ok: false; addHint: string; updHint: string }
+    > => {
+      let addPath = `/add_users.fcgi?session=${encodeURIComponent(logged.session)}`;
+      if (use671) addPath += '&mode=671';
+      const addRes = await deviceFetch(device, addPath, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: usersJsonBody([addUser], envelope),
+      });
+      const addText = await addRes.text();
+      if (addRes.ok && controlIdJsonIndicatesSuccess(addText)) {
+        return { ok: true, message: 'Funcionário cadastrado no relógio (Control iD).' };
+      }
+
+      let updPath = `/update_users.fcgi?session=${encodeURIComponent(logged.session)}`;
+      if (use671) updPath += '&mode=671';
+      const updRes = await deviceFetch(device, updPath, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: usersJsonBody([updateUser], envelope),
+      });
+      const updText = await updRes.text();
+      if (updRes.ok && controlIdJsonIndicatesSuccess(updText)) {
+        return { ok: true, message: 'Funcionário já estava no relógio; cadastro atualizado (Control iD).' };
+      }
+
+      const addHint = addRes.ok ? addText.slice(0, 280) : `HTTP ${addRes.status} — ${addText.slice(0, 280)}`;
+      const updHint = updRes.ok ? updText.slice(0, 280) : `HTTP ${updRes.status} — ${updText.slice(0, 280)}`;
+      return { ok: false, addHint, updHint };
+    };
+
+    const isPisFormatRejection = (addHint: string, updHint: string): boolean => {
+      const t = `${addHint}${updHint}`.toLowerCase();
+      return t.includes('pis') && (t.includes('formato') || t.includes('incorrect') || t.includes('inválid'));
+    };
+
+    const hint671 =
+      ' Se o relógio for Portaria 671, marque «Portaria 671» no cadastro do dispositivo no Chrono e use o CPF de 11 dígitos no funcionário.';
+
+    if (use671Api) {
+      let userAdd: Record<string, unknown>;
+      let userUpdate: Record<string, unknown>;
+      try {
+        const b = buildUserPayloadForAddAndUpdate(true, nome, idDigits, matDigits);
+        userAdd = b.add;
+        userUpdate = b.update;
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Identificador inválido para o Control iD.' };
+      }
+      console.debug('[Control iD][pushEmployee] payload 671', {
+        funcionario: nome,
+        fonteIdentificador,
+        valorJsonAdd: { cpf: userAdd.cpf },
+      });
+      const attempt671 = await pushAttempt(true, userAdd, userUpdate);
+      if (attempt671.ok) return attempt671;
+      return {
+        ok: false,
+        message: `Control iD: inclusão falhou (${attempt671.addHint}). Atualização também falhou (${attempt671.updHint}).${hint671}`,
+      };
     }
 
-    let updPath = `/update_users.fcgi?session=${encodeURIComponent(logged.session)}`;
-    if (use671Api) updPath += '&mode=671';
+    const legacyPlan: Array<{ wire: LegacyPisWire; envelope: UsersEnvelopeStyle; tag: string }> = [
+      { wire: 'integer', envelope: 'do_match_false', tag: 'pis inteiro + do_match:false' },
+      { wire: 'string11', envelope: 'do_match_false', tag: 'pis string 11 dígitos + do_match:false' },
+      { wire: 'integer', envelope: 'users_only', tag: 'pis inteiro (corpo só users)' },
+      { wire: 'string11', envelope: 'users_only', tag: 'pis string 11 dígitos (corpo só users)' },
+    ];
 
-    const updRes = await deviceFetch(device, updPath, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ do_match: false, users: [userUpdate] }),
-    });
-    const updText = await updRes.text();
-    if (updRes.ok && controlIdJsonIndicatesSuccess(updText)) {
-      return { ok: true, message: 'Funcionário já estava no relógio; cadastro atualizado (Control iD).' };
+    let attempt: { ok: true; message: string } | { ok: false; addHint: string; updHint: string } = {
+      ok: false,
+      addHint: '',
+      updHint: '',
+    };
+
+    for (let li = 0; li < legacyPlan.length; li++) {
+      const step = legacyPlan[li]!;
+      let userAdd: Record<string, unknown>;
+      let userUpdate: Record<string, unknown>;
+      try {
+        const b = buildUserPayloadForAddAndUpdate(false, nome, idDigits, matDigits, step.wire);
+        userAdd = b.add;
+        userUpdate = b.update;
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Identificador inválido para o Control iD.' };
+      }
+      console.debug('[Control iD][pushEmployee] tentativa legado', {
+        funcionario: nome,
+        fonteIdentificador,
+        passo: step.tag,
+        identificador11: idDigits,
+        valorJsonAdd: { pis: userAdd.pis },
+      });
+      attempt = await pushAttempt(false, userAdd, userUpdate, step.envelope);
+      if (attempt.ok) {
+        if (li === 0) return attempt;
+        return {
+          ok: true,
+          message: `${attempt.message} (compatibilidade Control iD: ${step.tag}).`,
+        };
+      }
     }
 
-    const addHint = addRes.ok ? addText.slice(0, 280) : `HTTP ${addRes.status} — ${addText.slice(0, 280)}`;
-    const updHint = updRes.ok ? updText.slice(0, 280) : `HTTP ${updRes.status} — ${updText.slice(0, 280)}`;
+    if (isPisFormatRejection(attempt.addHint, attempt.updHint)) {
+      let altAdd: Record<string, unknown>;
+      let altUpd: Record<string, unknown>;
+      try {
+        const alt = buildUserPayloadForAddAndUpdate(true, nome, idDigits, matDigits);
+        altAdd = alt.add;
+        altUpd = alt.update;
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : 'Identificador inválido para o Control iD.' };
+      }
+      const retry = await pushAttempt(true, altAdd, altUpd);
+      if (retry.ok) {
+        return {
+          ok: true,
+          message: `${retry.message} (compatibilidade: modo Portaria 671 + campo cpf — marque «671» no cadastro do relógio se for o caso).`,
+        };
+      }
+      attempt = retry;
+    }
+
     return {
       ok: false,
-      message: `Control iD: inclusão falhou (${addHint}). Atualização também falhou (${updHint})`,
+      message: `Control iD: inclusão falhou (${attempt.addHint}). Atualização também falhou (${attempt.updHint}).${hint671}`,
     };
   },
 
@@ -430,39 +637,76 @@ const ControlIdAdapter: RepVendorAdapter = {
     }
     const ex = extra(device);
     const mode671 = ex.mode_671 === true;
-    let path = `/get_afd.fcgi?session=${encodeURIComponent(logged.session)}`;
-    if (mode671) {
-      path += '&mode=671';
-    }
-    const bodyPayload: Record<string, unknown> = {};
-    const lastNsr = ex.last_afd_nsr;
-    if (typeof lastNsr === 'number' && lastNsr > 0) {
-      bodyPayload.initial_nsr = Math.floor(lastNsr);
-    }
+    const tzRaw = ex.afd_timezone ?? ex.timezone;
+    const afdTz =
+      typeof tzRaw === 'string' && tzRaw.trim() ? tzRaw.trim() : 'America/Sao_Paulo';
+    const sessionQs = `?session=${encodeURIComponent(logged.session)}`;
+    const buildPath = (use671: boolean) =>
+      `/get_afd.fcgi${sessionQs}${use671 ? '&mode=671' : ''}`;
 
-    const res = await deviceFetch(device, path, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyPayload),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(`Control iD get_afd: HTTP ${res.status} — ${text.slice(0, 280)}`);
+    const bodyPayload: Record<string, unknown> = {};
+    const lastNsrRaw = ex.last_afd_nsr;
+    let lastNsr = 0;
+    if (typeof lastNsrRaw === 'number' && lastNsrRaw > 0) lastNsr = Math.floor(lastNsrRaw);
+    else if (typeof lastNsrRaw === 'string' && /^\d+$/.test(lastNsrRaw.trim())) {
+      lastNsr = parseInt(lastNsrRaw.trim(), 10);
+      if (!Number.isFinite(lastNsr) || lastNsr < 1) lastNsr = 0;
     }
-    const afdText = extractAfdFileText(text);
-    let records = parseAFD(afdText);
+    if (lastNsr > 0) bodyPayload.initial_nsr = lastNsr;
+
+    const doGetAfd = async (path: string, body: Record<string, unknown>) =>
+      deviceFetch(device, path, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    const runGetAfdOnce = async (use671: boolean, body: Record<string, unknown>) => {
+      const path = buildPath(use671);
+      const res = await doGetAfd(path, body);
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(`Control iD get_afd: HTTP ${res.status} — ${text.slice(0, 280)}`);
+      }
+      const afdText = extractAfdFileText(text);
+      return { records: parseAFD(afdText) };
+    };
+
+    /** Alguns iDClass só preenchem AFD em modo 671 (ou o inverso). */
+    const modeAttempts: boolean[] = mode671 ? [true, false] : [false, true];
+    let records: ReturnType<typeof parseAFD> = [];
+    for (const use671 of modeAttempts) {
+      const r1 = await runGetAfdOnce(use671, bodyPayload);
+      records = r1.records;
+      if (records.length > 0) break;
+      /** `initial_nsr` à frente do último NSR devolve AFD vazio. */
+      if (lastNsr > 0) {
+        const r2 = await runGetAfdOnce(use671, {});
+        records = r2.records;
+        if (records.length > 0) break;
+      }
+    }
     if (since) {
       const sinceMs = since.getTime();
-      records = records.filter((rec) => {
-        const iso = afdRecordToIsoDateTime(rec);
-        const t = new Date(iso).getTime();
+      const filtered = records.filter((rec) => {
+        const t = wallTimeInZoneToUtcMs(rec.data, rec.hora, afdTz);
         return !Number.isNaN(t) && t > sinceMs;
+      });
+      /** Se o filtro eliminou tudo, mantém o lote: duplicatas são descartadas na ingestão por NSR. */
+      if (filtered.length > 0) records = filtered;
+    }
+    if (records.length === 0) {
+      console.warn('[Control iD][fetchPunches] AFD sem registros parseados após get_afd.', {
+        deviceId: device.id,
+        mode671Config: mode671,
+        last_afd_nsr: lastNsr || undefined,
+        timezone: afdTz,
       });
     }
     return records.map((rec) => ({
       pis: rec.cpfOuPis,
       cpf: rec.cpfOuPis,
-      data_hora: afdRecordToIsoDateTime(rec),
+      data_hora: afdRecordWallTimeToUtcIso(rec, afdTz),
       tipo: normalizeTipo(rec.tipo),
       nsr: rec.nsr,
       raw: { ...rec, source: 'controlid_afd' },

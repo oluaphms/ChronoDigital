@@ -4,6 +4,7 @@
  */
 
 export * from './types';
+export * from './pisPasep';
 export * from './repParser';
 export * from './repDeviceManager';
 export * from './repService';

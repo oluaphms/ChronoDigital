@@ -5,7 +5,9 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { mergeHubProviderIntoRepDevice } from './repHubMerge';
 import { getPunchesForSync, testConnectionForSync } from './repSyncFetch';
+import type { PunchFromDevice, RepDevice } from './types';
 import {
   ingestPunchesFromDevice,
   logRepAction,
@@ -13,7 +15,50 @@ import {
   type IngestPunchesFromDeviceOptions,
 } from './repService';
 
+function filterPunchesToLocalToday(punches: PunchFromDevice[]): PunchFromDevice[] {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const d = now.getDate();
+  const start = new Date(y, m, d, 0, 0, 0, 0);
+  const end = new Date(y, m, d, 23, 59, 59, 999);
+  return punches.filter((p) => {
+    const t = new Date(p.data_hora);
+    return !Number.isNaN(t.getTime()) && t >= start && t <= end;
+  });
+}
+
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+
+/** Recuo em `since` para não perder batidas por desvio de relógio ou ordem de atualização da última sync. */
+const SINCE_SYNC_GRACE_MS = 3 * 60 * 1000;
+const SYNC_STEP_TIMEOUT_MS = (() => {
+  const raw =
+    typeof process !== 'undefined' && process.env?.REP_SYNC_STEP_TIMEOUT_MS
+      ? String(process.env.REP_SYNC_STEP_TIMEOUT_MS).trim()
+      : '';
+  const n = parseInt(raw, 10);
+  if (Number.isFinite(n) && n >= 30_000) return Math.min(15 * 60_000, n);
+  return 6 * 60_000;
+})();
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Tempo esgotado (${Math.round(timeoutMs / 1000)}s) na etapa "${label}" da sincronização REP.`
+        )
+      );
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
 
 /**
  * Sincroniza um único dispositivo REP (rede ou API)
@@ -22,7 +67,17 @@ export async function syncRepDevice(
   supabase: SupabaseClient,
   deviceId: string,
   ingestOptions?: IngestPunchesFromDeviceOptions
-): Promise<{ ok: boolean; imported: number; staged?: number; error?: string }> {
+): Promise<{
+  ok: boolean;
+  imported: number;
+  staged?: number;
+  duplicated?: number;
+  userNotFound?: number;
+  /** Quantas marcações vieram do relógio (antes de gravar). */
+  received?: number;
+  ingestErrors?: string[];
+  error?: string;
+}> {
   const { data: device, error: fetchError } = await supabase
     .from('rep_devices')
     .select('*')
@@ -34,17 +89,34 @@ export async function syncRepDevice(
     return { ok: false, imported: 0, error: fetchError?.message || 'Dispositivo não encontrado' };
   }
 
-  if (device.tipo_conexao === 'arquivo') {
+  const merged = await mergeHubProviderIntoRepDevice(supabase, device as RepDevice);
+
+  if (merged.tipo_conexao === 'arquivo') {
     return { ok: true, imported: 0 }; // arquivo não sincroniza automaticamente
   }
 
   await updateDeviceLastSync(supabase, deviceId, 'sincronizando');
 
   try {
-    const since = device.ultima_sincronizacao ? new Date(device.ultima_sincronizacao) : undefined;
-    const punches = await getPunchesForSync(supabase, device, since);
+    let since = merged.ultima_sincronizacao ? new Date(merged.ultima_sincronizacao) : undefined;
+    if (since) {
+      since = new Date(since.getTime() - SINCE_SYNC_GRACE_MS);
+    }
+    let punches = await withTimeout(
+      getPunchesForSync(supabase, merged, since),
+      SYNC_STEP_TIMEOUT_MS,
+      'download de batidas'
+    );
 
-    const result = await ingestPunchesFromDevice(supabase, device, punches, ingestOptions);
+    if (ingestOptions?.receiveScope === 'today_only') {
+      punches = filterPunchesToLocalToday(punches);
+    }
+
+    const result = await withTimeout(
+      ingestPunchesFromDevice(supabase, merged, punches, ingestOptions),
+      SYNC_STEP_TIMEOUT_MS,
+      'gravação das batidas'
+    );
     await updateDeviceLastSync(supabase, deviceId, 'ativo');
 
     await logRepAction(supabase, deviceId, 'sync', result.errors.length ? 'parcial' : 'sucesso', undefined, {
@@ -61,6 +133,10 @@ export async function syncRepDevice(
       ok: true,
       imported: result.imported,
       staged: result.staged,
+      duplicated: result.duplicated,
+      userNotFound: result.userNotFound,
+      received: punches.length,
+      ingestErrors: result.errors.length ? [...result.errors] : undefined,
       error: result.errors[0],
     };
   } catch (e) {
@@ -132,5 +208,6 @@ export async function testRepDeviceConnection(
     return { ok: false, message: 'Dispositivo não encontrado' };
   }
 
-  return testConnectionForSync(supabase, device);
+  const merged = await mergeHubProviderIntoRepDevice(supabase, device as RepDevice);
+  return testConnectionForSync(supabase, merged);
 }

@@ -140,6 +140,7 @@ async function handlePushEmployee(request: Request): Promise<Response> {
     if (row instanceof Response) return row;
 
     const payload: RepEmployeePayload = {
+      id: userId,
       nome: (row.nome || row.email || 'Funcionário').trim(),
       cpf: row.cpf,
       pis: row.pis_pasep,
@@ -304,6 +305,12 @@ async function handlePunches(request: Request): Promise<Response> {
     }
     try {
       const punches = await getPunchesFromDeviceServer(device, since);
+      if (punches.length === 0) {
+        console.warn('[api/rep/punches] Nenhuma marcação retornada pelo adaptador.', {
+          device_id: device.id,
+          since: since?.toISOString(),
+        });
+      }
       try {
         return Response.json({ ok: true, punches }, { status: 200, headers });
       } catch (ser: unknown) {

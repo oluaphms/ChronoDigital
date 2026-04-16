@@ -108,7 +108,21 @@ export async function deviceFetch(
     u.port ||
     (isHttps ? '443' : '80');
 
+  const rawTimeout = (process.env.REP_DEVICE_FETCH_TIMEOUT_MS ?? '90000').trim();
+  const timeoutMs = Math.min(600_000, Math.max(3_000, parseInt(rawTimeout, 10) || 90_000));
+
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let reqRef: http.ClientRequest | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      fn();
+    };
+
     const opts: http.RequestOptions & { insecureHTTPParser?: boolean } = {
       hostname: u.hostname,
       port,
@@ -134,22 +148,37 @@ export async function deviceFetch(
         const statusText = incoming.statusMessage || '';
         const h = new Headers();
         h.set('content-type', safeContentTypeHeader(incoming.headers['content-type']));
-        resolve(new Response(buf, { status, statusText, headers: h }));
+        settle(() => {
+          resolve(new Response(buf, { status, statusText, headers: h }));
+        });
       });
-      incoming.on('error', reject);
+      incoming.on('error', (err) => settle(() => reject(err)));
     });
 
-    req.on('error', reject);
+    reqRef = req;
+
+    timeoutId = setTimeout(() => {
+      reqRef?.destroy();
+      settle(() =>
+        reject(
+          new Error(
+            `Tempo esgotado (${timeoutMs}ms) ao contatar o relógio ${u.hostname}:${port}. Confira IP, porta, HTTP/HTTPS e firewall.`
+          )
+        )
+      );
+    }, timeoutMs);
+
+    req.on('error', (err) => settle(() => reject(err)));
 
     if (init?.signal) {
       if (init.signal.aborted) {
         req.destroy();
-        reject(new DOMException('The operation was aborted', 'AbortError'));
+        settle(() => reject(new DOMException('The operation was aborted', 'AbortError')));
         return;
       }
       const onAbort = () => {
         req.destroy();
-        reject(new DOMException('The operation was aborted', 'AbortError'));
+        settle(() => reject(new DOMException('The operation was aborted', 'AbortError')));
       };
       init.signal.addEventListener('abort', onAbort, { once: true });
     }

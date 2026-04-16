@@ -3,6 +3,14 @@
  * Não importe no código do cliente (browser bundle).
  */
 
+import '../timeclock/registerDefaultProviders';
+import { getProvider, hasTimeClockProvider } from '../timeclock/factory/providerFactory';
+import { TimeClockService } from '../timeclock/services/TimeClockService';
+import {
+  repDeviceToDeviceConfig,
+  repEmployeePayloadToEmployeePayload,
+  resolveTimeClockProviderKey,
+} from '../timeclock/utils/dataAdapters';
 import type {
   RepDevice,
   PunchFromDevice,
@@ -16,7 +24,11 @@ import { deviceFetch } from './repDeviceHttp';
 import { getVendorAdapter, registerVendorAdapter } from './repDeviceManager';
 import ControlIdAdapter from './adapters/controlId';
 
-registerVendorAdapter('Control iD', ControlIdAdapter);
+const controlIdAdapter = ControlIdAdapter;
+registerVendorAdapter('Control iD', controlIdAdapter);
+registerVendorAdapter('Control ID', controlIdAdapter);
+registerVendorAdapter('iDClass', controlIdAdapter);
+registerVendorAdapter('ControliD', controlIdAdapter);
 
 const CONNECT_TIMEOUT_MS = 10000;
 
@@ -333,6 +345,21 @@ export async function pushEmployeeToDeviceServer(
   device: RepDevice,
   employee: RepEmployeePayload
 ): Promise<{ ok: boolean; message: string }> {
+  const hubKey = resolveTimeClockProviderKey(device);
+  if (hubKey && hasTimeClockProvider(hubKey)) {
+    try {
+      const provider = getProvider(hubKey);
+      const service = new TimeClockService(provider);
+      const canonical = repEmployeePayloadToEmployeePayload(employee);
+      const cfg = repDeviceToDeviceConfig(device, hubKey);
+      const result = (await service.syncEmployee(cfg, canonical)) as { ok: boolean; message: string };
+      return result;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, message: msg };
+    }
+  }
+
   const adapter = getVendorAdapter(device);
   if (adapter?.pushEmployee) {
     return adapter.pushEmployee(device, employee);

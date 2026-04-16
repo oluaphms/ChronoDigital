@@ -9,6 +9,28 @@ function apiOrigin(): string {
   return window.location.origin;
 }
 
+/** Evita que o modal «Enviar e Receber» fique sem resposta se o proxy/rede travar. */
+async function fetchWithRepTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const c = new AbortController();
+  const tid = setTimeout(() => c.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: c.signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(
+        `Tempo esgotado (${Math.round(timeoutMs / 1000)}s) na chamada ao servidor REP. O relógio pode estar lento, inacessível ou o AFD é muito grande.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
 /** Resposta JSON ou HTML/texto (ex.: 502/500 da CDN) sem quebrar o parse. */
 async function readJsonOrText(res: Response): Promise<Record<string, unknown>> {
   const text = await res.text();
@@ -73,6 +95,8 @@ export function toUiString(v: unknown, fallback = ''): string {
   }
 }
 
+const PUNCHES_FETCH_TIMEOUT_MS = 240_000;
+
 export async function fetchPunchesViaApi(
   deviceId: string,
   since: Date | undefined,
@@ -81,10 +105,14 @@ export async function fetchPunchesViaApi(
   const u = new URL('/api/rep/punches', apiOrigin());
   u.searchParams.set('device_id', deviceId);
   if (since) u.searchParams.set('since', since.toISOString());
-  const res = await fetch(u.toString(), {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-  });
+  const res = await fetchWithRepTimeout(
+    u.toString(),
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    },
+    PUNCHES_FETCH_TIMEOUT_MS
+  );
   const data = await readJsonOrText(res);
   if (!res.ok) {
     throw new Error(normalizeApiError(data, res.status));
@@ -100,10 +128,14 @@ export async function fetchPunchesViaApi(
 export async function testConnectionViaApi(deviceId: string, accessToken: string): Promise<{ ok: boolean; message: string }> {
   const u = new URL('/api/rep/status', apiOrigin());
   u.searchParams.set('device_id', deviceId);
-  const res = await fetch(u.toString(), {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-  });
+  const res = await fetchWithRepTimeout(
+    u.toString(),
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    },
+    90_000
+  );
   const data = await readJsonOrText(res);
   const errText = normalizeApiError(data, res.status);
   if (!res.ok) {
@@ -125,15 +157,19 @@ export async function pushEmployeeToDeviceViaApi(
   accessToken: string
 ): Promise<{ ok: boolean; message: string }> {
   const u = new URL('/api/rep/push-employee', apiOrigin());
-  const res = await fetch(u.toString(), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
+  const res = await fetchWithRepTimeout(
+    u.toString(),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ device_id: deviceId, user_id: userId }),
     },
-    body: JSON.stringify({ device_id: deviceId, user_id: userId }),
-  });
+    120_000
+  );
   const data = await readJsonOrText(res);
   if (!res.ok) {
     return { ok: false, message: normalizeApiError(data, res.status) };
@@ -161,15 +197,19 @@ export async function repExchangeViaApi(
   error?: string;
 }> {
   const u = new URL('/api/rep/exchange', apiOrigin());
-  const res = await fetch(u.toString(), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
+  const res = await fetchWithRepTimeout(
+    u.toString(),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ device_id: deviceId, op, ...(clock ? { clock } : {}) }),
     },
-    body: JSON.stringify({ device_id: deviceId, op, ...(clock ? { clock } : {}) }),
-  });
+    180_000
+  );
   const data = await readJsonOrText(res);
   if (!res.ok) {
     return { ok: false, error: normalizeApiError(data, res.status) };

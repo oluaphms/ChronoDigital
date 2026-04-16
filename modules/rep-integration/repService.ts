@@ -114,10 +114,70 @@ export async function ingestAfdRecords(
 /**
  * Ingere lote de marcações vindas do dispositivo (fetch)
  */
+export type RepIngestBatchProgress = {
+  /** Índice do lote concluído (1..totalBatches). */
+  batchIndex: number;
+  totalBatches: number;
+  /** Quantas batidas já processadas neste lote acumulado. */
+  processedCount: number;
+  /** Total de batidas a gravar. */
+  total: number;
+  /** Paralelismo usado (RPCs em paralelo por lote). */
+  concurrency: number;
+};
+
 export type IngestPunchesFromDeviceOptions = {
   onlyStaging?: boolean;
   applySchedule?: boolean;
+  /**
+   * Usado em `syncRepDevice` após baixar as batidas: restringe à data local de hoje.
+   * `incremental` = sem filtro extra (comportamento padrão).
+   */
+  receiveScope?: 'incremental' | 'today_only';
+  /**
+   * Chamado ao concluir cada lote de ingestão (amostrado em importações muito grandes
+   * para não gerar milhares de linhas — no máximo ~50 eventos).
+   */
+  onBatchProgress?: (p: RepIngestBatchProgress) => void;
 };
+
+function foldIngestPunchRow(
+  r: Awaited<ReturnType<typeof ingestPunch>>,
+  onlyStaging: boolean,
+  result: IngestResult
+): void {
+  if (!r.success && r.error?.includes('já importado')) {
+    result.duplicated += 1;
+  } else if (r.success && r.user_not_found) {
+    /** Com fila temporária, «sem usuário» é esperado: conta só em staged, não duplicar em userNotFound. */
+    if (onlyStaging) {
+      result.staged = (result.staged ?? 0) + 1;
+    } else {
+      result.userNotFound += 1;
+    }
+  } else if (r.success) {
+    if (onlyStaging) {
+      result.staged = (result.staged ?? 0) + 1;
+    } else {
+      result.imported += 1;
+    }
+  } else if (result.errors.length < 100) {
+    result.errors.push(r.error || 'Erro desconhecido');
+  }
+}
+
+/**
+ * RPCs em paralelo (lotes) + yield ao event loop: evita UI «congelada» por milhares de batidas sequenciais.
+ */
+export function getRepIngestConcurrency(): number {
+  const raw =
+    typeof process !== 'undefined' && process.env?.REP_INGEST_CONCURRENCY
+      ? String(process.env.REP_INGEST_CONCURRENCY).trim()
+      : '';
+  const n = parseInt(raw, 10);
+  if (Number.isFinite(n) && n >= 1) return Math.min(16, n);
+  return 4;
+}
 
 export async function ingestPunchesFromDevice(
   supabase: SupabaseClient,
@@ -135,38 +195,58 @@ export async function ingestPunchesFromDevice(
   };
   const onlyStaging = options?.onlyStaging ?? false;
   const applySchedule = options?.applySchedule ?? false;
+  const concurrency = getRepIngestConcurrency();
+  const onBatchProgress = options?.onBatchProgress;
+  const total = punches.length;
+  const totalBatches = total > 0 ? Math.ceil(total / concurrency) : 0;
+  /** Máximo de callbacks de progresso (importações enormes). */
+  const maxProgressSamples = 50;
+  const progressStep =
+    totalBatches <= maxProgressSamples ? 1 : Math.max(1, Math.ceil(totalBatches / maxProgressSamples));
 
-  for (const p of punches) {
-    const r = await ingestPunch(supabase, {
-      company_id: device.company_id,
-      rep_device_id: device.id,
-      pis: p.pis ?? null,
-      cpf: p.cpf ?? null,
-      matricula: p.matricula ?? null,
-      nome_funcionario: p.nome ?? null,
-      data_hora: p.data_hora,
-      tipo_marcacao: p.tipo || 'E',
-      nsr: p.nsr ?? null,
-      raw_data: p.raw ?? {},
-      only_staging: onlyStaging,
-      apply_schedule: applySchedule,
-    });
-
-    if (!r.success && r.error?.includes('já importado')) {
-      result.duplicated += 1;
-    } else if (r.success && r.user_not_found) {
-      result.userNotFound += 1;
-      if (onlyStaging) {
-        result.staged = (result.staged ?? 0) + 1;
+  for (let i = 0; i < punches.length; i += concurrency) {
+    const slice = punches.slice(i, i + concurrency);
+    const batch = await Promise.all(
+      slice.map((p) =>
+        ingestPunch(supabase, {
+          company_id: device.company_id,
+          rep_device_id: device.id,
+          pis: p.pis ?? null,
+          cpf: p.cpf ?? null,
+          matricula: p.matricula ?? null,
+          nome_funcionario: p.nome ?? null,
+          data_hora: p.data_hora,
+          tipo_marcacao: p.tipo || 'E',
+          nsr: p.nsr ?? null,
+          raw_data: p.raw ?? {},
+          only_staging: onlyStaging,
+          apply_schedule: applySchedule,
+        })
+      )
+    );
+    for (const r of batch) {
+      foldIngestPunchRow(r, onlyStaging, result);
+    }
+    if (onBatchProgress && totalBatches > 0) {
+      const batchIndex = Math.floor(i / concurrency) + 1;
+      const processedCount = Math.min(i + slice.length, total);
+      const isFirst = batchIndex === 1;
+      const isLast = batchIndex === totalBatches;
+      const onStep = totalBatches <= maxProgressSamples || batchIndex % progressStep === 0;
+      if (isFirst || isLast || onStep) {
+        onBatchProgress({
+          batchIndex,
+          totalBatches,
+          processedCount,
+          total,
+          concurrency,
+        });
       }
-    } else if (r.success) {
-      if (onlyStaging) {
-        result.staged = (result.staged ?? 0) + 1;
-      } else {
-        result.imported += 1;
-      }
-    } else {
-      result.errors.push(r.error || 'Erro desconhecido');
+    }
+    if (i + concurrency < punches.length) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
   }
 

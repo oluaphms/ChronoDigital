@@ -7,6 +7,11 @@ import type { ParsedAfdRecord } from './types';
 
 const AFD_LINE_REGEX = /^(\d{9})[\s\t]*(\d{8})[\s\t]*(\d{6})[\s\t]*(\d{11})[\s\t]*([A-Za-z])?/;
 const AFD_LINE_REGEX_ALT = /^(\d{1,9})[\s\t]+(\d{8})[\s\t]+(\d{6})[\s\t]+(\d{10,14})[\s\t]*([A-Za-z])?/;
+/** Portaria 1510/671: NSR(9) + tipo registro(3 ou 7) + DDMMAAAA + HHMMSS + PIS/CPF; E/S opcional no fim. */
+const AFD_LINE_RECORD_37_LOOSE =
+  /^(\d{9})\s*([37])\s*(\d{8})\s*(\d{6})\s*(\d{10,14})(?:\s*([A-Za-z]))?/;
+const AFD_LINE_RECORD_37_TIGHT =
+  /^(\d{9})([37])(\d{8})(\d{6})(\d{10,14})([A-Za-z])?/;
 
 /**
  * Parse de arquivo AFD (texto) - linhas de marcação tipo 3 ou equivalente
@@ -17,7 +22,7 @@ export function parseAFD(fileContent: string): ParsedAfdRecord[] {
   const records: ParsedAfdRecord[] = [];
 
   for (const line of lines) {
-    if (line.length < 30) continue;
+    if (line.length < 18) continue;
     const parsed = parseAfdLine(line);
     if (parsed) records.push(parsed);
   }
@@ -28,9 +33,31 @@ export function parseAFD(fileContent: string): ParsedAfdRecord[] {
 /**
  * Parse de uma linha AFD
  */
+function normalizeMarcacaoTipo(t: string | undefined): string {
+  const u = (t || 'E').toUpperCase().slice(0, 1);
+  if (u === 'S' || u === 'E' || u === 'P') return u;
+  return 'E';
+}
+
 export function parseAfdLine(line: string): ParsedAfdRecord | null {
-  let m = line.match(AFD_LINE_REGEX);
-  if (!m) m = line.match(AFD_LINE_REGEX_ALT);
+  const trimmed = line.trim();
+  let m = trimmed.match(AFD_LINE_RECORD_37_LOOSE);
+  if (!m) m = trimmed.match(AFD_LINE_RECORD_37_TIGHT);
+  if (m) {
+    const [, nsrStr, , dataStr, horaStr, cpfPis, tipoMarc] = m;
+    const nsr = parseInt(nsrStr!, 10);
+    if (Number.isNaN(nsr)) return null;
+    const data = normalizeDate(dataStr!);
+    const hora = normalizeTime(horaStr!);
+    if (!data || !hora) return null;
+    const digits = (cpfPis || '').replace(/\D/g, '');
+    const cpfOuPis = digits.length <= 11 ? digits.padStart(11, '0') : digits.slice(0, 11);
+    const tipoNorm = normalizeMarcacaoTipo(tipoMarc);
+    return { nsr, data, hora, cpfOuPis, tipo: tipoNorm, raw: line };
+  }
+
+  m = trimmed.match(AFD_LINE_REGEX);
+  if (!m) m = trimmed.match(AFD_LINE_REGEX_ALT);
   if (!m) return null;
 
   const [, nsrStr, dataStr, horaStr, cpfPis, tipo] = m;
@@ -42,7 +69,7 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
   if (!data || !hora) return null;
 
   const cpfOuPis = (cpfPis || '').replace(/\D/g, '').slice(0, 11).padStart(11, '0');
-  const tipoNorm = (tipo || 'E').toUpperCase().slice(0, 1);
+  const tipoNorm = normalizeMarcacaoTipo(tipo);
 
   return {
     nsr,
@@ -79,7 +106,66 @@ function normalizeTime(hhmmss: string): string | null {
 }
 
 /**
- * Converte registro AFD para data_hora ISO (data + hora)
+ * Interpreta data (YYYY-MM-DD) e hora (HH:MM:SS) como horário civil no fuso IANA
+ * e retorna o instante em epoch ms UTC (para comparar com `ultima_sincronizacao` em ISO real).
+ */
+export function wallTimeInZoneToUtcMs(datePart: string, timePart: string, timeZone: string): number {
+  const y = parseInt(datePart.slice(0, 4), 10);
+  const mo = parseInt(datePart.slice(5, 7), 10);
+  const d = parseInt(datePart.slice(8, 10), 10);
+  const tb = timePart.split(':');
+  const h = parseInt(tb[0] || '0', 10);
+  const mi = parseInt(tb[1] || '0', 10);
+  const se = parseInt(tb[2] || '0', 10);
+  if ([y, mo, d, h, mi, se].some((n) => Number.isNaN(n))) return NaN;
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const target = `${y}-${pad(mo)}-${pad(d)} ${pad(h)}:${pad(mi)}:${pad(se)}`;
+
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  let lo = Date.UTC(y, mo - 1, d - 1, 0, 0, 0);
+  let hi = Date.UTC(y, mo - 1, d + 2, 23, 59, 59);
+
+  for (let i = 0; i < 56; i++) {
+    if (lo > hi) break;
+    const mid = Math.floor((lo + hi) / 2);
+    const wall = formatter.format(new Date(mid));
+    if (wall === target) {
+      let first = mid;
+      for (let k = 0; k < 1100; k++) {
+        const prev = first - 1;
+        if (formatter.format(new Date(prev)) !== target) break;
+        first = prev;
+      }
+      return first;
+    }
+    if (wall < target) lo = mid + 1;
+    else hi = mid - 1;
+  }
+
+  return Date.UTC(y, mo - 1, d, h, mi, se);
+}
+
+/** Registro AFD (data/hora locais do relógio) → ISO UTC correto para gravar / filtrar. */
+export function afdRecordWallTimeToUtcIso(record: ParsedAfdRecord, timeZone: string): string {
+  const ms = wallTimeInZoneToUtcMs(record.data, record.hora, timeZone);
+  if (Number.isNaN(ms)) return `${record.data}T${record.hora}.000Z`;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Converte registro AFD para data_hora ISO (data + hora).
+ * Sem `timezone`, assume componentes como UTC (`…Z`) — legado; prefira `afdRecordWallTimeToUtcIso` com IANA.
  */
 export function afdRecordToIsoDateTime(record: ParsedAfdRecord, timezone?: string): string {
   const datePart = record.data;
@@ -87,8 +173,7 @@ export function afdRecordToIsoDateTime(record: ParsedAfdRecord, timezone?: strin
   const iso = `${datePart}T${timePart}.000Z`;
   if (timezone && timezone !== 'UTC') {
     try {
-      const d = new Date(iso);
-      return d.toLocaleString('sv-SE', { timeZone: timezone }).replace(' ', 'T') + 'Z';
+      return afdRecordWallTimeToUtcIso(record, timezone);
     } catch {
       return iso;
     }

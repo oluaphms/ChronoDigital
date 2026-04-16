@@ -4,6 +4,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { RepDevice } from './types';
+import { mergeHubProviderIntoRepDevice } from './repHubMerge';
 import { getServiceRoleKeyResolved, getSupabaseAnonKeyResolved, getSupabaseUrlResolved } from './repVercelEnv';
 
 const JSON_HDR = { 'Content-Type': 'application/json' };
@@ -54,7 +55,7 @@ async function authenticateWithServiceRole(
     if (error || !device) {
       return Response.json({ error: 'Dispositivo não encontrado' }, { status: 404, headers: JSON_HDR });
     }
-    return { device: device as RepDevice };
+    return { device: await mergeHubProviderIntoRepDevice(admin, device as RepDevice) };
   }
 
   const { data: authData, error: authErr } = await admin.auth.getUser(token);
@@ -86,7 +87,7 @@ async function authenticateWithServiceRole(
     return Response.json({ error: 'Sem permissão para integração REP' }, { status: 403, headers: JSON_HDR });
   }
 
-  return { device: device as RepDevice };
+  return { device: await mergeHubProviderIntoRepDevice(admin, device as RepDevice) };
 }
 
 async function authenticateWithUserJwt(deviceId: string, jwt: string): Promise<{ device: RepDevice } | Response> {
@@ -149,7 +150,7 @@ async function authenticateWithUserJwt(deviceId: string, jwt: string): Promise<{
     return Response.json({ error: 'Sem permissão para integração REP' }, { status: 403, headers: JSON_HDR });
   }
 
-  return { device: device as RepDevice };
+  return { device: await mergeHubProviderIntoRepDevice(userClient, device as RepDevice) };
 }
 
 export async function authenticateRepDeviceRequest(

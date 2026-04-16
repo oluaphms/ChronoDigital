@@ -9,6 +9,8 @@ export interface RepDevice {
   id: string;
   company_id: string;
   nome_dispositivo: string;
+  /** Slug do hub multi-fabricante: control_id | dimep | topdata | henry (opcional; senão usa heurística de fabricante). */
+  provider_type?: string | null;
   fabricante?: string | null;
   modelo?: string | null;
   ip?: string | null;
@@ -57,6 +59,8 @@ export interface RepConnectionTestResult {
 
 /** Dados do funcionário para cadastro no relógio (fabricantes que suportam envio). */
 export interface RepEmployeePayload {
+  /** ID interno (ex.: users.id) para correlacionar no hub TimeClock. */
+  id?: string;
   nome: string;
   cpf?: string | null;
   pis?: string | null;

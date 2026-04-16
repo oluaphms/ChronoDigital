@@ -5,19 +5,24 @@ import PageHeader from '../../components/PageHeader';
 import { db, supabase, isSupabaseConfigured } from '../../services/supabaseClient';
 import { LoadingState, Button } from '../../../components/UI';
 import {
-  Clock,
-  Plus,
-  Pencil,
-  Trash2,
-  Wifi,
-  WifiOff,
-  UserPlus,
-  Download,
-  Upload,
+  Activity,
   ArrowLeftRight,
   ClipboardCheck,
+  Clock,
+  Download,
+  LayoutGrid,
+  Layers,
+  Plus,
+  Pencil,
+  Server,
+  Trash2,
+  Upload,
+  UserPlus,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { testRepDeviceConnection, syncRepDevice } from '../../../modules/rep-integration/repSyncJob';
+import type { RepIngestBatchProgress } from '../../../modules/rep-integration/repService';
 import { promotePendingRepPunchLogs } from '../../../modules/rep-integration/repService';
 import { LS_TIMESHEET_SPECIAL_BARS, readSpecialBarsPref, SPECIAL_BARS_CHANGED } from '../../utils/timesheetLayoutPrefs';
 import {
@@ -26,11 +31,14 @@ import {
   toUiString,
 } from '../../../modules/rep-integration/repDeviceBrowser';
 import type { RepDeviceClockSet, RepExchangeOp, RepUserFromDevice } from '../../../modules/rep-integration/types';
+import { upsertTimeClockDeviceMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
+import type { RepDeviceRowForMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
 
 type RepDeviceRow = {
   id: string;
   company_id: string;
   nome_dispositivo: string;
+  provider_type?: string | null;
   fabricante: string | null;
   modelo: string | null;
   ip: string | null;
@@ -40,8 +48,30 @@ type RepDeviceRow = {
   ultima_sincronizacao: string | null;
   ativo: boolean;
   created_at: string;
+  usuario?: string | null;
+  senha?: string | null;
   config_extra?: Record<string, unknown> | null;
 };
+
+type TimeclockHubDeviceRow = {
+  id: string;
+  company_id: string;
+  type: string;
+  ip: string | null;
+  port: number | null;
+  nome_dispositivo: string | null;
+  ativo: boolean | null;
+  rep_device_id: string | null;
+  updated_at: string | null;
+};
+
+const HUB_PROVIDER_OPTIONS = [
+  { value: '', label: 'Automático (pelo fabricante)' },
+  { value: 'control_id', label: 'Control iD (hub)' },
+  { value: 'dimep', label: 'Dimep (hub — em breve)' },
+  { value: 'topdata', label: 'Topdata (hub — em breve)' },
+  { value: 'henry', label: 'Henry (hub — em breve)' },
+] as const;
 
 type EmployeeForRep = {
   id: string;
@@ -66,12 +96,27 @@ const TIPOS_CONEXAO = [
 const LS_REP_STAGING = 'chrono_rep_receive_staging';
 const LS_REP_ALLOCATE = 'chrono_rep_receive_allocate';
 const LS_REP_SKIP_BLOCKED = 'chrono_rep_receive_skip_blocked';
+const REP_RECEIVE_UI_TIMEOUT_MS = 8 * 60 * 1000;
 
 function readLsBool(key: string, defaultVal: boolean): boolean {
   if (typeof window === 'undefined') return defaultVal;
   const v = localStorage.getItem(key);
   if (v === null) return defaultVal;
   return v === '1';
+}
+
+async function withUiTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Tempo esgotado (${Math.round(timeoutMs / 1000)}s) em ${label}.`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 /** Fuso no formato Control iD Portaria 671 (ex.: -0300). */
@@ -101,6 +146,9 @@ function buildLocalClockForRep(mode671: boolean): RepDeviceClockSet {
 const AdminRepDevices: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [devices, setDevices] = useState<RepDeviceRow[]>([]);
+  const [hubDevices, setHubDevices] = useState<TimeclockHubDeviceRow[]>([]);
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubError, setHubError] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -129,6 +177,12 @@ const AdminRepDevices: React.FC = () => {
   /** Espelho de ponto com barras destacadas (layout alternativo) */
   const [srSpecialBars, setSrSpecialBars] = useState(false);
   const [srPushUserId, setSrPushUserId] = useState('');
+  /** Sub-modal: escopo ao receber batidas */
+  const [srReceiveDialogOpen, setSrReceiveDialogOpen] = useState(false);
+  const [srReceiveScope, setSrReceiveScope] = useState<'incremental' | 'today_only'>('incremental');
+  /** Sub-modal: enviar / status / funcionários / config */
+  const [srSendDialogOpen, setSrSendDialogOpen] = useState(false);
+  const [srPushAllRunning, setSrPushAllRunning] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [configExtraBaseline, setConfigExtraBaseline] = useState<Record<string, unknown>>({});
   const [form, setForm] = useState({
@@ -145,6 +199,7 @@ const AdminRepDevices: React.FC = () => {
     repLogin: 'admin',
     repPassword: 'admin',
     mode671: false,
+    provider_type: '' as string,
   });
 
   const loadDevices = async () => {
@@ -160,9 +215,33 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
+  const loadHubDevices = useCallback(async () => {
+    if (!user?.companyId || !isSupabaseConfigured) return;
+    setHubLoading(true);
+    setHubError(null);
+    try {
+      const list = (await db.select(
+        'timeclock_devices',
+        [{ column: 'company_id', operator: 'eq', value: user.companyId }],
+        { column: 'nome_dispositivo', ascending: true },
+        200
+      )) as TimeclockHubDeviceRow[];
+      setHubDevices(list || []);
+    } catch (e) {
+      setHubError((e as Error).message);
+      setHubDevices([]);
+    } finally {
+      setHubLoading(false);
+    }
+  }, [user?.companyId]);
+
   useEffect(() => {
     if (user?.companyId) loadDevices();
   }, [user?.companyId]);
+
+  useEffect(() => {
+    if (user?.companyId) void loadHubDevices();
+  }, [user?.companyId, loadHubDevices]);
 
   const loadEmployeesForRep = async () => {
     if (!user?.companyId || !isSupabaseConfigured) return;
@@ -213,6 +292,18 @@ const AdminRepDevices: React.FC = () => {
     [devices]
   );
 
+  const repStats = useMemo(() => {
+    const ativos = devices.filter((d) => d.ativo).length;
+    const erros = devices.filter((d) => d.status === 'erro').length;
+    const sinc = devices.filter((d) => d.status === 'sincronizando').length;
+    return { total: devices.length, rede: redeDevices.length, ativos, erros, sinc };
+  }, [devices, redeDevices.length]);
+
+  const hubStats = useMemo(() => {
+    const linked = hubDevices.filter((h) => h.rep_device_id).length;
+    return { total: hubDevices.length, linked };
+  }, [hubDevices]);
+
   const srSelectedDevice = useMemo(
     () => (srDeviceId ? devices.find((d) => d.id === srDeviceId) ?? null : null),
     [devices, srDeviceId]
@@ -229,8 +320,10 @@ const AdminRepDevices: React.FC = () => {
     if (syncingId === d.id || pushingId === d.id) return true;
     if (exchangeBusy && exchangeBusy.startsWith(`${d.id}:`)) return true;
     if (promotingId === d.id) return true;
+    if (testingId === d.id) return true;
+    if (srPushAllRunning) return true;
     return false;
-  }, [srSelectedDevice, syncingId, pushingId, exchangeBusy, promotingId]);
+  }, [srSelectedDevice, syncingId, pushingId, exchangeBusy, promotingId, testingId, srPushAllRunning]);
 
   const appendSrLog = useCallback((line: string) => {
     const ts = new Date().toLocaleTimeString('pt-BR', {
@@ -247,6 +340,9 @@ const AdminRepDevices: React.FC = () => {
     setSrLog('');
     setSrSkipBlocked(true);
     setSrPushUserId('');
+    setSrReceiveDialogOpen(false);
+    setSrSendDialogOpen(false);
+    setSrReceiveScope('incremental');
     setSendReceiveOpen(true);
   };
 
@@ -256,6 +352,13 @@ const AdminRepDevices: React.FC = () => {
     setMessage(null);
     try {
       const r = await testRepDeviceConnection(supabase, id);
+      if (r.ok) {
+        await db.update('rep_devices', id, {
+          status: 'ativo',
+          updated_at: new Date().toISOString(),
+        });
+        await loadDevices();
+      }
       setMessage({
         type: r.ok ? 'success' : 'error',
         text: toUiString(r.message, r.ok ? 'Conexão OK' : 'Falha ao testar o relógio.'),
@@ -275,6 +378,7 @@ const AdminRepDevices: React.FC = () => {
       await db.delete('rep_devices', id);
       setMessage({ type: 'success', text: 'Dispositivo removido.' });
       await loadDevices();
+      await loadHubDevices();
     } catch (e) {
       setMessage({ type: 'error', text: (e as Error).message });
     } finally {
@@ -282,7 +386,7 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
-  const srRunReceivePunches = async () => {
+  const srRunReceivePunches = async (receiveScope: 'incremental' | 'today_only' = 'incremental') => {
     const d = srSelectedDevice;
     if (!d || d.tipo_conexao !== 'rede') {
       appendSrLog('Selecione um equipamento de rede.');
@@ -290,20 +394,60 @@ const AdminRepDevices: React.FC = () => {
     }
     if (!supabase) return;
     appendSrLog(`Recebendo marcações de "${d.nome_dispositivo}"…`);
+    if (receiveScope === 'today_only') {
+      appendSrLog('Escopo: apenas marcações com data/hora no dia de hoje (calendário deste computador).');
+    } else {
+      appendSrLog('Escopo: desde a última sincronização (com margem de segurança).');
+    }
+    appendSrLog(
+      'Se houver muitas batidas, o processamento pode levar alguns minutos; a rede tem tempo máximo (evita ficar preso para sempre).'
+    );
     setSyncingId(d.id);
     setMessage(null);
     try {
-      const r = await syncRepDevice(supabase, d.id, {
-        onlyStaging: srStaging,
-        applySchedule: srAllocate,
-      });
+      const r = await withUiTimeout(
+        syncRepDevice(supabase, d.id, {
+          onlyStaging: srStaging,
+          applySchedule: srAllocate,
+          receiveScope,
+          onBatchProgress: (p: RepIngestBatchProgress) => {
+            appendSrLog(
+              `Gravando lote ${p.batchIndex}/${p.totalBatches} — ${p.processedCount}/${p.total} marcação(ões) (até ${p.concurrency} em paralelo por lote).`
+            );
+          },
+        }),
+        REP_RECEIVE_UI_TIMEOUT_MS,
+        'Receber batidas'
+      );
       if (r.ok) {
         const staged = r.staged ?? 0;
         const imp = r.imported ?? 0;
+        const dup = r.duplicated ?? 0;
+        const unf = r.userNotFound ?? 0;
+        const received = r.received ?? 0;
         const parts: string[] = [];
         if (imp) parts.push(`${imp} registro(s) na folha (time_records)`);
         if (staged) parts.push(`${staged} na fila temporária (rep_punch_logs)`);
-        const summary = parts.length ? parts.join('; ') : 'Nenhuma marcação nova.';
+        if (unf) {
+          parts.push(
+            `${unf} recebida(s) sem funcionário correspondente no sistema (confira PIS/CPF ou use a fila temporária)`
+          );
+        }
+        if (dup) parts.push(`${dup} ignorada(s) (NSR já importado)`);
+        let summary: string;
+        if (parts.length) {
+          summary = parts.join('; ');
+        } else if (received > 0) {
+          summary =
+            'Nenhuma marcação nova (todas já constavam como NSR ou não puderam ser gravadas). Confira cadastro PIS/CPF e a opção de fila temporária.';
+        } else {
+          summary =
+            'O relógio não devolveu nenhuma marcação nesta leitura. Confira fabricante «Control iD», IP/porta/HTTPS, batidas no aparelho, fuso horário (afd_timezone em config_extra do relógio) e se não há «last_afd_nsr» no JSON extra apontando além do último NSR (isso força AFD vazio).';
+        }
+        appendSrLog(`Bruto do relógio: ${received} marcação(ões).`);
+        if (r.ingestErrors?.length) {
+          appendSrLog(`Erros ao gravar: ${r.ingestErrors.slice(0, 3).join(' | ')}`);
+        }
         appendSrLog(`Concluído: ${summary}`);
         setMessage({
           type: 'success',
@@ -321,6 +465,15 @@ const AdminRepDevices: React.FC = () => {
     } catch (e) {
       appendSrLog(`Erro: ${(e as Error).message}`);
       setMessage({ type: 'error', text: (e as Error).message });
+      try {
+        await db.update('rep_devices', d.id, {
+          status: 'erro',
+          updated_at: new Date().toISOString(),
+        });
+      } catch {
+        /* ignore */
+      }
+      await loadDevices();
     } finally {
       setSyncingId(null);
     }
@@ -507,6 +660,90 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
+  /** Teste de conexão a partir do modal (atualiza status do REP em caso de sucesso). */
+  const srRunStatusInModal = async () => {
+    const d = srSelectedDevice;
+    if (!d || !supabase) {
+      appendSrLog('Selecione um equipamento de rede.');
+      return;
+    }
+    setTestingId(d.id);
+    setMessage(null);
+    try {
+      const r = await testRepDeviceConnection(supabase, d.id);
+      const msg = toUiString(r.message, r.ok ? 'Conexão OK' : 'Falha no teste.');
+      appendSrLog(r.ok ? `Status / conexão: ${msg}` : `Falha: ${msg}`);
+      if (r.ok) {
+        await db.update('rep_devices', d.id, {
+          status: 'ativo',
+          updated_at: new Date().toISOString(),
+        });
+        await loadDevices();
+      }
+      setMessage({ type: r.ok ? 'success' : 'error', text: msg });
+    } catch (e) {
+      appendSrLog(`Erro: ${(e as Error).message}`);
+      setMessage({ type: 'error', text: (e as Error).message });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const srRunPushAllEligibleEmployees = async () => {
+    const d = srSelectedDevice;
+    if (!d || !supabase) {
+      appendSrLog('Selecione um equipamento de rede.');
+      return;
+    }
+    const list = employeesForModalPush;
+    if (list.length === 0) {
+      appendSrLog('Nenhum funcionário elegível para envio.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Enviar ao relógio «${d.nome_dispositivo}» o cadastro de ${list.length} colaborador(es) em sequência? Pode levar vários minutos.`
+      )
+    ) {
+      return;
+    }
+    setSrPushAllRunning(true);
+    setMessage(null);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        appendSrLog('Sessão expirada. Faça login novamente.');
+        setMessage({ type: 'error', text: 'Sessão expirada. Faça login novamente.' });
+        return;
+      }
+      let ok = 0;
+      let fail = 0;
+      for (const emp of list) {
+        appendSrLog(`Enviando «${emp.nome}»…`);
+        const r = await pushEmployeeToDeviceViaApi(d.id, emp.id, session.access_token);
+        if (r.ok) {
+          ok += 1;
+          appendSrLog(`  ✓ ${toUiString(r.message, 'OK')}`);
+        } else {
+          fail += 1;
+          appendSrLog(`  ✗ ${toUiString(r.message, 'Falha')}`);
+        }
+      }
+      appendSrLog(`Concluído: ${ok} ok, ${fail} falha(s).`);
+      setMessage({
+        type: fail ? 'error' : 'success',
+        text: `Envio em lote: ${ok} ok${fail ? `, ${fail} falha(s)` : ''}.`,
+      });
+    } catch (e) {
+      appendSrLog(`Erro: ${(e as Error).message}`);
+      setMessage({ type: 'error', text: (e as Error).message });
+    } finally {
+      setSrPushAllRunning(false);
+    }
+  };
+
   const openCreate = () => {
     setEditingId(null);
     setConfigExtraBaseline({});
@@ -524,6 +761,7 @@ const AdminRepDevices: React.FC = () => {
       repLogin: 'admin',
       repPassword: 'admin',
       mode671: false,
+      provider_type: '',
     });
     setModalOpen(true);
   };
@@ -547,6 +785,7 @@ const AdminRepDevices: React.FC = () => {
       repLogin: typeof ex.rep_login === 'string' ? ex.rep_login : 'admin',
       repPassword: typeof ex.rep_password === 'string' ? ex.rep_password : 'admin',
       mode671: ex.mode_671 === true,
+      provider_type: (d.provider_type || '').trim(),
     });
     setModalOpen(true);
   };
@@ -554,6 +793,7 @@ const AdminRepDevices: React.FC = () => {
   const saveDevice = async () => {
     if (!user?.companyId || !form.nome_dispositivo.trim()) return;
     try {
+      const providerSlug = form.provider_type.trim() || null;
       if (editingId) {
         const config_extra = {
           ...configExtraBaseline,
@@ -566,6 +806,7 @@ const AdminRepDevices: React.FC = () => {
         };
         await db.update('rep_devices', editingId, {
           nome_dispositivo: form.nome_dispositivo.trim(),
+          provider_type: providerSlug,
           fabricante: form.fabricante.trim() || null,
           modelo: form.modelo.trim() || null,
           ip: form.ip.trim() || null,
@@ -575,11 +816,40 @@ const AdminRepDevices: React.FC = () => {
           config_extra,
           updated_at: new Date().toISOString(),
         });
+        if (supabase) {
+          const mirrorRow: RepDeviceRowForMirror = {
+            id: editingId,
+            company_id: user.companyId,
+            nome_dispositivo: form.nome_dispositivo.trim(),
+            provider_type: providerSlug,
+            fabricante: form.fabricante.trim() || null,
+            modelo: form.modelo.trim() || null,
+            ip: form.ip.trim() || null,
+            porta: form.porta || null,
+            tipo_conexao: form.tipo_conexao,
+            ativo: form.ativo,
+            config_extra,
+          };
+          try {
+            await upsertTimeClockDeviceMirror(supabase, mirrorRow);
+          } catch (mirrorErr) {
+            console.warn(mirrorErr);
+            setMessage({
+              type: 'success',
+              text: `Dispositivo atualizado. Aviso: cadastro hub (timeclock_devices) não sincronizou: ${(mirrorErr as Error).message}`,
+            });
+            setModalOpen(false);
+            void loadDevices();
+            void loadHubDevices();
+            return;
+          }
+        }
         setMessage({ type: 'success', text: 'Dispositivo atualizado.' });
       } else {
-        await db.insert('rep_devices', {
+        const inserted = (await db.insert('rep_devices', {
           company_id: user.companyId,
           nome_dispositivo: form.nome_dispositivo.trim(),
+          provider_type: providerSlug,
           fabricante: form.fabricante.trim() || null,
           modelo: form.modelo.trim() || null,
           ip: form.ip.trim() || null,
@@ -595,11 +865,51 @@ const AdminRepDevices: React.FC = () => {
             rep_password: form.repPassword,
             mode_671: form.mode671,
           },
-        });
+        })) as RepDeviceRow;
+        if (supabase && inserted?.id) {
+          const ex =
+            inserted.config_extra && typeof inserted.config_extra === 'object'
+              ? (inserted.config_extra as Record<string, unknown>)
+              : {
+                  https: form.repHttps,
+                  tls_insecure: form.tlsInsecure,
+                  status_use_post: form.repStatusPost,
+                  rep_login: form.repLogin.trim() || 'admin',
+                  rep_password: form.repPassword,
+                  mode_671: form.mode671,
+                };
+          const mirrorRow = {
+            id: inserted.id,
+            company_id: user.companyId,
+            nome_dispositivo: form.nome_dispositivo.trim(),
+            provider_type: providerSlug,
+            fabricante: form.fabricante.trim() || null,
+            modelo: form.modelo.trim() || null,
+            ip: form.ip.trim() || null,
+            porta: form.porta || null,
+            tipo_conexao: form.tipo_conexao,
+            ativo: form.ativo,
+            config_extra: ex,
+          } satisfies RepDeviceRowForMirror;
+          try {
+            await upsertTimeClockDeviceMirror(supabase, mirrorRow);
+          } catch (mirrorErr) {
+            console.warn(mirrorErr);
+            setMessage({
+              type: 'success',
+              text: `Dispositivo cadastrado. Aviso: cadastro hub (timeclock_devices) não sincronizou: ${(mirrorErr as Error).message}`,
+            });
+            setModalOpen(false);
+            void loadDevices();
+            void loadHubDevices();
+            return;
+          }
+        }
         setMessage({ type: 'success', text: 'Dispositivo cadastrado.' });
       }
       setModalOpen(false);
-      loadDevices();
+      void loadDevices();
+      void loadHubDevices();
     } catch (e) {
       setMessage({ type: 'error', text: (e as Error).message });
     }
@@ -614,14 +924,19 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
+  const shortUuid = (id: string | null | undefined) => {
+    if (!id) return '—';
+    return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+  };
+
   if (loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <div className="p-4 md:p-6 lg:p-10 max-w-7xl mx-auto w-full">
       <PageHeader
         title="Relógios REP"
-        subtitle="Cadastre relógios e use Enviar e Receber para batidas, hora, funcionários e leitura de configuração (Control iD iDClass e compatíveis)."
+        subtitle="Cadastro de registradores, comunicação em rede (Control iD iDClass) e importação de marcações."
         icon={<Clock size={24} />}
         actions={
           <div className="flex flex-wrap gap-2 justify-end">
@@ -639,39 +954,195 @@ const AdminRepDevices: React.FC = () => {
 
       {message && (
         <div
-          className={`mb-4 px-4 py-2 rounded-lg ${message.type === 'success' ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'}`}
+          className={`mb-4 px-4 py-3 rounded-xl ${message.type === 'success' ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'}`}
+          role="status"
         >
           {toUiString(message.text, 'Erro')}
         </div>
       )}
 
-      {repDeploymentNote && (
-        <div
-          className="mb-4 px-4 py-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 text-sm leading-relaxed"
-          role="status"
-        >
-          <strong className="font-semibold">Arquitetura REP:</strong> o painel usa apenas rotas HTTPS do próprio app (
-          <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">/api/rep/status</code>,{' '}
-          <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">/api/rep/punches</code>,{' '}
-          <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">/api/rep/push-employee</code>,{' '}
-          <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">/api/rep/exchange</code>
-          ) — sem mixed content nem CORS para o IP do relógio. Em <strong>produção na nuvem</strong> o backend não alcança
-          <code className="text-xs mx-1 bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">192.168.x.x</code>: use o
-          agente local <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">npm run rep:agent</code>,{' '}
-          <strong>importação AFD/arquivo</strong>, ou rode <code className="text-xs bg-amber-100/80 dark:bg-amber-900/50 px-1 rounded">npm run dev</code> na
-          mesma rede do relógio para o proxy alcançar o aparelho.
+      {!loadingList && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-8">
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-700/80">
+                <LayoutGrid className="text-slate-600 dark:text-slate-300" size={20} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total</p>
+                <p className="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{repStats.total}</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-900/40">
+                <Server className="text-indigo-600 dark:text-indigo-300" size={20} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Rede (IP)</p>
+                <p className="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{repStats.rede}</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/40">
+                <Wifi className="text-emerald-700 dark:text-emerald-300" size={20} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Ativos</p>
+                <p className="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{repStats.ativos}</p>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-900/40">
+                <WifiOff className="text-rose-700 dark:text-rose-300" size={20} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Erro / sinc.</p>
+                <p className="text-xl font-bold tabular-nums text-slate-900 dark:text-white">
+                  {repStats.erros + repStats.sinc}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
+      )}
+
+      {!loadingList && (
+        <section
+          className="mb-8 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden"
+          aria-labelledby="hub-timeclock-heading"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-100 dark:bg-violet-900/40">
+                <Layers className="text-violet-700 dark:text-violet-300" size={20} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <h2
+                  id="hub-timeclock-heading"
+                  className="text-sm font-semibold text-slate-900 dark:text-white tracking-tight"
+                >
+                  Hub TimeClock
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Vista somente leitura da tabela <code className="text-[11px]">timeclock_devices</code>
+                  {hubStats.total > 0 ? (
+                    <>
+                      {' '}
+                      — {hubStats.total} registro(s), {hubStats.linked} com vínculo a um REP.
+                    </>
+                  ) : null}
+                </p>
+              </div>
+            </div>
+            <Button type="button" variant="outline" size="sm" loading={hubLoading} onClick={() => void loadHubDevices()}>
+              Atualizar lista
+            </Button>
+          </div>
+          <div className="p-4">
+            {hubError ? (
+              <p className="text-sm text-amber-800 dark:text-amber-200" role="alert">
+                Não foi possível carregar o hub: {toUiString(hubError, hubError)}
+                {' — '}
+                confira se as migrações <code className="text-xs">timeclock_devices</code> foram aplicadas.
+              </p>
+            ) : hubLoading && hubDevices.length === 0 ? (
+              <LoadingState message="Carregando cadastro do hub…" />
+            ) : hubDevices.length === 0 ? (
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Nenhum registro no hub. Ao salvar um relógio REP, o sistema tenta criar ou atualizar o espelho aqui.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-600">
+                <table className="w-full text-sm text-left min-w-[640px]">
+                  <thead className="bg-slate-50 dark:bg-slate-900/50 text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Nome</th>
+                      <th className="px-3 py-2 font-medium">Tipo</th>
+                      <th className="px-3 py-2 font-medium">IP</th>
+                      <th className="px-3 py-2 font-medium">Porta</th>
+                      <th className="px-3 py-2 font-medium">REP (id)</th>
+                      <th className="px-3 py-2 font-medium">Ativo</th>
+                      <th className="px-3 py-2 font-medium">Atualizado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700 text-slate-800 dark:text-slate-100">
+                    {hubDevices.map((h) => (
+                      <tr key={h.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-700/20">
+                        <td className="px-3 py-2 font-medium">{toUiString(h.nome_dispositivo || '—')}</td>
+                        <td className="px-3 py-2">
+                          <code className="text-xs bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{h.type}</code>
+                        </td>
+                        <td className="px-3 py-2 tabular-nums">{h.ip || '—'}</td>
+                        <td className="px-3 py-2 tabular-nums">{h.port ?? '—'}</td>
+                        <td className="px-3 py-2 font-mono text-xs">{shortUuid(h.rep_device_id)}</td>
+                        <td className="px-3 py-2">{h.ativo === false ? 'Não' : 'Sim'}</td>
+                        <td className="px-3 py-2 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                          {formatDate(h.updated_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {repDeploymentNote && (
+        <details className="mb-6 rounded-xl border border-amber-200/90 dark:border-amber-800/80 bg-amber-50/90 dark:bg-amber-950/35 text-amber-950 dark:text-amber-100">
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold outline-none marker:content-none [&::-webkit-details-marker]:hidden">
+            Implantação: nuvem vs rede local (clique para expandir)
+          </summary>
+          <div className="px-4 pb-4 text-sm leading-relaxed border-t border-amber-200/60 dark:border-amber-800/50 pt-3">
+            O painel usa apenas rotas do próprio app (
+            <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">/api/rep/status</code>,{' '}
+            <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">/api/rep/punches</code>,{' '}
+            <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">/api/rep/push-employee</code>,{' '}
+            <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">/api/rep/exchange</code>
+            ) — sem mixed content nem CORS direto para o IP do relógio. Em <strong>produção na nuvem</strong> o backend não
+            alcança <code className="text-xs mx-1 bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">192.168.x.x</code>: use
+            o agente <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">npm run rep:agent</code>,{' '}
+            <strong>importação por arquivo</strong>, ou <code className="text-xs bg-amber-100/90 dark:bg-amber-900/50 px-1 rounded">npm run dev</code> na mesma
+            LAN do aparelho.
+          </div>
+        </details>
       )}
 
       {loadingList ? (
         <LoadingState message="Carregando dispositivos..." />
       ) : (
-        <>
+        <section className="space-y-4" aria-labelledby="rep-devices-list-heading">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2
+                id="rep-devices-list-heading"
+                className="text-lg font-semibold text-slate-900 dark:text-white tracking-tight"
+              >
+                Dispositivos cadastrados
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 max-w-2xl">
+                Teste a conexão em rede antes de importar batidas. Control iD: PIS/NIS válido ou CPF (modo 671) no cadastro do
+                funcionário.
+              </p>
+            </div>
+          </div>
+
           {/* Mobile: layout em cards (stack) para evitar overflow horizontal */}
           <div className="md:hidden space-y-3">
             {devices.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-6 text-center text-slate-500 dark:text-slate-400">
-                Nenhum relógio cadastrado. Clique em &quot;Cadastrar relógio&quot; para adicionar.
+              <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-900/20 px-4 py-10 text-center">
+                <Clock className="mx-auto mb-3 text-slate-300 dark:text-slate-600" size={36} aria-hidden />
+                <p className="text-slate-600 dark:text-slate-300 font-medium">Nenhum relógio ainda</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  Use <strong className="font-medium">Cadastrar relógio</strong> para incluir o primeiro dispositivo.
+                </p>
               </div>
             ) : (
               devices.map((d) => (
@@ -737,18 +1208,13 @@ const AdminRepDevices: React.FC = () => {
                       <Trash2 size={14} />
                     </Button>
                   </div>
-                  {d.tipo_conexao === 'rede' && (
-                    <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                      Control iD: PIS/CPF no cadastro do funcionário; modo 671 exige CPF de 11 dígitos para envio.
-                    </p>
-                  )}
                 </div>
               ))
             )}
           </div>
 
           {/* Desktop/Tablet: tabela com scroll horizontal se necessário */}
-          <div className="hidden md:block rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div className="hidden md:block rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
             <div className="w-full overflow-x-auto">
               <table className="min-w-[880px] w-full text-left">
                 <thead className="bg-slate-50 dark:bg-slate-800/50">
@@ -764,8 +1230,9 @@ const AdminRepDevices: React.FC = () => {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                   {devices.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-500 dark:text-slate-400">
-                        Nenhum relógio cadastrado. Clique em &quot;Cadastrar relógio&quot; para adicionar.
+                      <td colSpan={6} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
+                        <Clock className="mx-auto mb-2 text-slate-300 dark:text-slate-600" size={28} aria-hidden />
+                        Nenhum relógio cadastrado. Clique em <strong className="font-medium text-slate-600 dark:text-slate-300">Cadastrar relógio</strong>.
                       </td>
                     </tr>
                   ) : (
@@ -828,7 +1295,7 @@ const AdminRepDevices: React.FC = () => {
               </table>
             </div>
           </div>
-        </>
+        </section>
       )}
 
       {sendReceiveOpen && (
@@ -840,30 +1307,37 @@ const AdminRepDevices: React.FC = () => {
           onClick={() => setSendReceiveOpen(false)}
         >
           <div
-            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6"
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-2xl max-h-[88vh] md:max-h-[82vh] overflow-y-auto flex flex-col p-4 sm:p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2 mb-4">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
-                <ArrowLeftRight size={22} />
-              </span>
-              <div>
-                <h2 id="rep-send-receive-title" className="text-lg font-bold text-slate-900 dark:text-white">
-                  Enviar e Receber
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Comunicação com o relógio pela rede (importação, horário e cadastros).
-                </p>
+            <header className="flex items-start justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                  <ArrowLeftRight size={22} aria-hidden />
+                </span>
+                <div className="min-w-0">
+                  <h2 id="rep-send-receive-title" className="text-lg font-bold text-slate-900 dark:text-white">
+                    Comunicação com o relógio
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Importação de batidas, ajuste de data/hora e operações auxiliares (Control iD / rede).
+                  </p>
+                </div>
               </div>
-            </div>
+              <Button type="button" variant="secondary" size="sm" className="shrink-0" onClick={() => setSendReceiveOpen(false)}>
+                Fechar
+              </Button>
+            </header>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Equipamento</label>
+            <div className="flex flex-col gap-4 pt-4 flex-1 min-h-0">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-900/25 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                  Equipamento
+                </p>
                 <select
                   value={srDeviceId}
                   onChange={(e) => setSrDeviceId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
                 >
                   <option value="">Selecione o relógio…</option>
                   {redeDevices.map((d) => (
@@ -873,26 +1347,74 @@ const AdminRepDevices: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                {srSelectedDevice && (
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                    <span className="font-medium text-slate-700 dark:text-slate-200">{srSelectedDevice.nome_dispositivo}</span>
+                    {srSelectedDevice.fabricante ? ` · ${srSelectedDevice.fabricante}` : ''}
+                    {srSelectedDevice.config_extra?.mode_671 === true ? (
+                      <span className="ml-1 rounded-md bg-indigo-100 dark:bg-indigo-900/40 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800 dark:text-indigo-200">
+                        671
+                      </span>
+                    ) : null}
+                  </p>
+                )}
                 {redeDevices.length === 0 && (
-                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                  <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
                     Cadastre um dispositivo do tipo rede (IP) para habilitar esta tela.
                   </p>
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
-                <textarea
-                  readOnly
-                  rows={8}
-                  value={srLog}
-                  placeholder="As mensagens da comunicação aparecem aqui."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 text-slate-800 dark:text-slate-200 text-xs font-mono leading-relaxed resize-y min-h-[140px]"
-                />
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-3">
+                  Ações principais
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="w-full justify-center"
+                    disabled={srActionsLocked || redeDevices.length === 0}
+                    onClick={() => {
+                      setSrReceiveScope('incremental');
+                      setSrReceiveDialogOpen(true);
+                    }}
+                  >
+                    <Download size={16} className="mr-1.5 shrink-0" />
+                    Receber batidas
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="w-full justify-center"
+                    disabled={srActionsLocked || redeDevices.length === 0}
+                    onClick={() => setSrSendDialogOpen(true)}
+                  >
+                    <Upload size={16} className="mr-1.5 shrink-0" />
+                    Enviar / consultar
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-center border-slate-300 dark:border-slate-600"
+                    disabled={srActionsLocked || redeDevices.length === 0 || !user?.companyId}
+                    onClick={srRunPromoteStaging}
+                    title="Grava na folha as marcações que estão só em rep_punch_logs"
+                  >
+                    <ClipboardCheck size={16} className="mr-1.5 shrink-0" />
+                    Consolidar
+                  </Button>
+                </div>
+                <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  <strong className="text-slate-600 dark:text-slate-300">Receber</strong> abre a escolha do escopo (última sync ou só hoje).{' '}
+                  <strong className="text-slate-600 dark:text-slate-300">Enviar / consultar</strong> abre status, data/hora, funcionários e leituras no aparelho.{' '}
+                  <strong className="text-slate-600 dark:text-slate-300">Consolidar</strong> move da fila temporária para a folha.
+                </p>
               </div>
 
-              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3 space-y-3 bg-slate-50/80 dark:bg-slate-900/30">
-                <p className="text-xs font-medium text-slate-600 dark:text-slate-300">Opções</p>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3 sm:p-4 space-y-3 bg-slate-50/80 dark:bg-slate-900/30">
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Opções de importação e envio</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
                 <label className="flex gap-2 items-start cursor-pointer">
                   <input
                     type="checkbox"
@@ -986,51 +1508,7 @@ const AdminRepDevices: React.FC = () => {
                     </span>
                   </span>
                 </label>
-              </div>
-
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                <strong className="font-medium text-slate-600 dark:text-slate-300">Receber</strong> importa as marcações do
-                relógio para o sistema. <strong className="font-medium text-slate-600 dark:text-slate-300">Enviar</strong>{' '}
-                grava a data e hora deste computador no aparelho.{' '}
-                <strong className="font-medium text-slate-600 dark:text-slate-300">Consolidar</strong> grava na folha as
-                batidas que ficaram só na fila temporária.
-              </p>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="primary"
-                  className="flex-1 min-w-[100px]"
-                  disabled={srActionsLocked || redeDevices.length === 0}
-                  onClick={srRunReceivePunches}
-                >
-                  <Download size={16} className="mr-1.5" />
-                  Receber
-                </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  className="flex-1 min-w-[100px]"
-                  disabled={srActionsLocked || redeDevices.length === 0}
-                  onClick={srRunSendClock}
-                >
-                  <Upload size={16} className="mr-1.5" />
-                  Enviar
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="flex-1 min-w-[120px]"
-                  disabled={srActionsLocked || redeDevices.length === 0 || !user?.companyId}
-                  onClick={srRunPromoteStaging}
-                  title="Grava na folha as marcações que estão só em rep_punch_logs"
-                >
-                  <ClipboardCheck size={16} className="mr-1.5" />
-                  Consolidar pendentes
-                </Button>
-                <Button type="button" variant="secondary" className="min-w-[88px]" onClick={() => setSendReceiveOpen(false)}>
-                  Fechar
-                </Button>
+                </div>
               </div>
 
               <details className="rounded-xl border border-slate-200 dark:border-slate-600 p-3 text-sm">
@@ -1100,7 +1578,278 @@ const AdminRepDevices: React.FC = () => {
                   </div>
                 </div>
               </details>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-4 flex flex-col flex-1 min-h-[140px]">
+                <label
+                  htmlFor="rep-sr-log"
+                  className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2"
+                >
+                  Registro de atividade
+                </label>
+                <textarea
+                  id="rep-sr-log"
+                  readOnly
+                  rows={7}
+                  value={srLog}
+                  placeholder="As mensagens da comunicação aparecem aqui. Receber muitas batidas pode levar vários minutos."
+                  className="w-full flex-1 min-h-[120px] px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50 text-slate-800 dark:text-slate-200 text-xs font-mono leading-relaxed resize-y"
+                />
+              </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {sendReceiveOpen && srReceiveDialogOpen && (
+        <div
+          className="fixed inset-0 z-[138] flex items-center justify-center bg-black/55 p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rep-receive-scope-title"
+          onClick={() => setSrReceiveDialogOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md p-4 sm:p-6 border border-slate-200 dark:border-slate-600"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="rep-receive-scope-title" className="text-lg font-bold text-slate-900 dark:text-white">
+              O que importar do relógio?
+            </h3>
+            <p className="text-sm text-slate-600 dark:text-slate-300 mt-1 mb-4">
+              Equipamento:{' '}
+              <span className="font-medium">{srSelectedDevice?.nome_dispositivo ?? '—'}</span>
+            </p>
+            <div className="space-y-3">
+              <label className="flex gap-3 cursor-pointer rounded-xl border border-slate-200 dark:border-slate-600 p-3 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50/80 dark:has-[:checked]:bg-emerald-950/30">
+                <input
+                  type="radio"
+                  name="sr-receive-scope"
+                  className="mt-1"
+                  checked={srReceiveScope === 'incremental'}
+                  onChange={() => setSrReceiveScope('incremental')}
+                />
+                <span>
+                  <span className="font-medium text-slate-900 dark:text-white">Desde a última sincronização</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Trazer batidas novas em relação ao último sync (com margem de segurança). Recomendado no dia a dia.
+                  </span>
+                </span>
+              </label>
+              <label className="flex gap-3 cursor-pointer rounded-xl border border-slate-200 dark:border-slate-600 p-3 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50/80 dark:has-[:checked]:bg-emerald-950/30">
+                <input
+                  type="radio"
+                  name="sr-receive-scope"
+                  className="mt-1"
+                  checked={srReceiveScope === 'today_only'}
+                  onChange={() => setSrReceiveScope('today_only')}
+                />
+                <span>
+                  <span className="font-medium text-slate-900 dark:text-white">Apenas o dia de hoje</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Só grava marcações cuja data/hora cai no dia de hoje no calendário deste computador (após baixar do
+                    aparelho).
+                  </span>
+                </span>
+              </label>
+            </div>
+            <div className="mt-6 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+              <Button type="button" variant="outline" onClick={() => setSrReceiveDialogOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={srActionsLocked || !srSelectedDevice}
+                onClick={() => {
+                  setSrReceiveDialogOpen(false);
+                  void srRunReceivePunches(srReceiveScope);
+                }}
+              >
+                Continuar e receber
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sendReceiveOpen && srSendDialogOpen && (
+        <div
+          className="fixed inset-0 z-[138] flex items-center justify-center bg-black/55 p-3 sm:p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rep-send-panel-title"
+          onClick={() => setSrSendDialogOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-lg my-auto p-4 sm:p-6 border border-slate-200 dark:border-slate-600 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="rep-send-panel-title" className="text-lg font-bold text-slate-900 dark:text-white">
+              Enviar e consultar no relógio
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-4">
+              {srSelectedDevice ? (
+                <>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">{srSelectedDevice.nome_dispositivo}</span>
+                  {srSelectedDevice.ip ? ` · ${srSelectedDevice.ip}:${srSelectedDevice.porta ?? 80}` : ''}
+                </>
+              ) : (
+                'Selecione um equipamento acima.'
+              )}
+            </p>
+
+            <div className="space-y-3 text-sm">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3 bg-slate-50/50 dark:bg-slate-900/20">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                  Status e conexão
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                  Testa o caminho até o aparelho (equivalente a testar conexão no cadastro).
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto justify-center"
+                  disabled={srActionsLocked || !srSelectedDevice || testingId === srSelectedDevice?.id}
+                  onClick={() => {
+                    setSrSendDialogOpen(false);
+                    void srRunStatusInModal();
+                  }}
+                >
+                  <Activity size={16} className="mr-1.5 shrink-0" />
+                  Testar status / conexão
+                </Button>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                  Data e hora
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                  Envia para o relógio a data e hora deste computador (Control iD / rede).
+                </p>
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="w-full sm:w-auto justify-center"
+                  disabled={srActionsLocked || !srSelectedDevice || !!exchangeBusy}
+                  onClick={() => {
+                    setSrSendDialogOpen(false);
+                    void srRunSendClock();
+                  }}
+                >
+                  <Upload size={16} className="mr-1.5 shrink-0" />
+                  Enviar data e hora agora
+                </Button>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                  Funcionários (cadastro no aparelho)
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                  Um colaborador selecionado ou envio em lote dos elegíveis (ativos, conforme opções abaixo no painel
+                  principal).
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                  <div className="flex-1 min-w-0">
+                    <label className="block text-[11px] text-slate-500 mb-0.5">Colaborador</label>
+                    <select
+                      value={srPushUserId}
+                      onChange={(e) => setSrPushUserId(e.target.value)}
+                      disabled={employeesForModalPush.length === 0 || srPushAllRunning}
+                      className="w-full px-2 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm"
+                    >
+                      <option value="">Selecione…</option>
+                      {employeesForModalPush.map((emp) => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      srActionsLocked || !srSelectedDevice || !srPushUserId || employeesForModalPush.length === 0 || srPushAllRunning
+                    }
+                    onClick={() => {
+                      setSrSendDialogOpen(false);
+                      void srRunPushEmployee();
+                    }}
+                  >
+                    <UserPlus size={14} className="mr-1" />
+                    Enviar um
+                  </Button>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full mt-2 justify-center"
+                  disabled={srActionsLocked || !srSelectedDevice || employeesForModalPush.length === 0 || srPushAllRunning}
+                  loading={srPushAllRunning}
+                  onClick={() => {
+                    setSrSendDialogOpen(false);
+                    void srRunPushAllEligibleEmployees();
+                  }}
+                >
+                  Enviar todos os elegíveis ({employeesForModalPush.length})
+                </Button>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                  Leituras no aparelho (config / usuários)
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                  Não envia alterações ao fabricante: apenas lê hora, informações e lista de usuários no relógio.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={srActionsLocked || !srSelectedDevice || !!exchangeBusy}
+                    onClick={() => {
+                      setSrSendDialogOpen(false);
+                      void srRunExchangeOp('pull_clock');
+                    }}
+                  >
+                    Ler hora no relógio
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={srActionsLocked || !srSelectedDevice || !!exchangeBusy}
+                    onClick={() => {
+                      setSrSendDialogOpen(false);
+                      void srRunExchangeOp('pull_info');
+                    }}
+                  >
+                    Ler info / config
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={srActionsLocked || !srSelectedDevice || !!exchangeBusy}
+                    onClick={() => {
+                      setSrSendDialogOpen(false);
+                      void srRunExchangeOp('pull_users');
+                    }}
+                  >
+                    Listar usuários no aparelho
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <Button type="button" variant="secondary" className="w-full mt-5" onClick={() => setSrSendDialogOpen(false)}>
+              Fechar
+            </Button>
           </div>
         </div>
       )}
@@ -1181,11 +1930,11 @@ const AdminRepDevices: React.FC = () => {
 
       {modalOpen && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-3 sm:p-4" role="dialog" aria-modal="true">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 flex flex-col">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 flex flex-col">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white pb-3 border-b border-slate-200 dark:border-slate-700">
               {editingId ? 'Editar relógio' : 'Novo relógio REP'}
             </h2>
-            <div className="space-y-4 flex-1">
+            <div className="space-y-5 flex-1 pt-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome *</label>
                 <input
@@ -1205,6 +1954,26 @@ const AdminRepDevices: React.FC = () => {
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                   placeholder="Ex: Control iD, Henry"
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Marca no hub TimeClock
+                </label>
+                <select
+                  value={form.provider_type}
+                  onChange={(e) => setForm((f) => ({ ...f, provider_type: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                >
+                  {HUB_PROVIDER_OPTIONS.map((o) => (
+                    <option key={o.value || 'auto'} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Define qual provider trata este relógio. «Automático» usa o campo fabricante. O cadastro é espelhado em{' '}
+                  <code className="text-[11px]">timeclock_devices</code>.
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Modelo</label>
@@ -1231,6 +2000,11 @@ const AdminRepDevices: React.FC = () => {
               </div>
               {form.tipo_conexao === 'rede' && (
                 <>
+                  <div className="pt-1 border-t border-slate-200 dark:border-slate-700">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-3">
+                      Rede, TLS e Control iD
+                    </p>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP</label>
                     <input
