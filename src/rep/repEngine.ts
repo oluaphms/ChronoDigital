@@ -4,6 +4,7 @@
  * Responsabilidades: registrar ponto com NSR, hash, comprovante, integridade, exportação AFD/AEJ.
  */
 
+import { PUNCH_SOURCE_WEB } from '../constants/punchSource';
 import { supabase, db, isSupabaseConfigured } from '../services/supabaseClient';
 import { withTimeout } from '../utils/withTimeout';
 
@@ -15,6 +16,7 @@ export interface RegisterPunchParams {
   recordId?: string;
   location?: { lat: number; lng: number; accuracy?: number };
   photoUrl?: string | null;
+  /** `web` = app (default). `clock` = reservado ao pipeline do agente neste fluxo. */
   source?: string;
 }
 
@@ -107,7 +109,7 @@ export async function registerPunch(params: RegisterPunchParams): Promise<Regist
     recordId,
     location,
     photoUrl,
-    source = 'web',
+    source = PUNCH_SOURCE_WEB,
   } = params;
 
   ensureUuidLike(userId, 'user_id');
@@ -152,7 +154,7 @@ export async function registerPunchSecure(params: RegisterPunchSecureParams): Pr
     recordId,
     location,
     photoUrl,
-    source = 'web',
+    source = PUNCH_SOURCE_WEB,
     latitude,
     longitude,
     accuracy,

@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
+import { PUNCH_SOURCE_WEB } from '../src/constants/punchSource';
+import { sendPunch } from '../src/services/sendPunch.service';
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -59,11 +61,14 @@ export default async function handler(request: Request): Promise<Response> {
     type,
     method: method || 'api',
     created_at: ts.toISOString(),
+    source: PUNCH_SOURCE_WEB,
   };
 
-  const { error } = await supabase.from('punches').insert(payload);
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500, headers: corsHeaders });
+  try {
+    await sendPunch(supabase, payload);
+  } catch (e: unknown) {
+    const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message: unknown }).message) : String(e);
+    return Response.json({ error: msg }, { status: 500, headers: corsHeaders });
   }
 
   return Response.json({ success: true }, { status: 200, headers: corsHeaders });

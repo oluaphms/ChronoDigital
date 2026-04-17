@@ -58,3 +58,9 @@ Thumbs.db
 # Misc
 *.tsbuildinfo
 .cache
+
+# Agente local — fila offline (persistência local)
+agent/data/offline-queue.json
+agent/data/pending.db
+agent/data/pending.db-wal
+agent/data/pending.db-shm

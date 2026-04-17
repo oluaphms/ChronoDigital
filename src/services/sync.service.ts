@@ -4,6 +4,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { PUNCH_SOURCE_CLOCK } from '../constants/punchSource';
 import { getAdapter } from '../adapters/factory';
 import type { DeviceConfig, NormalizedRecord } from '../adapters/types';
 import type { SupabaseRestConfig } from './supabaseRest';
@@ -26,6 +27,40 @@ export interface DeviceRow {
   config_extra?: Record<string, unknown> | null;
 }
 
+export interface BulkInsertFailurePayload {
+  deviceId: string;
+  companyId: string | null;
+  timeLogsTable: string;
+  rows: Record<string, unknown>[];
+  error: unknown;
+}
+
+/**
+ * Persistência local antes do POST (SQLite no agente): coleta → grava → envia → se falhar mantém pendente.
+ */
+export interface OfflineClockPersistenceHooks {
+  /** Grava cada batida em `pending_punches` (`synced=0`); retorna ids na mesma ordem de `rows`. */
+  stageRowsBeforeSend: (input: {
+    deviceId: string;
+    companyId: string | null;
+    timeLogsTable: string;
+    rows: Record<string, unknown>[];
+  }) => Promise<string[]>;
+  /** Após `restPostBulk` bem-sucedido. */
+  markRowsSynced: (ids: string[]) => Promise<void>;
+  /** Após falha do POST (ids já estão na fila; ex.: atualizar retry). */
+  onSendFailed?: (input: { deviceId: string; ids: string[]; error: unknown }) => void | Promise<void>;
+}
+
+export interface ApiPunchSender {
+  /** Envia lote via API intermediária /api/punch. Retorna {success, inserted, error?}. */
+  send: (input: {
+    deviceId: string;
+    companyId: string | null;
+    rows: Record<string, unknown>[];
+  }) => Promise<{ success: boolean; inserted: number; duplicates?: number; error?: string }>;
+}
+
 export interface SyncCycleOptions {
   supabase: SupabaseRestConfig;
   /** Tabela PostgREST dos eventos normalizados (default: clock_event_logs). */
@@ -37,6 +72,18 @@ export interface SyncCycleOptions {
   /** Quando true, não chama rep_ingest_punch após o sync (env CLOCK_SYNC_SKIP_ESPELHO=1). */
   skipEspelhoPromote?: boolean;
   logger?: SyncLogger;
+  /** Chamado se `restPostBulk` falhar após retries (ex.: fila offline no agente local). */
+  onBulkInsertFailure?: (payload: BulkInsertFailurePayload) => void | Promise<void>;
+  /**
+   * Quando definido: para cada lote do relógio, grava no armazenamento local **antes** do POST ao Supabase;
+   * em sucesso marca como enviado; em falha mantém pendente (não chama `onBulkInsertFailure` para o mesmo lote).
+   */
+  offlineClockPersistence?: OfflineClockPersistenceHooks;
+  /**
+   * Quando definido: envia batidas via API intermediária (/api/punch) em vez de REST direto ao Supabase.
+   * Se definido, `supabase` REST é usado apenas para leitura (devices) e espelho.
+   */
+  apiPunchSender?: ApiPunchSender;
 }
 
 export interface DeviceSyncResult {
@@ -103,6 +150,7 @@ function toInsertRow(r: NormalizedRecord, dedupe: string): Record<string, unknow
     company_id: r.company_id,
     raw: r.raw,
     dedupe_hash: dedupe,
+    source: PUNCH_SOURCE_CLOCK,
   };
 }
 
@@ -143,9 +191,24 @@ export async function runSyncCycle(options: SyncCycleOptions): Promise<SyncCycle
 
   const skipEspelho =
     options.skipEspelhoPromote === true || (process.env.CLOCK_SYNC_SKIP_ESPELHO || '').trim() === '1';
+  const onBulkInsertFailure = options.onBulkInsertFailure;
+  const offlineClockPersistence = options.offlineClockPersistence;
+  const apiPunchSender = options.apiPunchSender;
   const results = await Promise.allSettled(
     configs.map(({ row, config }) =>
-      syncOneDevice(cfg, row, config, timeLogsTable, syncLogsTable, skipLogTable, logger, skipEspelho)
+      syncOneDevice(
+        cfg,
+        row,
+        config,
+        timeLogsTable,
+        syncLogsTable,
+        skipLogTable,
+        logger,
+        skipEspelho,
+        onBulkInsertFailure,
+        offlineClockPersistence,
+        apiPunchSender
+      )
     )
   );
 
@@ -170,7 +233,10 @@ async function syncOneDevice(
   syncLogsTable: string,
   skipLogTable: boolean,
   logger: SyncLogger,
-  skipEspelhoPromote: boolean
+  skipEspelhoPromote: boolean,
+  onBulkInsertFailure?: (payload: BulkInsertFailurePayload) => void | Promise<void>,
+  offlineClockPersistence?: OfflineClockPersistenceHooks,
+  apiPunchSender?: ApiPunchSender
 ): Promise<DeviceSyncResult> {
   const deviceId = row.id;
   const lastSync = row.last_sync ?? undefined;
@@ -194,7 +260,52 @@ async function syncOneDevice(
       rows.push(toInsertRow(r, dedupe));
     }
 
-    await restPostBulk(cfg, timeLogsTable, rows);
+    let stagedIds: string[] = [];
+    if (rows.length > 0 && offlineClockPersistence) {
+      stagedIds = await offlineClockPersistence.stageRowsBeforeSend({
+        deviceId,
+        companyId: row.company_id,
+        timeLogsTable,
+        rows,
+      });
+      logger.sync(`Persistido localmente antes do envio: ${stagedIds.length} evento(s)`, deviceId, {
+        staged: stagedIds.length,
+      });
+    }
+
+    try {
+      if (apiPunchSender) {
+        // Modo API intermediária (recomendado): validação centralizada no servidor
+        const apiResult = await apiPunchSender.send({
+          deviceId,
+          companyId: row.company_id,
+          rows,
+        });
+        if (!apiResult.success) {
+          throw new Error(apiResult.error || 'Falha ao enviar via API');
+        }
+      } else {
+        // Modo REST direto (legacy): service role direto ao banco
+        await restPostBulk(cfg, timeLogsTable, rows);
+      }
+    } catch (bulkErr) {
+      if (stagedIds.length > 0 && offlineClockPersistence) {
+        await offlineClockPersistence.onSendFailed?.({ deviceId, ids: stagedIds, error: bulkErr });
+      } else {
+        await onBulkInsertFailure?.({
+          deviceId,
+          companyId: row.company_id,
+          timeLogsTable,
+          rows,
+          error: bulkErr,
+        });
+      }
+      throw bulkErr;
+    }
+
+    if (stagedIds.length > 0 && offlineClockPersistence) {
+      await offlineClockPersistence.markRowsSynced(stagedIds);
+    }
 
     let espelho: PromoteEspelhoResult | undefined;
     if (!skipEspelhoPromote && row.company_id) {

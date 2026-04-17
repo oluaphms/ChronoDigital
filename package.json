@@ -14,13 +14,14 @@
     "test": "vitest",
     "test:run": "vitest run",
     "rep:agent": "node scripts/rep-agent.mjs",
-    "clock-sync-agent": "tsx scripts/clock-sync-agent.ts"
+    "clock-sync-agent": "tsx agent/index.ts"
   },
   "dependencies": {
     "@google/genai": "^1.38.0",
     "@sentry/react": "^8.38.0",
     "@supabase/supabase-js": "^2.39.0",
     "@tanstack/react-query": "^5.99.0",
+    "better-sqlite3": "^12.9.0",
     "cmdk": "^1.1.1",
     "dotenv": "^16.6.1",
     "exceljs": "^4.4.0",

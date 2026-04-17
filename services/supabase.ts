@@ -104,33 +104,22 @@ export async function testSupabaseConnection(
     setTimeout(() => reject(new Error('timeout')), timeoutMs),
   );
 
-  const tablesToTry = ['users', 'employees', 'companies'] as const;
-  
-  for (const table of tablesToTry) {
-    try {
-      const queryPromise = client.from(table).select('*').limit(1);
-      const { error } = await Promise.race([queryPromise, timeoutPromise]);
-      
-      if (error && error.code !== 'PGRST116') {
-        continue;
-      }
-      
-      console.log('[SmartPonto] Supabase conectado (tabela:', table, ')');
+  try {
+    const { error } = await Promise.race([
+      client.from('punches').select('id').limit(1),
+      timeoutPromise,
+    ]);
+    if (!error || error.code === 'PGRST116') {
+      console.log('[SmartPonto] Supabase conectado (tabela: punches)');
       return { ok: true };
-    } catch (e: any) {
-      if (e?.message === 'timeout') {
-        return {
-          ok: false,
-          message: 'Supabase timeout. Projeto pode estar pausado ou rede lenta.',
-        };
-      }
     }
+    return { ok: false, message: 'Não foi possível conectar ao Supabase.' };
+  } catch (e: any) {
+    if (e?.message === 'timeout') {
+      return { ok: false, message: 'Supabase timeout. Projeto pode estar pausado ou rede lenta.' };
+    }
+    return { ok: false, message: 'Não foi possível conectar ao Supabase.' };
   }
-
-  return {
-    ok: false,
-    message: 'Não foi possível conectar ao Supabase.',
-  };
 }
 
 /**

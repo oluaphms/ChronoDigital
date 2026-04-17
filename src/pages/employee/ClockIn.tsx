@@ -31,6 +31,7 @@ import {
   type DeviceFingerprint,
 } from '../../security/antiFraudEngine';
 import { detectBehaviorAnomaly } from '../../ai/anomalyDetection';
+import { PUNCH_SOURCE_WEB } from '../../constants/punchSource';
 import { registerPunchSecure, normalizePunchRegistrationError } from '../../rep/repEngine';
 import { savePunchEvidence, createFraudAlertsForFlags } from '../../services/punchEvidenceService';
 import { getCompanyLocations, isWithinAllowedLocation } from '../../services/settingsService';
@@ -473,7 +474,7 @@ const EmployeeClockIn: React.FC = () => {
         method,
         location: geoPos ? { lat: geoPos.latitude, lng: geoPos.longitude, accuracy: geoPos.accuracy } : undefined,
         photoUrl: photoUrl || undefined,
-        source: 'web',
+        source: PUNCH_SOURCE_WEB,
         latitude: geoPos?.latitude ?? null,
         longitude: geoPos?.longitude ?? null,
         accuracy: geoPos?.accuracy ?? null,

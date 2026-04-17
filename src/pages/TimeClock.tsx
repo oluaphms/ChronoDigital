@@ -6,6 +6,7 @@ import PageHeader from '../components/PageHeader';
 import TimeClockButtons from '../components/TimeClockButtons';
 import { useToast } from '../components/ToastProvider';
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { PUNCH_SOURCE_WEB } from '../constants/punchSource';
 import { registerPunch } from '../rep/repEngine';
 import { LogType, PunchMethod, LogSeverity } from '../../types';
 import { LoggingService } from '../../services/loggingService';
@@ -78,7 +79,7 @@ const TimeClockPage: React.FC = () => {
           lng: position.coords.longitude,
           accuracy: position.coords.accuracy,
         },
-        source: 'web',
+        source: PUNCH_SOURCE_WEB,
       });
 
       setLastRecord({

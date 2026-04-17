@@ -77,11 +77,11 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
       }
       if (mounted) setIsReady(true);
 
-      // Diagnóstico não bloqueante: não impedir login/inicialização por teste de rede.
+      // Diagnóstico não bloqueante: resultado apenas informativo — nunca bloqueia login.
       void (async () => {
         const result = await checkSupabaseConnection();
         if (!result.ok) {
-          console.warn(`[NETWORK] modo degradado: ${result.message}`);
+          console.warn('[SUPABASE] modo degradado ativo:', result.message, '— o login continuará funcionando.');
         }
       })();
     };
