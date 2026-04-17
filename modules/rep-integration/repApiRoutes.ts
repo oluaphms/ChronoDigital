@@ -10,6 +10,7 @@ import {
   getPunchesFromDeviceServer,
   pushEmployeeToDeviceServer,
   runRepExchange,
+  isPrivateOrLocalIPv4,
 } from './repDeviceServer';
 import { syncRepDevices } from './repSyncJob';
 import { ingestPunch } from './repService';
@@ -233,6 +234,19 @@ const corsImport: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+function jsonSafeForRepStatusBody(value: unknown): unknown {
+  if (value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return { _note: 'corpo não serializável em JSON', preview: String(value).slice(0, 400) };
+  }
+}
+
+function isRunningOnVercel(): boolean {
+  return typeof process.env.VERCEL === 'string' && process.env.VERCEL.length > 0;
+}
+
 async function handleStatus(request: Request): Promise<Response> {
   const headers = { ...repCorsHeaders(request), 'Content-Type': 'application/json' };
   try {
@@ -250,6 +264,21 @@ async function handleStatus(request: Request): Promise<Response> {
     if (device.tipo_conexao !== 'rede') {
       return Response.json({ ok: false, message: 'Dispositivo não é do tipo rede (IP).' }, { status: 400, headers });
     }
+    const ip = (device.ip || '').trim();
+    if (ip && isPrivateOrLocalIPv4(ip) && isRunningOnVercel()) {
+      return Response.json(
+        {
+          ok: false,
+          message:
+            'Este teste roda no servidor da Vercel, que não alcança IPs da sua rede local (192.168.x.x). ' +
+            'Use o agente `clock-sync-agent` na empresa ou teste o relógio a partir de um PC na mesma LAN. ' +
+            'A sincronização de dados continua possível via agente → Supabase.',
+          httpStatus: 0,
+          body: null,
+        },
+        { status: 200, headers }
+      );
+    }
     const r = await runRepConnectionTest(device);
     if (!r.ok && (r.httpStatus === 0 || r.httpStatus === undefined) && r.message) {
       return Response.json({ ok: false, message: r.message }, { status: 200, headers });
@@ -258,7 +287,7 @@ async function handleStatus(request: Request): Promise<Response> {
       ok: r.ok,
       message: r.message || (r.ok ? 'Conexão OK' : 'Falha'),
       httpStatus: r.httpStatus ?? (r.ok ? 200 : 0),
-      body: r.body,
+      body: jsonSafeForRepStatusBody(r.body),
     };
     try {
       return Response.json(payload, { status: 200, headers });
