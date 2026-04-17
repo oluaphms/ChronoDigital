@@ -43,6 +43,10 @@ export function clearCurrentUserFromAllStorages(): void {
   }
 }
 
+export function isOnline(): boolean {
+  return typeof navigator === 'undefined' || navigator.onLine !== false;
+}
+
 /**
  * Limpa a sessão local de autenticação do Supabase (tokens sb-* no storage).
  * Não faz signOut no servidor — apenas derruba o estado local imediatamente.
@@ -62,6 +66,18 @@ export async function clearLocalAuthSession(): Promise<void> {
     clearSbKeys(window.localStorage);
   } catch {
     // ignora falha ao limpar storage
+  }
+}
+
+export async function clearBrokenSession(): Promise<void> {
+  if (!checkSupabaseConfigured()) return;
+  try {
+    const client = getSupabaseClientOrThrow();
+    await client.auth.signOut();
+  } catch {
+    // segue com limpeza local
+  } finally {
+    await clearLocalAuthSession();
   }
 }
 

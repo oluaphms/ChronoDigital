@@ -12,7 +12,9 @@ export {
   useSessionStorageForAuth,
   DB_SELECT_TIMEOUT_MS,
   DEFAULT_CONNECTION_TIMEOUT_MS,
-  clearLocalAuthSession
+  clearLocalAuthSession,
+  clearBrokenSession,
+  isOnline
 } from './supabase';
 export { getSupabaseClient, getSupabaseClientOrThrow, testSupabaseConnection, withSupabaseTimeout, resetSession } from '../src/lib/supabaseClient';
 

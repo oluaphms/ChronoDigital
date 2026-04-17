@@ -3,7 +3,11 @@
  * Garante que o app só renderiza quando as variáveis de ambiente estão carregadas
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { showFatalError, setSupabaseInfraFatal } from '../lib/supabaseInfraGuard';
+import { validateSupabaseUrl } from '../lib/validateSupabaseUrl';
+import { assertEnv } from '../lib/assertEnv';
+import { checkSupabaseConnection } from '../services/checkSupabaseConnection';
 
 interface AppInitializerProps {
   children: React.ReactNode;
@@ -12,44 +16,77 @@ interface AppInitializerProps {
 export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initStartedRef = useRef(false);
 
   useEffect(() => {
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
+
     let mounted = true;
-    let attempts = 0;
-    const maxAttempts = 10;
-    
-    // Verificar se as variáveis estão disponíveis
-    const checkEnvironment = () => {
-      if (!mounted) return;
-      attempts++;
-      
-      const supabaseUrl =
-        (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
-        (typeof window !== 'undefined' && (window as any).__VITE_SUPABASE_URL) ||
-        (typeof window !== 'undefined' && (window as any).ENV?.SUPABASE_URL);
+    const init = async () => {
+      const envName =
+        (typeof window !== 'undefined' && (window as any).ENV?.ENVIRONMENT) || 'dev';
+      const envMap =
+        (typeof window !== 'undefined' && (window as any).ENV?.SUPABASES) || {};
+      const envConfig = envMap?.[envName] || null;
 
-      const supabaseKey =
-        (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-        (typeof window !== 'undefined' && (window as any).__VITE_SUPABASE_ANON_KEY) ||
-        (typeof window !== 'undefined' && (window as any).ENV?.SUPABASE_ANON_KEY);
-
-      if (supabaseUrl && supabaseKey) {
-        setIsReady(true);
+      let supabaseUrl = '';
+      let supabaseKey = '';
+      try {
+        const env = assertEnv();
+        supabaseUrl = envConfig?.url || env.url;
+        supabaseKey = envConfig?.key || env.key;
+      } catch (error: any) {
+        const message = error?.message || '[ENV] Variáveis ausentes';
+        setSupabaseInfraFatal(message);
+        if (mounted) setError(message);
         return;
       }
 
-      // Se ainda não carregou e não atingiu máximo de tentativas, tentar novamente
-      if (attempts < maxAttempts) {
-        setTimeout(checkEnvironment, 300);
-      } else {
-        setError(
-          'Variáveis de ambiente não carregadas após várias tentativas. Verifique VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.'
-        );
+      if (typeof window !== 'undefined') {
+        (window as any).__VITE_SUPABASE_URL = supabaseUrl;
+        (window as any).__VITE_SUPABASE_ANON_KEY = supabaseKey;
       }
+
+      if (typeof console !== 'undefined') {
+        console.group('[ENV]');
+        console.log('Environment:', envName);
+        console.log('URL:', supabaseUrl);
+        console.log('Online:', typeof navigator === 'undefined' ? true : navigator.onLine);
+        console.groupEnd();
+      }
+
+      if (!supabaseUrl || !supabaseKey) {
+        const message = '[ENV] Variáveis ausentes';
+        setSupabaseInfraFatal(message);
+        showFatalError('Variáveis do Supabase ausentes. Verifique o ambiente ativo.');
+        if (mounted) setError(message);
+        return;
+      }
+
+      if (!validateSupabaseUrl(supabaseUrl)) {
+        const message = '[ENV] SUPABASE_URL inválida';
+        setSupabaseInfraFatal(message);
+        showFatalError('SUPABASE_URL inválida. Ajuste a configuração de ambiente.');
+        if (mounted) setError(message);
+        return;
+      }
+
+      if (typeof window !== 'undefined') {
+        (window as any).__SUPABASE_OFFLINE_DEV = false;
+      }
+      if (mounted) setIsReady(true);
+
+      // Diagnóstico não bloqueante: não impedir login/inicialização por teste de rede.
+      void (async () => {
+        const result = await checkSupabaseConnection();
+        if (!result.ok) {
+          console.warn(`[NETWORK] modo degradado: ${result.message}`);
+        }
+      })();
     };
 
-    // Tentar imediatamente
-    checkEnvironment();
+    void init();
 
     return () => {
       mounted = false;

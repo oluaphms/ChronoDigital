@@ -2,7 +2,13 @@
  * Logger centralizado para erros Supabase: rede, timeout e auth.
  */
 
-export type ErrorCategory = 'network' | 'timeout' | 'auth' | 'unknown';
+export type ErrorCategory =
+  | 'network'
+  | 'dns'
+  | 'circuit_breaker'
+  | 'timeout'
+  | 'auth'
+  | 'unknown';
 
 export interface LoggedError {
   category: ErrorCategory;
@@ -17,6 +23,21 @@ const maxLogSize = 100;
 function normalizeError(error: unknown): { message: string; category: ErrorCategory } {
   const msg = error instanceof Error ? error.message : String(error);
   const lower = msg.toLowerCase();
+
+  if (
+    lower.includes('circuit breaker ativo') ||
+    lower.includes('circuit_breaker') ||
+    lower.includes('circuit breaker')
+  ) {
+    return { message: msg, category: 'circuit_breaker' };
+  }
+  if (
+    lower.includes('err_name_not_resolved') ||
+    lower.includes('name_not_resolved') ||
+    lower.includes('dns')
+  ) {
+    return { message: msg, category: 'dns' };
+  }
 
   if (
     lower.includes('timeout') ||

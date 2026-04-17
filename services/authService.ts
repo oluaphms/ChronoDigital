@@ -54,6 +54,10 @@ function readCurrentUserFromProfileStore(): string | null {
 class AuthService {
   /** Previne que o listener onAuthStateChanged tente recuperar sessão durante o logout. */
   private _isSigningOut = false;
+  /** Single-flight para chamadas concorrentes de getCurrentUser em Strict Mode. */
+  private _getCurrentUserInflight: Promise<User | null> | null = null;
+  /** Garante no máximo um refresh manual de sessão por vez (anti-loop). */
+  private _isRefreshingSession = false;
 
   /**
    * Uma conversão Supabase → app user por vez por `auth.users.id`.
@@ -319,6 +323,49 @@ class AuthService {
       preferences: { notifications: true, theme: 'light', allowManualPunch: true, language: 'pt-BR' },
     };
     return u;
+  }
+
+  private isOnline(): boolean {
+    return typeof navigator === 'undefined' || navigator.onLine !== false;
+  }
+
+  private isNetworkLikeError(error: unknown): boolean {
+    const e = error as any;
+    const text = String(
+      e?.message || e?.details || e?.hint || e?.error?.message || e?.cause?.message || '',
+    ).toLowerCase();
+    return (
+      text.includes('failed to fetch') ||
+      text.includes('networkerror') ||
+      text.includes('network request failed') ||
+      text.includes('err_name_not_resolved') ||
+      text.includes('name_not_resolved') ||
+      text.includes('dns') ||
+      text.includes('offline')
+    );
+  }
+
+  private async safeRefreshSession(): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || !this.isOnline()) return false;
+    if (this._isRefreshingSession) return false;
+    this._isRefreshingSession = true;
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data?.session?.user) {
+        if (import.meta.env?.DEV && typeof console !== 'undefined') {
+          console.warn('[Auth] Refresh manual falhou:', error?.message || 'sem sessão');
+        }
+        return false;
+      }
+      return true;
+    } catch (error) {
+      if (import.meta.env?.DEV && typeof console !== 'undefined') {
+        console.warn('[Auth] Refresh manual com erro:', error);
+      }
+      return false;
+    } finally {
+      this._isRefreshingSession = false;
+    }
   }
 
   /**
@@ -899,38 +946,47 @@ class AuthService {
    * Obter usuário atual (com timeout para evitar loading infinito em rede lenta / RLS pesado).
    */
   async getCurrentUser(): Promise<User | null> {
-    try {
-      return await withTimeout(this.getCurrentUserResolved(), GET_CURRENT_USER_TIMEOUT_MS, 'carregar sessão');
-    } catch (error: any) {
-      const errMsg = String(error?.message || '');
-      if (
-        errMsg.includes('Tempo esgotado') ||
-        errMsg.includes('stole') ||
-        errMsg.includes('Lock broken')
-      ) {
-        try {
-          const stored = readCurrentUserFromProfileStore();
-          if (stored) {
-            if (import.meta.env?.DEV && typeof console !== 'undefined') {
-              console.warn('[Auth] getCurrentUser: timeout ou lock de sessão — usando perfil em cache');
+    if (this._getCurrentUserInflight) return this._getCurrentUserInflight;
+    const p = (async () => {
+      try {
+        return await withTimeout(this.getCurrentUserResolved(), GET_CURRENT_USER_TIMEOUT_MS, 'carregar sessão');
+      } catch (error: any) {
+        const errMsg = String(error?.message || '');
+        if (
+          errMsg.includes('Tempo esgotado') ||
+          errMsg.includes('stole') ||
+          errMsg.includes('Lock broken')
+        ) {
+          try {
+            const stored = readCurrentUserFromProfileStore();
+            if (stored) {
+              if (import.meta.env?.DEV && typeof console !== 'undefined') {
+                console.warn('[Auth] getCurrentUser: timeout ou lock de sessão — usando perfil em cache');
+              }
+              return JSON.parse(stored) as User;
             }
-            return JSON.parse(stored) as User;
+          } catch {
+            // ignora
           }
-        } catch {
-          // ignora
         }
-      }
-      if (error?.message?.includes('Refresh Token') || error?.message?.includes('Auth session missing')) {
-        try {
-          await auth.signOut();
-        } catch {
-          // Ignorar erros ao limpar sessão
+        if (error?.message?.includes('Refresh Token') || error?.message?.includes('Auth session missing')) {
+          try {
+            await auth.signOut();
+          } catch {
+            // Ignorar erros ao limpar sessão
+          }
+          return null;
         }
+        console.error('Erro ao obter usuário atual:', error);
         return null;
+      } finally {
+        if (this._getCurrentUserInflight === p) {
+          this._getCurrentUserInflight = null;
+        }
       }
-      console.error('Erro ao obter usuário atual:', error);
-      return null;
-    }
+    })();
+    this._getCurrentUserInflight = p;
+    return p;
   }
 
   /** Implementação interna de getCurrentUser (sem timeout). */
@@ -949,8 +1005,43 @@ class AuthService {
       return null;
     }
 
-    const { data: sessionData } = await auth.getSession();
-    const session = sessionData?.session ?? null;
+    if (!this.isOnline()) {
+      const cached = readCurrentUserFromProfileStore();
+      if (cached) {
+        return JSON.parse(cached) as User;
+      }
+      return null;
+    }
+
+    let session: any = null;
+    try {
+      const { data: sessionData } = await auth.getSession();
+      session = sessionData?.session ?? null;
+    } catch (error) {
+      // Rede/DNS instável: não forçar logout; devolve cache quando possível.
+      if (this.isNetworkLikeError(error)) {
+        try {
+          const cached = readCurrentUserFromProfileStore();
+          if (cached) return JSON.parse(cached) as User;
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+      throw error;
+    }
+
+    if (!session?.user && this.isOnline()) {
+      const refreshed = await this.safeRefreshSession();
+      if (refreshed) {
+        try {
+          const { data: sessionData } = await auth.getSession();
+          session = sessionData?.session ?? null;
+        } catch {
+          // segue sem sessão
+        }
+      }
+    }
     if (!session?.user) {
       try {
         clearCurrentUserFromAllStorages();

@@ -229,6 +229,7 @@ const AppMain: React.FC = () => {
 
   // Conexão Supabase (fallback quando servidor pausado/rede lenta)
   const [connectionUnavailable, setConnectionUnavailable] = useState(false);
+  const [connectionIssueMessage, setConnectionIssueMessage] = useState<string | null>(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
   const [accountSwitchLogoutBusy, setAccountSwitchLogoutBusy] = useState(false);
@@ -291,12 +292,16 @@ const AppMain: React.FC = () => {
 
         // Teste de conexão ao iniciar apenas para log (não bloqueia a tela)
         const connectionTimeoutMs = 15000;
-        testSupabaseConnection(connectionTimeoutMs).then((result) => {
-          if (result.ok && import.meta.env?.DEV) {
-            console.log('[ChronoDigital] Conexão Supabase OK');
-          }
-          // Não loga falha aqui para não poluir o console; login mostrará erro se precisar.
-        });
+        const isOfflineDevMode =
+          typeof window !== 'undefined' && (window as any).__SUPABASE_OFFLINE_DEV === true;
+        if (!isOfflineDevMode) {
+          testSupabaseConnection(connectionTimeoutMs).then((result) => {
+            if (result.ok && import.meta.env?.DEV) {
+              console.log('[ChronoDigital] Conexão Supabase OK');
+            }
+            // Não loga falha aqui para não poluir o console; login mostrará erro se precisar.
+          });
+        }
 
         // Não usar getSession() isolado com timeout curto como “portão”: se IndexedDB/rede atrasarem,
         // a app saía antes de hidratar e o usuário via tela presa / sem perfil em cache.
@@ -609,13 +614,18 @@ const AppMain: React.FC = () => {
       // Se der falso rapidamente, já mostramos a tela de reconexão sem esperar o signIn completo.
       const FAST_PRECHECK_TIMEOUT_MS = 2500;
       const precheckResult = await Promise.race([
-        checkSupabaseConnection().then((ok) => (ok ? 'ok' : 'down')),
+        checkSupabaseConnection(),
         new Promise<'unknown'>((resolve) => setTimeout(() => resolve('unknown'), FAST_PRECHECK_TIMEOUT_MS)),
       ]);
-      if (precheckResult === 'down') {
+      if (precheckResult !== 'unknown' && !precheckResult.ok) {
+        const dnsHint =
+          precheckResult.status === 'dns'
+            ? ' Falha de DNS detectada. Verifique internet, DNS da rede e se o domínio do projeto Supabase resolve no dispositivo.'
+            : '';
+        setConnectionIssueMessage(`${precheckResult.message}.${dnsHint}`.trim());
         setConnectionUnavailable(true);
         setLoginError(
-          'Não foi possível alcançar o servidor agora. O projeto pode estar pausado (Supabase free tier). Verifique em supabase.com/dashboard e use "Limpar sessão e tentar de novo".'
+          `${precheckResult.message} Verifique em supabase.com/dashboard e use "Limpar sessão e tentar de novo".`
         );
         return;
       }
@@ -631,9 +641,7 @@ const AppMain: React.FC = () => {
         setTimeout(
           () =>
             reject(
-              new Error(
-                'Tempo esgotado. O servidor pode estar lento ou pausado (Supabase free tier). Verifique em supabase.com/dashboard se o projeto está ativo. Use "Limpar sessão e tentar de novo" e tente novamente.'
-              )
+              new Error('LOGIN_TIMEOUT')
             ),
           LOGIN_TIMEOUT_MS
         )
@@ -641,10 +649,61 @@ const AppMain: React.FC = () => {
       let result: { user: any; error: string | null };
       try {
         result = await Promise.race([loginPromise, timeoutPromise]);
-      } catch (timeoutErr: any) {
-        logSupabaseError(timeoutErr, 'login');
+      } catch (authErr: any) {
+        const errText = String(
+          authErr?.message ||
+          authErr?.details ||
+          authErr?.hint ||
+          authErr?.error?.message ||
+          ''
+        ).toLowerCase();
+        let isTimeoutError = errText.includes('login_timeout') || errText.includes('timeout');
+        const isCircuitBreakerError =
+          errText.includes('circuit breaker ativo');
+        let isDnsError =
+          errText.includes('err_name_not_resolved') ||
+          errText.includes('name_not_resolved') ||
+          errText.includes('dns') ||
+          errText.includes('failed to fetch');
+
+        // Reclassifica timeout quando a causa real for DNS/rede.
+        if (isTimeoutError && !isDnsError) {
+          try {
+            const connectionCheck = await Promise.race([
+              checkSupabaseConnection(),
+              new Promise<'unknown'>((resolve) => setTimeout(() => resolve('unknown'), 1500)),
+            ]);
+            if (connectionCheck !== 'unknown') {
+              if (connectionCheck.status === 'dns') {
+                isDnsError = true;
+                isTimeoutError = false;
+              } else if (connectionCheck.status === 'network' || connectionCheck.status === 'offline') {
+                isTimeoutError = false;
+              }
+            }
+          } catch {
+            // mantém classificação original
+          }
+        }
+
         setConnectionUnavailable(true);
-        setLoginError(timeoutErr?.message || 'Tempo esgotado. Tente novamente.');
+        if (isCircuitBreakerError) {
+          logSupabaseError(new Error('circuit breaker ativo durante login'), 'login');
+          setConnectionIssueMessage('Servidor temporariamente indisponível. Aguardando para nova tentativa automática.');
+          setLoginError('Conexão temporariamente bloqueada para evitar múltiplas tentativas. Aguarde alguns segundos e tente novamente.');
+        } else if (isDnsError) {
+          logSupabaseError(new Error('dns login failed_to_fetch name_not_resolved'), 'login');
+          setConnectionIssueMessage('Falha de DNS ao autenticar. Verifique internet/DNS local e a resolução do domínio do Supabase.');
+          setLoginError('Falha de DNS ao acessar o Supabase. Tente novamente em instantes.');
+        } else if (isTimeoutError) {
+          logSupabaseError(new Error('timeout durante login'), 'login');
+          setConnectionIssueMessage('Tempo esgotado ao autenticar. O Supabase pode estar iniciando (free tier) ou a rede está instável.');
+          setLoginError('Tempo esgotado ao autenticar. Tente novamente.');
+        } else {
+          logSupabaseError(authErr, 'login');
+          setConnectionIssueMessage('Falha de conectividade durante a autenticação. Verifique rede e tente novamente.');
+          setLoginError(authErr?.message || 'Erro de rede ao autenticar.');
+        }
         // Limpar sessão local para o próximo "Entrar" funcionar sem precisar clicar em "Limpar sessão"
         try {
           await clearLocalAuthSession();
@@ -656,11 +715,21 @@ const AppMain: React.FC = () => {
 
       if (result.error) {
         const normalizedError = String(result.error || '').toLowerCase();
+        const isDnsErrorResult =
+          normalizedError.includes('err_name_not_resolved') ||
+          normalizedError.includes('name_not_resolved') ||
+          normalizedError.includes('dns') ||
+          normalizedError.includes('failed to fetch');
         if (
           normalizedError.includes('tempo esgotado') ||
           normalizedError.includes('timeout') ||
           normalizedError.includes('network')
         ) {
+          setConnectionIssueMessage(
+            isDnsErrorResult
+              ? 'Falha de DNS durante o login. Verifique internet/DNS e tente novamente.'
+              : 'Falha de conectividade durante o login. Verifique DNS/rede e tente novamente.'
+          );
           setConnectionUnavailable(true);
         }
         setLoginError(result.error);
@@ -689,6 +758,39 @@ const AppMain: React.FC = () => {
       }
     } catch (error: any) {
       console.error('Erro no handleLoginSubmit:', error);
+      const errorText = String(
+        error?.message ||
+          error?.details ||
+          error?.hint ||
+          error?.error?.message ||
+          ''
+      ).toLowerCase();
+      const isDnsLike =
+        errorText.includes('err_name_not_resolved') ||
+        errorText.includes('name_not_resolved') ||
+        errorText.includes('dns');
+      const isNetworkLike =
+        isDnsLike ||
+        errorText.includes('failed to fetch') ||
+        errorText.includes('networkerror') ||
+        errorText.includes('network request failed') ||
+        (error instanceof TypeError && errorText.includes('fetch'));
+
+      if (isNetworkLike) {
+        setConnectionUnavailable(true);
+        setConnectionIssueMessage(
+          isDnsLike
+            ? 'Falha de DNS ao autenticar. Verifique internet/DNS local e confirme se a URL do projeto Supabase está correta.'
+            : 'Falha de rede ao autenticar. Verifique conexão e tente novamente.'
+        );
+        setLoginError(
+          isDnsLike
+            ? 'Falha de DNS ao acessar o Supabase. Confira a URL do projeto e o DNS da rede.'
+            : 'Falha de rede ao acessar o Supabase. Tente novamente em instantes.'
+        );
+        return;
+      }
+
       setLoginError(error?.message || 'Erro ao fazer login');
     } finally {
       setIsLoggingIn(false);
@@ -776,17 +878,44 @@ const AppMain: React.FC = () => {
   useEffect(() => {
     if (!connectionUnavailable || !checkSupabaseConfigured()) return;
 
-    const interval = setInterval(async () => {
+    let active = true;
+    let retryDelayMs = 3000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNext = () => {
+      if (!active) return;
+      timeoutId = setTimeout(run, retryDelayMs);
+    };
+
+    const run = async () => {
+      if (!active) return;
       setIsReconnecting(true);
-      const ok = await checkSupabaseConnection();
-      if (ok) {
+      const result = await checkSupabaseConnection();
+      if (!active) return;
+      if (result.ok) {
+        setConnectionIssueMessage(null);
         setConnectionUnavailable(false);
         setIsReconnecting(false);
+        return;
       }
       setIsReconnecting(false);
-    }, 5000);
+      if (result.status === 'dns') {
+        setConnectionIssueMessage('Falha de DNS detectada ao acessar o Supabase. Verifique conexão/rede DNS e tente novamente.');
+      } else if (result.status === 'circuit_breaker') {
+        setConnectionIssueMessage(result.message);
+      } else if (result.status === 'offline') {
+        setConnectionIssueMessage('Sem internet no dispositivo. Reconecte e tente novamente.');
+      }
+      retryDelayMs = Math.min(retryDelayMs * 2, 30000);
+      scheduleNext();
+    };
 
-    return () => clearInterval(interval);
+    run();
+
+    return () => {
+      active = false;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [connectionUnavailable]);
 
   // Timeout de segurança adicional para garantir que o loading sempre termine
@@ -821,7 +950,7 @@ const AppMain: React.FC = () => {
             {i18n.t('app.serverUnavailable')}
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-sm">
-            {isReconnecting ? i18n.t('app.reconnecting') : isResettingSession ? i18n.t('app.clearingSession') : i18n.t('app.waitOrClear')}
+            {connectionIssueMessage || (isReconnecting ? i18n.t('app.reconnecting') : isResettingSession ? i18n.t('app.clearingSession') : i18n.t('app.waitOrClear'))}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Button
@@ -1717,7 +1846,7 @@ const AppMain: React.FC = () => {
   );
 };
 
-const App: React.FC = () =>
+const AppContent: React.FC = () =>
   !checkSupabaseConfigured() ? (
     <ConfigSupabaseScreen />
   ) : (
@@ -1727,5 +1856,7 @@ const App: React.FC = () =>
       </SettingsProvider>
     </QueryClientProvider>
   );
+
+const App: React.FC = () => <AppContent />;
 
 export default App;

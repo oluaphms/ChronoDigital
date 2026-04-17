@@ -57,6 +57,13 @@ export async function getSettings(): Promise<GlobalSettings | null> {
     .limit(1)
     .maybeSingle();
   if (error) {
+    const msg = String((error as any)?.message || '').toLowerCase();
+    if (msg.includes('[offline mode] supabase indisponível')) {
+      return null;
+    }
+    if (msg.includes('dns indisponível (cooldown)')) {
+      return null;
+    }
     console.error('[settingsService] getSettings error:', error);
     return null;
   }

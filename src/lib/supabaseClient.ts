@@ -4,15 +4,46 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { canRetrySupabase, isDnsError, markSupabaseAsDown } from '../services/supabaseCircuitBreaker';
+import { getSupabaseInfraFatal } from './supabaseInfraGuard';
+import { assertEnv } from './assertEnv';
 
 let supabaseInstance: SupabaseClient | null = null;
 let initializationAttempted = false;
+
+function sanitizeSupabaseUrl(rawUrl: string): string {
+  return String(rawUrl || '').trim().replace(/\/+$/, '');
+}
+
+function isBrowserOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+function isOfflineDevModeEnabled(): boolean {
+  return typeof window !== 'undefined' && (window as any).__SUPABASE_OFFLINE_DEV === true;
+}
+
+function isDevMode(): boolean {
+  return typeof import.meta !== 'undefined' && !!import.meta.env?.DEV;
+}
+
+function isDnsCooldownActive(): boolean {
+  if (typeof window === 'undefined') return false;
+  const until = Number((window as any).__SUPABASE_DNS_COOLDOWN_UNTIL || 0);
+  return until > Date.now();
+}
 
 /**
  * Obter cliente Supabase com inicialização segura
  * Retorna null se as variáveis não estiverem disponíveis
  */
 export function getSupabaseClient(): SupabaseClient | null {
+  if (typeof window !== 'undefined' && (window as any).__ENV_FATAL_ERROR) {
+    return null;
+  }
+  if (getSupabaseInfraFatal()) {
+    return null;
+  }
   // Se já foi criado, retornar a instância
   if (supabaseInstance) {
     return supabaseInstance;
@@ -26,32 +57,24 @@ export function getSupabaseClient(): SupabaseClient | null {
   // Marcar que tentou
   initializationAttempted = true;
 
-  // Tentar ler as variáveis de múltiplas fontes
-  const url =
-    (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
-    (typeof window !== 'undefined' && (window as any).__VITE_SUPABASE_URL) ||
-    (typeof window !== 'undefined' && (window as any).ENV?.SUPABASE_URL) ||
-    '';
-
-  const key =
-    (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-    (typeof window !== 'undefined' && (window as any).__VITE_SUPABASE_ANON_KEY) ||
-    (typeof window !== 'undefined' && (window as any).ENV?.SUPABASE_ANON_KEY) ||
-    '';
-
-  // Validar se as variáveis estão disponíveis
-  if (!url || !key) {
-    console.error(
-      '❌ [Supabase] Variáveis de ambiente não carregadas ainda.',
-      { url: !!url, key: !!key }
-    );
-    return null;
-  }
+  console.log('[SUPABASE] Inicializando...');
+  const env = assertEnv();
+  const url = sanitizeSupabaseUrl(env.url);
+  const key = env.key;
 
   // Validar formato da URL
   if (!url.startsWith('https://') || !url.includes('.supabase.co')) {
-    console.error('❌ [Supabase] URL inválida:', url);
-    return null;
+    throw new Error('[SUPABASE] URL inválida');
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith('.supabase.co')) {
+      throw new Error('[SUPABASE] Host inválido na URL');
+    }
+  } catch (error) {
+    console.error('[SUPABASE] URL inválida (parse falhou):', url, error);
+    throw error;
   }
 
   try {
@@ -59,18 +82,54 @@ export function getSupabaseClient(): SupabaseClient | null {
     supabaseInstance = createClient(url, key, {
       auth: {
         persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
+        // Evita cascata de refresh automático em cenários de DNS/rede instável.
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      global: {
+        fetch: async (input, init) => {
+          if (isOfflineDevModeEnabled()) {
+            throw new Error('[OFFLINE MODE] Supabase indisponível');
+          }
+          if (isDevMode() && isDnsCooldownActive()) {
+            throw new Error('[NETWORK] DNS indisponível (cooldown)');
+          }
+          if (!canRetrySupabase()) {
+            throw new Error('[Supabase] Circuit breaker ativo');
+          }
+          if (isBrowserOffline()) {
+            throw new Error('offline');
+          }
+          try {
+            return await fetch(input, init);
+          } catch (error) {
+            if (isDnsError(error)) {
+              console.error('[NETWORK] erro de DNS');
+              markSupabaseAsDown();
+              if (isDevMode() && typeof window !== 'undefined') {
+                // Evita flood de requests/erros por alguns segundos em ambiente local.
+                (window as any).__SUPABASE_DNS_COOLDOWN_UNTIL = Date.now() + 15000;
+              }
+            } else if (String((error as any)?.message || '').toLowerCase().includes('timeout')) {
+              console.error('[NETWORK] erro de timeout');
+            } else if (String((error as any)?.message || '').toLowerCase().includes('auth')) {
+              console.error('[AUTH] erro de autenticação');
+            } else {
+              console.error('[NETWORK] erro de rede');
+            }
+            throw error;
+          }
+        },
       },
     });
 
-    console.log('✅ [Supabase] Cliente inicializado com sucesso');
+    console.log('[SUPABASE] Cliente inicializado');
     console.log(`   URL: ${url.slice(0, 40)}...`);
     console.log(`   Key: ${key.slice(0, 20)}...`);
 
     return supabaseInstance;
   } catch (error) {
-    console.error('❌ [Supabase] Erro ao criar cliente:', error);
+    console.error('[SUPABASE] Erro ao criar cliente:', error);
     return null;
   }
 }
