@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileText,
   Filter,
   ListChecks,
   Printer,
@@ -74,6 +75,7 @@ const AdminCalculos: React.FC = () => {
   const [filterUserId, setFilterUserId] = useState('');
   const [calcRows, setCalcRows] = useState<DaySummary[] | null>(null);
   const [loadingCalc, setLoadingCalc] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [showFiltrosExtra, setShowFiltrosExtra] = useState(false);
 
   useEffect(() => {
@@ -192,7 +194,78 @@ const AdminCalculos: React.FC = () => {
     toast.addToast('success', 'Exportação gerada.');
   };
 
-  const imprimir = () => window.print();
+  const exportarPdf = async () => {
+    if (!calcRows?.length) {
+      toast.addToast('error', 'Não há dados para exportar. Clique em Atualizar.');
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      const nome = employees.find((e) => e.id === filterUserId)?.nome ?? '—';
+      const { jsPDF } = await import('jspdf');
+      const autoTable = (await import('jspdf-autotable')).default;
+
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      doc.setFontSize(14);
+      doc.setFont(undefined, 'bold');
+      doc.text('ChronoDigital — Cálculos (diário)', pageW / 2, 12, { align: 'center' });
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(10);
+      const sub = [
+        `Colaborador: ${nome}`,
+        `Período: ${formatDataPt(periodStart)} a ${formatDataPt(periodEnd)}`,
+        numeroFolha ? `Nº folha: ${numeroFolha}` : null,
+      ]
+        .filter(Boolean)
+        .join('  ·  ');
+      doc.text(sub, pageW / 2, 19, { align: 'center' });
+
+      const head = [
+        ['Data', 'Dia', 'Entrada', 'Saída', 'Trabalh.', 'Atraso', 'Falta', 'Extra 50%', 'Extra 100%', 'Noturno'],
+      ];
+      const body = calcRows.map((r) => {
+        const o = r.overtime;
+        return [
+          formatDataPt(r.date),
+          nomeDiaSemana(r.date),
+          r.daily.entrada ?? '—',
+          r.daily.saida ?? '—',
+          fmtMinutos(r.daily.total_worked_minutes),
+          fmtMinutos(r.daily.late_minutes),
+          fmtMinutos(r.daily.missing_minutes),
+          o ? fmtMinutos(o.overtime_50_minutes) : '0:00',
+          o ? fmtMinutos(o.overtime_100_minutes) : '0:00',
+          fmtMinutos(r.night_minutes),
+        ];
+      });
+
+      autoTable(doc, {
+        head,
+        body,
+        startY: 26,
+        styles: { fontSize: 7, cellPadding: 1.2, overflow: 'linebreak' },
+        headStyles: { fillColor: [79, 70, 229], fontSize: 8 },
+        margin: { left: 10, right: 10 },
+      });
+
+      doc.save(`calculos-${nome.replace(/\s+/g, '_')}-${periodStart}_${periodEnd}.pdf`);
+      toast.addToast('success', 'PDF gerado.');
+    } catch (e) {
+      console.error(e);
+      toast.addToast('error', 'Não foi possível gerar o PDF. Tente novamente.');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
+  const imprimir = () => {
+    if (!calcRows?.length) {
+      toast.addToast('error', 'Não há dados para imprimir. Clique em Atualizar.');
+      return;
+    }
+    window.print();
+  };
 
   if (loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
@@ -200,13 +273,26 @@ const AdminCalculos: React.FC = () => {
   const inp =
     'px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm';
 
+  const nomeColaborador = employees.find((e) => e.id === filterUserId)?.nome ?? '';
+
   return (
-    <div className="space-y-4 print:space-y-2">
+    <div className="calculos-report-root space-y-4 print:space-y-2">
       <div className="print:hidden">
         <PageHeader title="Cálculos" />
       </div>
 
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-hidden print:border-0 print:shadow-none">
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-hidden print:border-0 print:shadow-none print:overflow-visible">
+        {/* Só impressão / Salvar como PDF no navegador: contexto do relatório */}
+        <div className="hidden print:block px-4 py-3 border-b border-slate-900 text-center">
+          <p className="text-base font-bold">ChronoDigital — Cálculos</p>
+          <p className="text-sm mt-1">
+            {nomeColaborador ? `Colaborador: ${nomeColaborador}` : 'Colaborador: —'}
+            {' · '}
+            Período: {formatDataPt(periodStart)} a {formatDataPt(periodEnd)}
+            {numeroFolha ? ` · Folha: ${numeroFolha}` : ''}
+          </p>
+        </div>
+
         {/* Barra superior: ações */}
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40 print:hidden">
           <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-semibold text-sm mr-2">
@@ -239,7 +325,16 @@ const AdminCalculos: React.FC = () => {
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <Download className="w-4 h-4 text-emerald-600" />
-            Exportar
+            CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportarPdf()}
+            disabled={exportingPdf}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+          >
+            <FileText className="w-4 h-4 text-indigo-600" />
+            {exportingPdf ? 'PDF…' : 'PDF'}
           </button>
           <button
             type="button"
@@ -251,8 +346,8 @@ const AdminCalculos: React.FC = () => {
           </button>
         </div>
 
-        {/* Filtros principais */}
-        <div className="p-3 space-y-3 border-b border-slate-200 dark:border-slate-800 print:border print:rounded-lg">
+        {/* Filtros principais (ocultos na impressão para não sair “captura da tela”) */}
+        <div className="p-3 space-y-3 border-b border-slate-200 dark:border-slate-800 print:hidden">
           <div className="flex flex-col xl:flex-row flex-wrap gap-3 xl:items-end">
             <div className="flex flex-wrap items-end gap-2">
               <div>
@@ -372,19 +467,21 @@ const AdminCalculos: React.FC = () => {
         </div>
 
         {/* Grade */}
-        <div className="p-3 min-h-[240px]">
-          {loadingListas && <p className="text-sm text-slate-500">Carregando listas…</p>}
+        <div className="p-3 min-h-[240px] print:min-h-0">
+          {loadingListas && <p className="text-sm text-slate-500 print:hidden">Carregando listas…</p>}
           {!loadingListas && loadingCalc && (
-            <div className="flex items-center justify-center py-16 text-slate-500 text-sm">Processando período…</div>
+            <div className="flex items-center justify-center py-16 text-slate-500 text-sm print:hidden">
+              Processando período…
+            </div>
           )}
           {!loadingCalc && calcRows === null && (
-            <div className="flex flex-col items-center justify-center py-16 text-center text-slate-500 dark:text-slate-400 text-sm border border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
+            <div className="flex flex-col items-center justify-center py-16 text-center text-slate-500 dark:text-slate-400 text-sm border border-dashed border-slate-200 dark:border-slate-700 rounded-xl print:hidden">
               <Calculator className="w-10 h-10 mb-2 opacity-40" />
               <p>Selecione o colaborador, o período e clique em <strong className="text-slate-700 dark:text-slate-300">Atualizar</strong> para exibir os cálculos.</p>
             </div>
           )}
           {!loadingCalc && calcRows && calcRows.length === 0 && (
-            <p className="text-sm text-slate-500">Nenhum dia no período.</p>
+            <p className="text-sm text-slate-500 print:hidden">Nenhum dia no período.</p>
           )}
           {!loadingCalc && calcRows && calcRows.length > 0 && (
             <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">

@@ -417,6 +417,21 @@ img {
     box-shadow: none !important;
     text-shadow: none !important;
   }
+
+  /* Evita cortar o relatório ao imprimir / Salvar como PDF (layout com h-screen + overflow). */
+  html,
+  body,
+  #root {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  #main-content {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
   
   a,
   a:visited {
@@ -425,5 +440,15 @@ img {
   
   .no-print {
     display: none !important;
+  }
+
+  /* Tabelas de relatório (ex.: Cálculos): bordas legíveis após reset global */
+  .calculos-report-root table {
+    border-collapse: collapse !important;
+  }
+  .calculos-report-root th,
+  .calculos-report-root td {
+    border: 1px solid #1e293b !important;
+    padding: 4px 6px !important;
   }
 }
