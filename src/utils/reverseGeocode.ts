@@ -131,14 +131,9 @@ async function fetchAddressFromApi(lat: number, lng: number): Promise<string> {
     const data = (await res.json()) as { address?: string };
     if (typeof data.address === 'string') {
       const t = data.address.trim();
-      if (
-        t &&
-        !/^endereço não disponível/i.test(t) &&
-        !/^endereço indisponível/i.test(t) &&
-        !/^endereço não disponível para este ponto$/i.test(t)
-      ) {
-        return t;
-      }
+      // Qualquer texto não vindo da API substitui o fallback local por coordenadas puras.
+      // (Antes filtrávamos o fallback PT do servidor; isso fazia a UI ignorar a resposta 200 e mostrar só "Coordenadas: …".)
+      if (t) return t;
     }
   } catch {
     // rede / abort / 504 HTML

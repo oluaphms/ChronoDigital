@@ -153,7 +153,7 @@ export function ExpandableStreetCell({
   const coordHint = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   const preview =
     loading && !line
-      ? coordHint
+      ? 'Carregando endereço…'
       : line.length > previewMaxLength
         ? `${line.slice(0, previewMaxLength).trimEnd()}…`
         : line;

@@ -1,10 +1,11 @@
-/** Hobby: máx. 10s — manter margem para cold start + Nominatim. */
+/** Hobby: máx. 10s — duas tentativas curtas + margem para cold start + Nominatim. */
 export const config = {
   maxDuration: 10,
 };
 
 const FALLBACK = 'Endereço não disponível para este ponto';
-const HARD_CAP_MS = 7500;
+/** Deve cobrir 2× Nominatim (4,5s) + pausa — sem cortar a 2ª tentativa antes do fim. */
+const HARD_CAP_MS = 9800;
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -45,35 +46,58 @@ function formatNominatimAddress(a: Record<string, unknown>): string {
   return parts.join(' — ').trim();
 }
 
+const CONTACT_HINT =
+  (typeof process !== 'undefined' && process.env?.NOMINATIM_CONTACT_EMAIL?.trim()) ||
+  'https://chrono-digital.vercel.app';
+
+function buildNominatimUrl(lat: number, lng: number): string {
+  const nominatimUrl = new URL('https://nominatim.openstreetmap.org/reverse');
+  nominatimUrl.searchParams.set('format', 'jsonv2');
+  nominatimUrl.searchParams.set('lat', String(lat));
+  nominatimUrl.searchParams.set('lon', String(lng));
+  nominatimUrl.searchParams.set('accept-language', 'pt-BR');
+  const email = typeof process !== 'undefined' && process.env?.NOMINATIM_CONTACT_EMAIL?.trim();
+  /** Política Nominatim: e-mail válido no query reduz bloqueios (opcional; configure no Vercel). */
+  if (email) nominatimUrl.searchParams.set('email', email);
+  return nominatimUrl.toString();
+}
+
 /**
- * Apenas Nominatim (um round-trip), timeout curto — evita 504 na Vercel (Hobby 10s).
- * Photon removido: segunda chamada frequentemente estourava o orçamento.
+ * Nominatim com timeout por tentativa e 2ª tentativa após falha (rede/timeout/429).
+ * Mantém o total abaixo de ~9,5s para caber no limite Hobby (10s).
  */
 async function resolveAddressFromCoordinates(lat: number, lng: number): Promise<string> {
-  const NOMINATIM_MS = 3200;
+  const NOMINATIM_MS = 4500;
   const NOMINATIM_HEADERS = {
     Accept: 'application/json',
-    'User-Agent': 'ChronoDigital/1.0 (reverse-geocode; https://chrono-digital.vercel.app)',
+    'User-Agent': `ChronoDigital/1.0 (reverse-geocode; ${CONTACT_HINT})`,
   } as const;
 
-  try {
-    const nominatimUrl = new URL('https://nominatim.openstreetmap.org/reverse');
-    nominatimUrl.searchParams.set('format', 'jsonv2');
-    nominatimUrl.searchParams.set('lat', String(lat));
-    nominatimUrl.searchParams.set('lon', String(lng));
-    nominatimUrl.searchParams.set('accept-language', 'pt-BR');
-
-    const nomRes = await fetchWithTimeout(nominatimUrl.toString(), NOMINATIM_MS, {
+  const tryOnce = async (): Promise<string> => {
+    const nomRes = await fetchWithTimeout(buildNominatimUrl(lat, lng), NOMINATIM_MS, {
       headers: NOMINATIM_HEADERS,
     });
-    if (nomRes.ok) {
-      const nomData = (await nomRes.json()) as { display_name?: string; address?: Record<string, unknown> };
-      const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
-      const text = fromAddress || String(nomData.display_name || '').trim();
-      if (text) return text;
-    }
+    if (!nomRes.ok) return '';
+    const nomData = (await nomRes.json()) as { display_name?: string; address?: Record<string, unknown> };
+    const fromAddress = nomData.address ? formatNominatimAddress(nomData.address).trim() : '';
+    const text = fromAddress || String(nomData.display_name || '').trim();
+    return text;
+  };
+
+  try {
+    const first = await tryOnce();
+    if (first) return first;
   } catch (e) {
-    console.warn('Nominatim reverse geocode failed:', e instanceof Error ? e.message : e);
+    console.warn('Nominatim reverse geocode (1ª):', e instanceof Error ? e.message : e);
+  }
+
+  await new Promise((r) => setTimeout(r, 350));
+
+  try {
+    const second = await tryOnce();
+    if (second) return second;
+  } catch (e) {
+    console.warn('Nominatim reverse geocode (2ª):', e instanceof Error ? e.message : e);
   }
 
   return FALLBACK;
