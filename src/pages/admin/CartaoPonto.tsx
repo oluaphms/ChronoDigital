@@ -67,11 +67,8 @@ const AdminCartaoPonto: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [employees, setEmployees] = useState<{ id: string; nome: string; numero_folha?: string; department_id?: string }[]>([]);
   const [filterDept, setFilterDept] = useState<string>('');
-  const [periodStart, setPeriodStart] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
-  });
-  const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
   const [diasMeta, setDiasMeta] = useState<Record<string, { id?: string; meta: DayMeta }>>({});
@@ -96,12 +93,24 @@ const AdminCartaoPonto: React.FC = () => {
   }, [employees, filterDept]);
 
   const daysInPeriod = useMemo(() => {
-    const start = new Date(periodStart);
-    const end = new Date(periodEnd);
+    if (!periodStart || !periodEnd) return [];
+
+    // Parse YYYY-MM-DD como data local (evita UTC)
+    const parseLocalDate = (dateStr: string): Date => {
+      const [year, month, day] = dateStr.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    };
+
+    const start = parseLocalDate(periodStart);
+    const end = parseLocalDate(periodEnd);
     const days: string[] = [];
     const d = new Date(start);
     while (d <= end) {
-      days.push(d.toISOString().slice(0, 10));
+      // Formata como YYYY-MM-DD usando métodos locais
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      days.push(`${year}-${month}-${day}`);
       d.setDate(d.getDate() + 1);
     }
     return days;
@@ -125,7 +134,7 @@ const AdminCartaoPonto: React.FC = () => {
   }, [user?.companyId]);
 
   const loadRecordsAndDias = useCallback(async () => {
-    if (!user?.companyId || !selectedEmployee || !isSupabaseConfigured) {
+    if (!user?.companyId || !selectedEmployee || !isSupabaseConfigured || !periodStart || !periodEnd) {
       setRecords([]);
       setDiasMeta({});
       setLoadingData(false);
@@ -446,7 +455,12 @@ const AdminCartaoPonto: React.FC = () => {
 
         {/* Grid */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 overflow-x-auto">
-          {loadingData ? (
+          {!periodStart || !periodEnd ? (
+            <div className="p-12 text-center text-slate-500">
+              <p className="mb-2">Selecione o período (início e fim) para visualizar os dados.</p>
+              <p className="text-sm text-slate-400">Preencha as datas acima e os dados serão carregados automaticamente.</p>
+            </div>
+          ) : loadingData ? (
             <div className="p-12 text-center text-slate-500">Carregando...</div>
           ) : !selectedEmployee ? (
             <div className="p-12 text-center text-slate-500">Selecione um funcionário (Nº Folha ou navegação).</div>

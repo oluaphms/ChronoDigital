@@ -44,7 +44,7 @@ const ReportReadPage: React.FC = () => {
             </>
           }
           links={[
-            { label: 'Folha de pagamento', to: '/admin/folha-pagamento' },
+            { label: 'Pré-Folha (Jornada)', to: '/admin/pre-folha' },
             { label: 'Arquivar cálculos', to: '/admin/arquivar-calculos' },
             { label: 'Colunas mix', to: '/admin/colunas-mix' },
           ]}

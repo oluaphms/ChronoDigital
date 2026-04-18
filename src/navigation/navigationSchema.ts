@@ -77,7 +77,7 @@ export const navigationGroups: Record<string, NavigationGroupSchema> = {
       { name: 'Monitoramento', nameKey: 'menu.monitoramento', path: '/admin/monitoring', roles: ['admin', 'hr'] },
       { name: 'Mapa em tempo real', nameKey: 'menu.realTimeMap', path: '/employee/monitoring', roles: ['employee'] },
       { name: 'Relatórios', nameKey: 'menu.reports', path: '/admin/reports', roles: ['admin', 'hr'] },
-      { name: 'Folha de pagamento', nameKey: 'menu.folhaPagamento', path: '/admin/folha-pagamento', roles: ['admin', 'hr'] },
+      { name: 'Pré-Folha (Jornada)', nameKey: 'menu.preFolha', path: '/admin/pre-folha', roles: ['admin', 'hr'] },
     ],
   },
 

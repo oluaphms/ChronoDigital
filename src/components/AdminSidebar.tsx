@@ -29,8 +29,8 @@ import {
   Timer,
   Upload,
   Scale,
-  Banknote,
   Calculator,
+  Table2,
 } from 'lucide-react';
 import type { User } from '../../types';
 import { BrandLogo } from '../../components/BrandLogo';
@@ -56,7 +56,7 @@ const ADMIN_ITEMS = [
   { label: 'Cartão Ponto', path: '/admin/cartao-ponto', icon: FileText },
   { label: 'Cartão Ponto (Somente Leitura)', path: '/admin/cartao-ponto-leitura', icon: FileText },
   { label: 'Lançamento de Eventos', path: '/admin/lancamento-eventos', icon: CalendarPlus },
-  { label: 'Folha de pagamento', path: '/admin/folha-pagamento', icon: Banknote },
+  { label: 'Pré-Folha (Jornada)', path: '/admin/pre-folha', icon: Table2 },
   { label: 'Ausências (Relatório)', path: '/admin/ausencias', icon: CircleOff },
   { label: 'Arquivar Cálculos', path: '/admin/arquivar-calculos', icon: CalendarDays },
   { label: 'Colunas Mix', path: '/admin/colunas-mix', icon: CalendarDays },

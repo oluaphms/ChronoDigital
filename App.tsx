@@ -85,7 +85,7 @@ import {
   AdminEstruturas,
   AdminEstadosCivis,
   AdminEventos,
-  AdminFolhaPagamento,
+  AdminPreFolha,
   AdminFeriados,
   AdminFiscalizacao,
   AdminImportRep,
@@ -1314,7 +1314,7 @@ const AppMain: React.FC = () => {
               <Route path="cartao-ponto" element={<AdminCartaoPonto />} />
               <Route path="cartao-ponto-leitura" element={<AdminCartaoPonto />} />
               <Route path="lancamento-eventos" element={<AdminLancamentoEventos />} />
-              <Route path="folha-pagamento" element={<AdminFolhaPagamento />} />
+              <Route path="pre-folha" element={<AdminPreFolha />} />
               <Route path="time-attendance" element={<TimeAttendancePage />} />
               <Route path="absences" element={<AbsencesPage />} />
               <Route path="ausencias" element={<AdminAusencias />} />
