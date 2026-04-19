@@ -176,6 +176,8 @@ const AdminTimesheet: React.FC = () => {
         id: crypto.randomUUID(),
         company_id: companyId,
         is_manual: true,
+        /** NOT NULL no Postgres — batida criada pelo RH/admin no espelho (igual RPC `insert_time_record_for_user` / firestoreService). */
+        method: 'admin',
       });
       if (error) throw error;
       toast.addToast('success', 'Batida adicionada com sucesso.');
