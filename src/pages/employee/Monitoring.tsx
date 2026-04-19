@@ -4,6 +4,7 @@ import { db, supabase, isSupabaseConfigured, getSupabaseClient } from '../../ser
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
+import { extractLatLng } from '../../utils/reverseGeocode';
 import { LoadingState } from '../../../components/UI';
 import { MapPin, RefreshCw } from 'lucide-react';
 
@@ -34,13 +35,15 @@ const EmployeeMonitoring: React.FC = () => {
       ]);
       const users = usersRows ?? [];
       const records = recordsRows ?? [];
-      const lastByUser = new Map<string, { type: string; at: string; location?: { lat?: number; lng?: number } }>();
+      const lastByUser = new Map<string, { type: string; at: string; lat?: number; lng?: number }>();
       records.forEach((r: any) => {
         if (!lastByUser.has(r.user_id)) {
+          const coord = extractLatLng(r);
           lastByUser.set(r.user_id, {
             type: r.type,
             at: r.created_at,
-            location: r.location,
+            lat: coord?.lat,
+            lng: coord?.lng,
           });
         }
       });
@@ -62,8 +65,8 @@ const EmployeeMonitoring: React.FC = () => {
           status,
           lastRecordType: last?.type,
           lastRecordAt: last?.at ? new Date(last.at).toLocaleString('pt-BR') : undefined,
-          lat: last?.location?.lat,
-          lng: last?.location?.lng,
+          lat: last?.lat,
+          lng: last?.lng,
         };
       });
       setList(statusList);

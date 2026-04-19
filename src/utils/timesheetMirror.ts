@@ -9,6 +9,7 @@ export interface TimeRecord {
   id: string;
   user_id: string;
   created_at: string;
+  timestamp?: string | null;
   type: 'entrada' | 'saida' | 'intervalo_saida' | 'intervalo_volta';
   manual_reason?: string | null;
   latitude?: number | null;
@@ -46,6 +47,10 @@ function extractDate(isoString: string): string {
   return `${y}-${m}-${day}`;
 }
 
+function recordIso(record: TimeRecord): string {
+  return record.created_at || record.timestamp || new Date().toISOString();
+}
+
 /**
  * Verifica se um registro é manual (tem manual_reason ou is_manual=true)
  */
@@ -58,7 +63,7 @@ export function isManualRecord(record: TimeRecord): boolean {
  */
 function sortRecordsByTime(records: TimeRecord[]): TimeRecord[] {
   return [...records].sort((a, b) => 
-    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    new Date(recordIso(a)).getTime() - new Date(recordIso(b)).getTime()
   );
 }
 
@@ -67,7 +72,7 @@ function sortRecordsByTime(records: TimeRecord[]): TimeRecord[] {
  */
 function buildDaySummary(records: TimeRecord[]): DayMirror {
   const sorted = sortRecordsByTime(records);
-  const date = extractDate(sorted[0]?.created_at || new Date().toISOString());
+  const date = extractDate(recordIso(sorted[0] || { created_at: new Date().toISOString() } as TimeRecord));
   
   let entradaInicio: string | null = null;
   let saidaIntervalo: string | null = null;
@@ -76,7 +81,7 @@ function buildDaySummary(records: TimeRecord[]): DayMirror {
   
   // Interpreta a sequência de batidas baseado na ordem e tipo
   for (const record of sorted) {
-    const time = extractTime(record.created_at);
+    const time = extractTime(recordIso(record));
     
     switch (record.type) {
       case 'entrada':
@@ -104,6 +109,14 @@ function buildDaySummary(records: TimeRecord[]): DayMirror {
         break;
     }
   }
+
+  // Fallback por ordem cronológica (caso tipos estejam incompletos ou inconsistentes)
+  const times = sorted.map((r) => extractTime(recordIso(r)));
+  const middle = times.slice(1, -1);
+  if (!entradaInicio && times.length > 0) entradaInicio = times[0];
+  if (!saidaFinal && times.length > 1) saidaFinal = times[times.length - 1];
+  if (!saidaIntervalo && middle.length > 0) saidaIntervalo = middle[0];
+  if (!voltaIntervalo && middle.length > 1) voltaIntervalo = middle[middle.length - 1];
   
   // Calcula minutos trabalhados
   let workedMinutes = 0;
@@ -138,7 +151,7 @@ function groupRecordsByDate(records: TimeRecord[]): Map<string, TimeRecord[]> {
   const groups = new Map<string, TimeRecord[]>();
   
   for (const record of records) {
-    const date = extractDate(record.created_at);
+    const date = extractDate(recordIso(record));
     if (!groups.has(date)) {
       groups.set(date, []);
     }
@@ -215,15 +228,27 @@ export function getDayStatus(day: DayMirror): { status: string; label: string; c
   const dayOfWeek = date.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   
+  const hasRecords = Boolean(day.records && day.records.length > 0);
+
   if (isWeekend) {
+    if (hasRecords) return { status: 'extra', label: 'EXTRA', color: 'purple' };
     return { status: 'folga', label: 'FOLGA', color: 'green' };
   }
-  
+
   // Se não tem registros em dia útil = FALTA
-  if (!day.records || day.records.length === 0) {
+  if (!hasRecords) {
     return { status: 'falta', label: 'FALTA', color: 'red' };
   }
-  
-  // Dia normal com registros
-  return { status: 'normal', label: '', color: 'slate' };
+
+  const incomplete =
+    !day.entradaInicio ||
+    !day.saidaFinal ||
+    (day.saidaIntervalo && !day.voltaIntervalo) ||
+    (!day.saidaIntervalo && day.voltaIntervalo);
+
+  if (incomplete) {
+    return { status: 'incompleto', label: 'INCOMPLETO', color: 'orange' };
+  }
+
+  return { status: 'presente', label: 'PRESENTE', color: 'green' };
 }

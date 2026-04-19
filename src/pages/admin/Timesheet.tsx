@@ -42,6 +42,7 @@ type TimeRecord = {
   id: string;
   user_id: string;
   created_at: string;
+  timestamp?: string | null;
   type: 'entrada' | 'saida' | 'intervalo_saida' | 'intervalo_volta';
   manual_reason?: string | null;
   latitude?: number | null;
@@ -609,7 +610,7 @@ const AdminTimesheet: React.FC = () => {
       ) : loadingEspelho ? (
         <TimesheetTableSkeleton variant="admin" />
       ) : (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden print:border print:shadow-none">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-visible print:border print:shadow-none">
           <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
             <h3 className="font-semibold text-slate-900 dark:text-white">{selectedEmployee?.nome || 'Colaborador'}</h3>
             <p className="text-sm text-slate-500">
@@ -634,16 +635,28 @@ const AdminTimesheet: React.FC = () => {
                 {periodDates.map((date) => {
                   const day = empMirror.get(date);
                   if (!day) return null;
+                  const noRecords = !day.records || day.records.length === 0;
+                  const dayStatus = getDayStatus(day);
+                  const dayBadge = renderDayBadge(day, date);
+                  const badgeInTotal = ['incompleto', 'folga', 'extra', 'falta'].includes(dayStatus.status);
                   const fmt = (iso: string) =>
                     new Date(iso).toLocaleTimeString('pt-BR', {
                       hour: '2-digit',
                       minute: '2-digit',
                       hour12: false,
                     });
-                  const pick = (t: string | null, typ: TimeRecord['type']) =>
-                    day.records.find((r) => r.type === typ && fmt(r.created_at) === t);
+                  const recordIso = (r: TimeRecord) => r.created_at || r.timestamp || '';
+                  const fmtRecord = (r: TimeRecord) => fmt(recordIso(r));
+                  const pick = (t: string | null, typ: TimeRecord['type']) => {
+                    if (!t) return undefined;
+                    return (
+                      day.records.find((r) => r.type === typ && fmtRecord(r) === t) ||
+                      day.records.find((r) => fmtRecord(r) === t)
+                    );
+                  };
                   const entradaRecord = day.entradaInicio
-                    ? day.records.find((r) => r.type === 'entrada' && fmt(r.created_at) === day.entradaInicio)
+                    ? day.records.find((r) => r.type === 'entrada' && fmtRecord(r) === day.entradaInicio) ||
+                      day.records.find((r) => fmtRecord(r) === day.entradaInicio)
                     : undefined;
                   const saidaIntRecord = pick(day.saidaIntervalo, 'intervalo_saida');
                   const voltaIntRecord = pick(day.voltaIntervalo, 'intervalo_volta');
@@ -653,13 +666,13 @@ const AdminTimesheet: React.FC = () => {
                       <td className="px-3 py-2 text-slate-800 dark:text-slate-200 whitespace-nowrap">
                         {formatDateBR(date)}
                       </td>
-                      <td className="px-3 py-2">{renderDayBadge(day, date)}</td>
-                      <td className="px-3 py-2">{renderTimeCell(day.entradaInicio, entradaRecord)}</td>
-                      <td className="px-3 py-2">{renderTimeCell(day.saidaIntervalo, saidaIntRecord)}</td>
-                      <td className="px-3 py-2">{renderTimeCell(day.voltaIntervalo, voltaIntRecord)}</td>
-                      <td className="px-3 py-2">{renderTimeCell(day.saidaFinal, saidaRecord)}</td>
+                      <td className="px-3 py-2">{dayBadge}</td>
+                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.entradaInicio, entradaRecord)}</td>
+                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.saidaIntervalo, saidaIntRecord)}</td>
+                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.voltaIntervalo, voltaIntRecord)}</td>
+                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.saidaFinal, saidaRecord)}</td>
                       <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">
-                        {day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : '—'}
+                        {badgeInTotal ? dayBadge : day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : '—'}
                       </td>
                     </tr>
                   );
