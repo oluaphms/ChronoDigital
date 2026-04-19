@@ -10,6 +10,7 @@ import Clock from './components/Clock';
 import PunchModal from './components/PunchModal';
 import Onboarding from './components/Onboarding';
 import { Button, Badge, LoadingState, SuccessOverlay, Input } from './components/UI';
+import RouteLoadingFallback from './src/components/RouteLoadingFallback';
 import { getWorkInsights } from './services/geminiService';
 import { isAiDashboardInsightsAutoEnabled } from './services/geminiEnv';
 import { PontoService, getRecordCreatedAtDate } from './services/pontoService';
@@ -208,6 +209,7 @@ const AppMain: React.FC = () => {
     return readCachedUser() === null;
   });
   const [company, setCompany] = useState<Company | null>(null);
+  const [routeLoadAttempt, setRouteLoadAttempt] = useState(0);
 
   // Filtros do histórico
   const [historyMethodFilter, setHistoryMethodFilter] = useState<'all' | PunchMethod>('all');
@@ -251,6 +253,9 @@ const AppMain: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const isRecoveryHash = typeof window !== 'undefined' && window.location.hash.includes('type=recovery');
+  const handleRouteRetry = useCallback(() => {
+    setRouteLoadAttempt((prev) => prev + 1);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1008,7 +1013,10 @@ const AppMain: React.FC = () => {
 
   if (location.pathname === '/reset-password' || isRecoveryHash) {
     return (
-      <React.Suspense fallback={<LoadingState message="Carregando..." />}>
+      <React.Suspense
+        key={`route-load-${routeLoadAttempt}`}
+        fallback={<RouteLoadingFallback message="Carregando..." onRetry={handleRouteRetry} />}
+      >
         <ResetPasswordRoute />
       </React.Suspense>
     );
@@ -1017,7 +1025,10 @@ const AppMain: React.FC = () => {
   if (!user) {
     if (location.pathname === '/accept-invite') {
       return (
-        <React.Suspense fallback={<LoadingState message="Carregando..." />}>
+        <React.Suspense
+          key={`route-load-${routeLoadAttempt}`}
+          fallback={<RouteLoadingFallback message="Carregando..." onRetry={handleRouteRetry} />}
+        >
           <AcceptInviteRoute />
         </React.Suspense>
       );
@@ -1332,7 +1343,10 @@ const AppMain: React.FC = () => {
   if (isPortalRoute) {
     return (
       <LayoutComponent user={user} activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout}>
-        <React.Suspense fallback={<LoadingState message="Carregando página..." />}>
+        <React.Suspense
+          key={`route-load-${routeLoadAttempt}`}
+          fallback={<RouteLoadingFallback message="Carregando página..." onRetry={handleRouteRetry} />}
+        >
           <Routes>
             {/* Rotas Admin: /admin redireciona pelo index; não duplicar Route path="/admin" (quebra sub-rotas como /admin/bank-hours). */}
             <Route path="/admin" element={<ProtectedRoute user={user} allowedRoles={['admin', 'hr']}><Outlet /></ProtectedRoute>}>
@@ -1507,7 +1521,10 @@ const AppMain: React.FC = () => {
       {showOnboarding && <Onboarding onComplete={() => { localStorage.setItem(`onboarding_${user.id}`, 'true'); setShowOnboarding(false); }} />}
       <SuccessOverlay visible={showCelebration} title="Ponto Registrado" message="Sua marcação foi validada e salva com sucesso." />
 
-      <React.Suspense fallback={<LoadingState message="Carregando..." />}>
+      <React.Suspense
+        key={`route-load-${routeLoadAttempt}`}
+        fallback={<RouteLoadingFallback message="Carregando..." onRetry={handleRouteRetry} />}
+      >
         {activeTab === 'dashboard' && (
           <div className="space-y-10 animate-in slide-in-from-bottom-6 duration-700">
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
