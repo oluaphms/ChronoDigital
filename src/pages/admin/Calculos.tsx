@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import {
   Calculator,
   ChevronLeft,
@@ -10,16 +10,28 @@ import {
   ListChecks,
   Printer,
   Search,
-  Sheet,
-  UserCog,
 } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState } from '../../../components/UI';
-import { isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import { buscarColaboradores } from '../../../services/api';
-import { processEmployeeDay, type DaySummary } from '../../engine/timeEngine';
+import {
+  calculateNightHours,
+  calculateOvertime,
+  detectInconsistencies,
+  parseTimeRecords,
+  type OvertimeResult,
+  type TimeInconsistency,
+} from '../../engine/timeEngine';
+import {
+  getDayRecords,
+  getEmployeeSchedule,
+  processDailyTime,
+  type DailyProcessResult,
+  type WorkScheduleInfo,
+} from '../../services/timeProcessingService';
 
 function fmtMinutos(m: number): string {
   const sign = m < 0 ? '-' : '';
@@ -40,6 +52,44 @@ function nomeDiaSemana(ymd: string): string {
   if (!y || !m || !d) return '';
   const dt = new Date(y, m - 1, d);
   return dt.toLocaleDateString('pt-BR', { weekday: 'short' });
+}
+
+function roundMinutes(value: number, step: number): number {
+  if (!step || step <= 0) return Math.round(value);
+  return Math.round(value / step) * step;
+}
+
+function weekStartDate(ymd: string): string {
+  const d = new Date(`${ymd}T12:00:00`);
+  const day = d.getDay();
+  const diff = (day + 6) % 7; // segunda-feira = 0
+  d.setDate(d.getDate() - diff);
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+interface CalcDayRow {
+  date: string;
+  daily: DailyProcessResult & { missing_minutes: number };
+  overtime: OvertimeResult | null;
+  inconsistencies: TimeInconsistency[];
+  night_minutes: number;
+  isHoliday: boolean;
+  isDayOff: boolean;
+}
+
+interface CalcGroupRow {
+  key: string;
+  label: string;
+  daily: DailyProcessResult & { missing_minutes: number };
+  overtime: OvertimeResult | null;
+  night_minutes: number;
+  inconsistencies: TimeInconsistency[];
 }
 
 /** Gera cada dia civil entre início e fim (YYYY-MM-DD), inclusive. */
@@ -73,10 +123,31 @@ const AdminCalculos: React.FC = () => {
   const [periodEnd, setPeriodEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [numeroFolha, setNumeroFolha] = useState('');
   const [filterUserId, setFilterUserId] = useState('');
-  const [calcRows, setCalcRows] = useState<DaySummary[] | null>(null);
+  const [calcRows, setCalcRows] = useState<CalcDayRow[] | null>(null);
   const [loadingCalc, setLoadingCalc] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [showFiltrosExtra, setShowFiltrosExtra] = useState(false);
+  const [showCalcOptions, setShowCalcOptions] = useState(false);
+  const [holidayDates, setHolidayDates] = useState<Set<string>>(() => new Set());
+  const [calcOptions, setCalcOptions] = useState({
+    includeHolidaysAndDaysOff: true,
+    useTolerance: true,
+    toleranceMinutes: 10,
+    enforceMinBreak: true,
+    minBreakAfterHours: 6,
+    minBreakMinutes: 30,
+    useEmployeeSchedule: true,
+    calcOvertime: true,
+    includeNight: true,
+    roundingMinutes: 0,
+    showOnlyInconsistencies: false,
+    groupBy: 'day' as 'day' | 'week' | 'month',
+    exportColumns: {
+      late: true,
+      missing: true,
+      night: true,
+    },
+  });
 
   useEffect(() => {
     if (!user?.companyId || !isSupabaseConfigured()) {
@@ -86,9 +157,22 @@ const AdminCalculos: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const list = await buscarColaboradores(user.companyId!);
+        const [list, holidays] = await Promise.all([
+          buscarColaboradores(user.companyId!),
+          db
+            .select('holidays', [{ column: 'company_id', operator: 'eq', value: user.companyId }])
+            .catch(() =>
+              db.select('feriados', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []),
+            ),
+        ]);
         if (!cancelled) {
           setEmployees([...list].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')));
+          const holSet = new Set(
+            (holidays ?? [])
+              .map((h: any) => String(h.date || h.data || '').slice(0, 10))
+              .filter(Boolean),
+          );
+          setHolidayDates(holSet);
         }
       } catch (e) {
         console.error(e);
@@ -119,6 +203,143 @@ const AdminCalculos: React.FC = () => {
     setCalcRows(null);
   };
 
+  const defaultSchedule: WorkScheduleInfo = {
+    start_time: '08:00',
+    end_time: '17:00',
+    break_start: '12:00',
+    break_end: '13:00',
+    tolerance_minutes: 10,
+    daily_hours: 8,
+    work_days: [1, 2, 3, 4, 5],
+  };
+
+  const buildSchedule = useCallback(
+    async (employeeId: string, companyId: string): Promise<WorkScheduleInfo> => {
+      const base = calcOptions.useEmployeeSchedule
+        ? await getEmployeeSchedule(employeeId, companyId)
+        : null;
+      const schedule = { ...(base || defaultSchedule) };
+      schedule.tolerance_minutes = calcOptions.useTolerance ? calcOptions.toleranceMinutes : 0;
+      return schedule;
+    },
+    [calcOptions.useEmployeeSchedule, calcOptions.useTolerance, calcOptions.toleranceMinutes],
+  );
+
+  const computeDayRow = useCallback(
+    async (employeeId: string, companyId: string, dateStr: string): Promise<CalcDayRow> => {
+      const schedule = await buildSchedule(employeeId, companyId);
+      const records = await getDayRecords(employeeId, dateStr);
+      const dailyBase = await processDailyTime(employeeId, companyId, dateStr, schedule);
+      const parsed = parseTimeRecords(records);
+
+      const dayOfWeek = new Date(`${dateStr}T12:00:00`).getDay();
+      const isDayOff = !schedule.work_days.includes(dayOfWeek);
+      const isHoliday = holidayDates.has(dateStr);
+
+      let workedMinutes = dailyBase.total_worked_minutes;
+      const expectedMinutes = dailyBase.expected_minutes;
+      const breakMinutes = parsed.breakMinutes;
+
+      if (calcOptions.enforceMinBreak) {
+        const threshold = Math.max(0, calcOptions.minBreakAfterHours) * 60;
+        if (workedMinutes > threshold && breakMinutes < calcOptions.minBreakMinutes) {
+          const diff = calcOptions.minBreakMinutes - breakMinutes;
+          workedMinutes = Math.max(0, workedMinutes - diff);
+        }
+      }
+
+      let expected = expectedMinutes;
+      let lateMinutes = dailyBase.late_minutes;
+      const excludedDay = !calcOptions.includeHolidaysAndDaysOff && (isHoliday || isDayOff);
+
+      if (isHoliday || isDayOff) {
+        expected = 0;
+        lateMinutes = 0;
+      }
+
+      if (excludedDay) {
+        expected = 0;
+        lateMinutes = 0;
+      }
+
+      let delta = workedMinutes - expected;
+      let overtimeMinutes = delta > 0 ? delta : 0;
+      let missingMinutes = delta < 0 ? -delta : 0;
+
+      if (calcOptions.useTolerance && calcOptions.toleranceMinutes > 0 && Math.abs(delta) <= calcOptions.toleranceMinutes) {
+        overtimeMinutes = 0;
+        missingMinutes = 0;
+      }
+
+      if (!calcOptions.calcOvertime || excludedDay) {
+        overtimeMinutes = 0;
+      }
+
+      if (excludedDay) {
+        missingMinutes = 0;
+      }
+
+      let nightMinutes = calcOptions.includeNight ? calculateNightHours(records) : 0;
+
+      const inconsistencies = detectInconsistencies(employeeId, dateStr, records, schedule);
+      if (calcOptions.enforceMinBreak) {
+        const threshold = Math.max(0, calcOptions.minBreakAfterHours) * 60;
+        const hasMissingBreak = breakMinutes < calcOptions.minBreakMinutes && workedMinutes > threshold;
+        if (hasMissingBreak && !inconsistencies.some((i) => i.type === 'missing_break')) {
+          inconsistencies.push({
+            employee_id: employeeId,
+            date: dateStr,
+            type: 'missing_break',
+            description: `Intervalo inferior a ${calcOptions.minBreakMinutes} min`,
+          });
+        }
+      }
+
+      workedMinutes = roundMinutes(workedMinutes, calcOptions.roundingMinutes);
+      expected = roundMinutes(expected, calcOptions.roundingMinutes);
+      overtimeMinutes = roundMinutes(overtimeMinutes, calcOptions.roundingMinutes);
+      missingMinutes = roundMinutes(missingMinutes, calcOptions.roundingMinutes);
+      nightMinutes = roundMinutes(nightMinutes, calcOptions.roundingMinutes);
+      lateMinutes = roundMinutes(lateMinutes, calcOptions.roundingMinutes);
+
+      const overtime = calcOptions.calcOvertime && !excludedDay
+        ? calculateOvertime(dateStr, workedMinutes, expected, isHoliday || isDayOff)
+        : ({ date: dateStr, overtime_50_minutes: 0, overtime_100_minutes: 0, is_holiday_or_off: isHoliday || isDayOff } as OvertimeResult);
+
+      const daily: DailyProcessResult & { missing_minutes: number } = {
+        ...dailyBase,
+        total_worked_minutes: workedMinutes,
+        expected_minutes: expected,
+        overtime_minutes: overtimeMinutes,
+        late_minutes: lateMinutes,
+        missing_minutes: missingMinutes,
+      };
+
+      return {
+        date: dateStr,
+        daily,
+        overtime,
+        inconsistencies,
+        night_minutes: nightMinutes,
+        isHoliday,
+        isDayOff,
+      };
+    },
+    [
+      buildSchedule,
+      calcOptions.calcOvertime,
+      calcOptions.enforceMinBreak,
+      calcOptions.includeHolidaysAndDaysOff,
+      calcOptions.includeNight,
+      calcOptions.minBreakAfterHours,
+      calcOptions.minBreakMinutes,
+      calcOptions.roundingMinutes,
+      calcOptions.toleranceMinutes,
+      calcOptions.useTolerance,
+      holidayDates,
+    ],
+  );
+
   const atualizar = useCallback(async () => {
     if (!user?.companyId || !filterUserId) {
       toast.addToast('error', 'Selecione um colaborador e clique em Atualizar.');
@@ -136,9 +357,9 @@ const AdminCalculos: React.FC = () => {
     setLoadingCalc(true);
     setCalcRows(null);
     try {
-      const rows: DaySummary[] = [];
+      const rows: CalcDayRow[] = [];
       for (const d of dias) {
-        rows.push(await processEmployeeDay(filterUserId, user.companyId, d));
+        rows.push(await computeDayRow(filterUserId, user.companyId, d));
       }
       setCalcRows(rows);
     } catch (e: any) {
@@ -147,43 +368,136 @@ const AdminCalculos: React.FC = () => {
     } finally {
       setLoadingCalc(false);
     }
-  }, [user?.companyId, filterUserId, periodStart, periodEnd, toast]);
+  }, [
+    user?.companyId,
+    filterUserId,
+    periodStart,
+    periodEnd,
+    toast,
+    computeDayRow,
+  ]);
+
+  const filteredRows = useMemo(() => {
+    if (!calcRows) return null;
+    if (!calcOptions.showOnlyInconsistencies) return calcRows;
+    return calcRows.filter((r) => r.inconsistencies.length > 0);
+  }, [calcOptions.showOnlyInconsistencies, calcRows]);
+
+  const groupedRows = useMemo(() => {
+    if (!filteredRows || calcOptions.groupBy === 'day') return null;
+    const byKey = new Map<string, CalcGroupRow>();
+
+    const ensure = (key: string, label: string) => {
+      if (byKey.has(key)) return byKey.get(key)!;
+      const base: CalcGroupRow = {
+        key,
+        label,
+        daily: {
+          total_worked_minutes: 0,
+          expected_minutes: 0,
+          overtime_minutes: 0,
+          late_minutes: 0,
+          missing_minutes: 0,
+          entrada: null,
+          saida: null,
+          inicio_intervalo: null,
+          fim_intervalo: null,
+        },
+        overtime: {
+          date: key,
+          overtime_50_minutes: 0,
+          overtime_100_minutes: 0,
+          is_holiday_or_off: false,
+        },
+        night_minutes: 0,
+        inconsistencies: [],
+      };
+      byKey.set(key, base);
+      return base;
+    };
+
+    for (const row of filteredRows) {
+      if (calcOptions.groupBy === 'week') {
+        const start = weekStartDate(row.date);
+        const end = addDays(start, 6);
+        const label = `Semana ${formatDataPt(start)} a ${formatDataPt(end)}`;
+        const group = ensure(start, label);
+        group.daily.total_worked_minutes += row.daily.total_worked_minutes;
+        group.daily.expected_minutes += row.daily.expected_minutes;
+        group.daily.overtime_minutes += row.daily.overtime_minutes;
+        group.daily.late_minutes += row.daily.late_minutes;
+        group.daily.missing_minutes += row.daily.missing_minutes;
+        group.night_minutes += row.night_minutes;
+        group.overtime!.overtime_50_minutes += row.overtime?.overtime_50_minutes ?? 0;
+        group.overtime!.overtime_100_minutes += row.overtime?.overtime_100_minutes ?? 0;
+        group.inconsistencies.push(...row.inconsistencies);
+      } else {
+        const key = row.date.slice(0, 7);
+        const [y, m] = key.split('-');
+        const label = `Mês ${m}/${y}`;
+        const group = ensure(key, label);
+        group.daily.total_worked_minutes += row.daily.total_worked_minutes;
+        group.daily.expected_minutes += row.daily.expected_minutes;
+        group.daily.overtime_minutes += row.daily.overtime_minutes;
+        group.daily.late_minutes += row.daily.late_minutes;
+        group.daily.missing_minutes += row.daily.missing_minutes;
+        group.night_minutes += row.night_minutes;
+        group.overtime!.overtime_50_minutes += row.overtime?.overtime_50_minutes ?? 0;
+        group.overtime!.overtime_100_minutes += row.overtime?.overtime_100_minutes ?? 0;
+        group.inconsistencies.push(...row.inconsistencies);
+      }
+    }
+
+    return Array.from(byKey.values());
+  }, [filteredRows, calcOptions.groupBy]);
+
+  const columns = useMemo(() => {
+    const cols = [
+      { key: 'date', label: calcOptions.groupBy === 'day' ? 'Data' : 'Período' },
+      { key: 'weekday', label: 'Dia', visible: calcOptions.groupBy === 'day' },
+      { key: 'entrada', label: 'Entrada', visible: calcOptions.groupBy === 'day' },
+      { key: 'saida', label: 'Saída', visible: calcOptions.groupBy === 'day' },
+      { key: 'worked', label: 'Trabalhadas' },
+      { key: 'late', label: 'Atraso', visible: calcOptions.exportColumns.late },
+      { key: 'missing', label: 'Falta', visible: calcOptions.exportColumns.missing },
+      { key: 'extra50', label: 'Extra 50%' },
+      { key: 'extra100', label: 'Extra 100%' },
+      { key: 'night', label: 'Noturno', visible: calcOptions.exportColumns.night },
+    ];
+    return cols.filter((c) => c.visible !== false);
+  }, [calcOptions.exportColumns.late, calcOptions.exportColumns.missing, calcOptions.exportColumns.night, calcOptions.groupBy]);
+
+  const rowsToRender = useMemo(() => {
+    if (!filteredRows) return null;
+    if (calcOptions.groupBy === 'day') return filteredRows;
+    return groupedRows;
+  }, [filteredRows, calcOptions.groupBy, groupedRows]);
 
   const exportarCsv = () => {
-    if (!calcRows?.length) {
+    if (!filteredRows?.length) {
       toast.addToast('error', 'Não há dados para exportar. Clique em Atualizar.');
       return;
     }
+    const grouped = calcOptions.groupBy !== 'day';
+    const list = grouped ? groupedRows || [] : filteredRows;
     const nome = employees.find((e) => e.id === filterUserId)?.nome ?? '';
-    const headers = [
-      'Data',
-      'Dia',
-      'Entrada',
-      'Saída',
-      'Trabalhadas',
-      'Atraso',
-      'Falta',
-      'Extra 50%',
-      'Extra 100%',
-      'Noturno',
-    ];
+    const headers = columns.map((c) => c.label);
     const lines = [headers.join(';')];
-    for (const r of calcRows) {
-      const o = r.overtime;
-      lines.push(
-        [
-          r.date,
-          nomeDiaSemana(r.date),
-          r.daily.entrada ?? '',
-          r.daily.saida ?? '',
-          fmtMinutos(r.daily.total_worked_minutes),
-          fmtMinutos(r.daily.late_minutes),
-          fmtMinutos(r.daily.missing_minutes),
-          o ? fmtMinutos(o.overtime_50_minutes) : '0:00',
-          o ? fmtMinutos(o.overtime_100_minutes) : '0:00',
-          fmtMinutos(r.night_minutes),
-        ].join(';'),
-      );
+    for (const r of list) {
+      const row = r as CalcDayRow & CalcGroupRow;
+      const values: Record<string, string> = {
+        date: grouped ? row.label : row.date,
+        weekday: grouped ? '' : nomeDiaSemana(row.date),
+        entrada: grouped ? '—' : row.daily.entrada ?? '—',
+        saida: grouped ? '—' : row.daily.saida ?? '—',
+        worked: fmtMinutos(row.daily.total_worked_minutes),
+        late: fmtMinutos(row.daily.late_minutes),
+        missing: fmtMinutos(row.daily.missing_minutes),
+        extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
+        extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
+        night: fmtMinutos(row.night_minutes),
+      };
+      lines.push(columns.map((c) => values[c.key]).join(';'));
     }
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -195,10 +509,12 @@ const AdminCalculos: React.FC = () => {
   };
 
   const exportarPdf = async () => {
-    if (!calcRows?.length) {
+    if (!filteredRows?.length) {
       toast.addToast('error', 'Não há dados para exportar. Clique em Atualizar.');
       return;
     }
+    const grouped = calcOptions.groupBy !== 'day';
+    const list = grouped ? groupedRows || [] : filteredRows;
     setExportingPdf(true);
     try {
       const nome = employees.find((e) => e.id === filterUserId)?.nome ?? '—';
@@ -221,23 +537,22 @@ const AdminCalculos: React.FC = () => {
         .join('  ·  ');
       doc.text(sub, pageW / 2, 19, { align: 'center' });
 
-      const head = [
-        ['Data', 'Dia', 'Entrada', 'Saída', 'Trabalh.', 'Atraso', 'Falta', 'Extra 50%', 'Extra 100%', 'Noturno'],
-      ];
-      const body = calcRows.map((r) => {
-        const o = r.overtime;
-        return [
-          formatDataPt(r.date),
-          nomeDiaSemana(r.date),
-          r.daily.entrada ?? '—',
-          r.daily.saida ?? '—',
-          fmtMinutos(r.daily.total_worked_minutes),
-          fmtMinutos(r.daily.late_minutes),
-          fmtMinutos(r.daily.missing_minutes),
-          o ? fmtMinutos(o.overtime_50_minutes) : '0:00',
-          o ? fmtMinutos(o.overtime_100_minutes) : '0:00',
-          fmtMinutos(r.night_minutes),
-        ];
+      const head = [columns.map((c) => c.label)];
+      const body = list.map((r) => {
+        const row = r as CalcDayRow & CalcGroupRow;
+        const values: Record<string, string> = {
+          date: grouped ? row.label : formatDataPt(row.date),
+          weekday: grouped ? '' : nomeDiaSemana(row.date),
+          entrada: grouped ? '—' : row.daily.entrada ?? '—',
+          saida: grouped ? '—' : row.daily.saida ?? '—',
+          worked: fmtMinutos(row.daily.total_worked_minutes),
+          late: fmtMinutos(row.daily.late_minutes),
+          missing: fmtMinutos(row.daily.missing_minutes),
+          extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
+          extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
+          night: fmtMinutos(row.night_minutes),
+        };
+        return columns.map((c) => values[c.key]);
       });
 
       autoTable(doc, {
@@ -301,7 +616,7 @@ const AdminCalculos: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={() => toast.addToast('info', 'Opções de cálculo serão configuradas em versão futura.')}
+            onClick={() => setShowCalcOptions((v) => !v)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <ListChecks className="w-4 h-4 text-rose-600" />
@@ -423,13 +738,6 @@ const AdminCalculos: React.FC = () => {
                 >
                   <ChevronRight className="w-5 h-5 text-emerald-600" />
                 </button>
-                <Link
-                  to="/admin/timesheet"
-                  title="Espelho de ponto"
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600"
-                >
-                  <Sheet className="w-5 h-5" />
-                </Link>
                 <button
                   type="button"
                   title="Focar busca"
@@ -438,13 +746,6 @@ const AdminCalculos: React.FC = () => {
                 >
                   <Search className="w-5 h-5" />
                 </button>
-                <Link
-                  to="/admin/employees"
-                  title="Cadastro de funcionários"
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600"
-                >
-                  <UserCog className="w-5 h-5 text-blue-600" />
-                </Link>
               </div>
             </div>
             <div className="flex-1 flex justify-end">
@@ -464,6 +765,188 @@ const AdminCalculos: React.FC = () => {
               Filtros adicionais (departamento, projeto, etc.) poderão ser incluídos nas próximas versões.
             </p>
           )}
+          {showCalcOptions && (
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 text-xs text-slate-700 dark:text-slate-300 space-y-3 print:hidden">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.includeHolidaysAndDaysOff}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, includeHolidaysAndDaysOff: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Incluir feriados e folgas no cálculo</span>
+                </label>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.useEmployeeSchedule}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, useEmployeeSchedule: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Usar escala do colaborador</span>
+                </label>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.useTolerance}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, useTolerance: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Considerar tolerância de entrada/saída</span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 dark:text-slate-400">Tolerância (min)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={calcOptions.toleranceMinutes}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, toleranceMinutes: Number(e.target.value || 0) }))}
+                    className="w-20 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    disabled={!calcOptions.useTolerance}
+                  />
+                </div>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.enforceMinBreak}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, enforceMinBreak: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Aplicar regra de intervalo mínimo</span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 dark:text-slate-400">Após (h)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={calcOptions.minBreakAfterHours}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, minBreakAfterHours: Number(e.target.value || 0) }))}
+                    className="w-20 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    disabled={!calcOptions.enforceMinBreak}
+                  />
+                  <span className="text-slate-600 dark:text-slate-400">Intervalo (min)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={calcOptions.minBreakMinutes}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, minBreakMinutes: Number(e.target.value || 0) }))}
+                    className="w-20 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                    disabled={!calcOptions.enforceMinBreak}
+                  />
+                </div>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.calcOvertime}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, calcOvertime: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Calcular horas extras 50%/100%</span>
+                </label>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.includeNight}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, includeNight: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Incluir adicional noturno</span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 dark:text-slate-400">Arredondamento</span>
+                  <select
+                    value={calcOptions.roundingMinutes}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, roundingMinutes: Number(e.target.value) }))}
+                    className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                  >
+                    <option value={0}>Sem</option>
+                    <option value={5}>5 min</option>
+                    <option value={10}>10 min</option>
+                    <option value={15}>15 min</option>
+                  </select>
+                </div>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={calcOptions.showOnlyInconsistencies}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, showOnlyInconsistencies: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span>Exibir apenas dias com inconsistência</span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 dark:text-slate-400">Agrupar por</span>
+                  <select
+                    value={calcOptions.groupBy}
+                    onChange={(e) => setCalcOptions((s) => ({ ...s, groupBy: e.target.value as 'day' | 'week' | 'month' }))}
+                    className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                  >
+                    <option value="day">Dia</option>
+                    <option value="week">Semana</option>
+                    <option value="month">Mês</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-slate-600 dark:text-slate-400">Colunas da exportação</span>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={calcOptions.exportColumns.late}
+                      onChange={(e) =>
+                        setCalcOptions((s) => ({
+                          ...s,
+                          exportColumns: { ...s.exportColumns, late: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span>Atraso</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={calcOptions.exportColumns.missing}
+                      onChange={(e) =>
+                        setCalcOptions((s) => ({
+                          ...s,
+                          exportColumns: { ...s.exportColumns, missing: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span>Falta</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={calcOptions.exportColumns.night}
+                      onChange={(e) =>
+                        setCalcOptions((s) => ({
+                          ...s,
+                          exportColumns: { ...s.exportColumns, night: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span>Noturno</span>
+                  </label>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Após ajustar as opções, clique em <strong>Atualizar</strong> para recalcular.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Grade */}
@@ -480,41 +963,44 @@ const AdminCalculos: React.FC = () => {
               <p>Selecione o colaborador, o período e clique em <strong className="text-slate-700 dark:text-slate-300">Atualizar</strong> para exibir os cálculos.</p>
             </div>
           )}
-          {!loadingCalc && calcRows && calcRows.length === 0 && (
+          {!loadingCalc && filteredRows && filteredRows.length === 0 && (
             <p className="text-sm text-slate-500 print:hidden">Nenhum dia no período.</p>
           )}
-          {!loadingCalc && calcRows && calcRows.length > 0 && (
+          {!loadingCalc && rowsToRender && rowsToRender.length > 0 && (
             <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-100 dark:bg-slate-800 text-left">
-                    <th className="px-2 py-2 font-semibold">Data</th>
-                    <th className="px-2 py-2 font-semibold">Dia</th>
-                    <th className="px-2 py-2 font-semibold">Entrada</th>
-                    <th className="px-2 py-2 font-semibold">Saída</th>
-                    <th className="px-2 py-2 font-semibold">Trabalhadas</th>
-                    <th className="px-2 py-2 font-semibold">Atraso</th>
-                    <th className="px-2 py-2 font-semibold">Falta</th>
-                    <th className="px-2 py-2 font-semibold">Extra 50%</th>
-                    <th className="px-2 py-2 font-semibold">Extra 100%</th>
-                    <th className="px-2 py-2 font-semibold">Noturno</th>
+                    {columns.map((col) => (
+                      <th key={col.key} className="px-2 py-2 font-semibold">
+                        {col.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {calcRows.map((r) => {
-                    const o = r.overtime;
+                  {rowsToRender.map((r) => {
+                    const row = r as CalcDayRow & CalcGroupRow;
+                    const grouped = calcOptions.groupBy !== 'day';
+                    const values: Record<string, string> = {
+                      date: grouped ? row.label : formatDataPt(row.date),
+                      weekday: grouped ? '' : nomeDiaSemana(row.date),
+                      entrada: grouped ? '—' : row.daily.entrada ?? '—',
+                      saida: grouped ? '—' : row.daily.saida ?? '—',
+                      worked: fmtMinutos(row.daily.total_worked_minutes),
+                      late: fmtMinutos(row.daily.late_minutes),
+                      missing: fmtMinutos(row.daily.missing_minutes),
+                      extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
+                      extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
+                      night: fmtMinutos(row.night_minutes),
+                    };
                     return (
-                      <tr key={r.date} className="border-t border-slate-100 dark:border-slate-800">
-                        <td className="px-2 py-1.5 tabular-nums whitespace-nowrap">{formatDataPt(r.date)}</td>
-                        <td className="px-2 py-1.5 capitalize text-slate-600 dark:text-slate-400">{nomeDiaSemana(r.date)}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{r.daily.entrada ?? '—'}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{r.daily.saida ?? '—'}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{fmtMinutos(r.daily.total_worked_minutes)}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{fmtMinutos(r.daily.late_minutes)}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{fmtMinutos(r.daily.missing_minutes)}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{o ? fmtMinutos(o.overtime_50_minutes) : '0:00'}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{o ? fmtMinutos(o.overtime_100_minutes) : '0:00'}</td>
-                        <td className="px-2 py-1.5 tabular-nums">{fmtMinutos(r.night_minutes)}</td>
+                      <tr key={row.key || row.date} className="border-t border-slate-100 dark:border-slate-800">
+                        {columns.map((col) => (
+                          <td key={col.key} className="px-2 py-1.5 tabular-nums whitespace-nowrap">
+                            {values[col.key]}
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}
