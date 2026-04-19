@@ -173,6 +173,7 @@ const AdminTimesheet: React.FC = () => {
     try {
       const { error } = await supabase.from('time_records').insert({
         ...data,
+        id: crypto.randomUUID(),
         company_id: companyId,
         is_manual: true,
       });
