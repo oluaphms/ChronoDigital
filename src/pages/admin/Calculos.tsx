@@ -458,6 +458,8 @@ const AdminCalculos: React.FC = () => {
       { key: 'entrada', label: 'Entrada', visible: calcOptions.groupBy === 'day' },
       { key: 'saida', label: 'Saída', visible: calcOptions.groupBy === 'day' },
       { key: 'worked', label: 'Trabalhadas' },
+      { key: 'positive', label: 'Positivas' },
+      { key: 'negative', label: 'Negativas' },
       { key: 'late', label: 'Atraso', visible: calcOptions.exportColumns.late },
       { key: 'missing', label: 'Falta', visible: calcOptions.exportColumns.missing },
       { key: 'extra50', label: 'Extra 50%' },
@@ -473,6 +475,22 @@ const AdminCalculos: React.FC = () => {
     return groupedRows;
   }, [filteredRows, calcOptions.groupBy, groupedRows]);
 
+  const totalsToRender = useMemo(() => {
+    if (!rowsToRender) return null;
+    return rowsToRender.reduce(
+      (acc, r) => {
+        const row = r as CalcDayRow & CalcGroupRow;
+        acc.worked += row.daily.total_worked_minutes;
+        acc.positive += row.daily.overtime_minutes;
+        acc.negative += row.daily.missing_minutes;
+        acc.late += row.daily.late_minutes;
+        acc.missing += row.daily.missing_minutes;
+        return acc;
+      },
+      { worked: 0, positive: 0, negative: 0, late: 0, missing: 0 },
+    );
+  }, [rowsToRender]);
+
   const exportarCsv = () => {
     if (!filteredRows?.length) {
       toast.addToast('error', 'Não há dados para exportar. Clique em Atualizar.');
@@ -483,6 +501,18 @@ const AdminCalculos: React.FC = () => {
     const nome = employees.find((e) => e.id === filterUserId)?.nome ?? '';
     const headers = columns.map((c) => c.label);
     const lines = [headers.join(';')];
+    const totals = list.reduce(
+      (acc, r) => {
+        const row = r as CalcDayRow & CalcGroupRow;
+        acc.worked += row.daily.total_worked_minutes;
+        acc.positive += row.daily.overtime_minutes;
+        acc.negative += row.daily.missing_minutes;
+        acc.late += row.daily.late_minutes;
+        acc.missing += row.daily.missing_minutes;
+        return acc;
+      },
+      { worked: 0, positive: 0, negative: 0, late: 0, missing: 0 },
+    );
     for (const r of list) {
       const row = r as CalcDayRow & CalcGroupRow;
       const values: Record<string, string> = {
@@ -491,6 +521,8 @@ const AdminCalculos: React.FC = () => {
         entrada: grouped ? '—' : row.daily.entrada ?? '—',
         saida: grouped ? '—' : row.daily.saida ?? '—',
         worked: fmtMinutos(row.daily.total_worked_minutes),
+        positive: fmtMinutos(row.daily.overtime_minutes),
+        negative: fmtMinutos(row.daily.missing_minutes),
         late: fmtMinutos(row.daily.late_minutes),
         missing: fmtMinutos(row.daily.missing_minutes),
         extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
@@ -499,6 +531,16 @@ const AdminCalculos: React.FC = () => {
       };
       lines.push(columns.map((c) => values[c.key]).join(';'));
     }
+    const totalsLine = columns.map((c) => {
+      if (c.key === 'date') return 'Totais';
+      if (c.key === 'worked') return fmtMinutos(totals.worked);
+      if (c.key === 'positive') return fmtMinutos(totals.positive);
+      if (c.key === 'negative') return fmtMinutos(totals.negative);
+      if (c.key === 'late') return fmtMinutos(totals.late);
+      if (c.key === 'missing') return fmtMinutos(totals.missing);
+      return '';
+    });
+    lines.push(totalsLine.join(';'));
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -538,6 +580,18 @@ const AdminCalculos: React.FC = () => {
       doc.text(sub, pageW / 2, 19, { align: 'center' });
 
       const head = [columns.map((c) => c.label)];
+      const totals = list.reduce(
+        (acc, r) => {
+          const row = r as CalcDayRow & CalcGroupRow;
+          acc.worked += row.daily.total_worked_minutes;
+          acc.positive += row.daily.overtime_minutes;
+          acc.negative += row.daily.missing_minutes;
+          acc.late += row.daily.late_minutes;
+          acc.missing += row.daily.missing_minutes;
+          return acc;
+        },
+        { worked: 0, positive: 0, negative: 0, late: 0, missing: 0 },
+      );
       const body = list.map((r) => {
         const row = r as CalcDayRow & CalcGroupRow;
         const values: Record<string, string> = {
@@ -546,6 +600,8 @@ const AdminCalculos: React.FC = () => {
           entrada: grouped ? '—' : row.daily.entrada ?? '—',
           saida: grouped ? '—' : row.daily.saida ?? '—',
           worked: fmtMinutos(row.daily.total_worked_minutes),
+          positive: fmtMinutos(row.daily.overtime_minutes),
+          negative: fmtMinutos(row.daily.missing_minutes),
           late: fmtMinutos(row.daily.late_minutes),
           missing: fmtMinutos(row.daily.missing_minutes),
           extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
@@ -555,12 +611,26 @@ const AdminCalculos: React.FC = () => {
         return columns.map((c) => values[c.key]);
       });
 
+      const foot = [
+        columns.map((c) => {
+          if (c.key === 'date') return 'Totais';
+          if (c.key === 'worked') return fmtMinutos(totals.worked);
+          if (c.key === 'positive') return fmtMinutos(totals.positive);
+          if (c.key === 'negative') return fmtMinutos(totals.negative);
+          if (c.key === 'late') return fmtMinutos(totals.late);
+          if (c.key === 'missing') return fmtMinutos(totals.missing);
+          return '';
+        }),
+      ];
+
       autoTable(doc, {
         head,
         body,
+        foot,
         startY: 26,
         styles: { fontSize: 7, cellPadding: 1.2, overflow: 'linebreak' },
         headStyles: { fillColor: [79, 70, 229], fontSize: 8 },
+        footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
         margin: { left: 10, right: 10 },
       });
 
@@ -718,34 +788,6 @@ const AdminCalculos: React.FC = () => {
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="flex items-center gap-1 pb-0.5">
-                <button
-                  type="button"
-                  title="Colaborador anterior"
-                  onClick={goPrevEmp}
-                  disabled={empIndex <= 0}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <ChevronLeft className="w-5 h-5 text-emerald-600" />
-                </button>
-                <button
-                  type="button"
-                  title="Próximo colaborador"
-                  onClick={goNextEmp}
-                  disabled={empIndex < 0 || empIndex >= employees.length - 1}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <ChevronRight className="w-5 h-5 text-emerald-600" />
-                </button>
-                <button
-                  type="button"
-                  title="Focar busca"
-                  onClick={() => selectNomeRef.current?.focus()}
-                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600"
-                >
-                  <Search className="w-5 h-5" />
-                </button>
               </div>
             </div>
             <div className="flex-1 flex justify-end">
@@ -982,12 +1024,14 @@ const AdminCalculos: React.FC = () => {
                   {rowsToRender.map((r) => {
                     const row = r as CalcDayRow & CalcGroupRow;
                     const grouped = calcOptions.groupBy !== 'day';
-                    const values: Record<string, string> = {
+                      const values: Record<string, string> = {
                       date: grouped ? row.label : formatDataPt(row.date),
                       weekday: grouped ? '' : nomeDiaSemana(row.date),
                       entrada: grouped ? '—' : row.daily.entrada ?? '—',
                       saida: grouped ? '—' : row.daily.saida ?? '—',
                       worked: fmtMinutos(row.daily.total_worked_minutes),
+                        positive: fmtMinutos(row.daily.overtime_minutes),
+                        negative: fmtMinutos(row.daily.missing_minutes),
                       late: fmtMinutos(row.daily.late_minutes),
                       missing: fmtMinutos(row.daily.missing_minutes),
                       extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
@@ -1005,6 +1049,33 @@ const AdminCalculos: React.FC = () => {
                     );
                   })}
                 </tbody>
+                {totalsToRender && (
+                  <tfoot>
+                    <tr className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 font-semibold">
+                      {columns.map((col) => {
+                        const value =
+                          col.key === 'date'
+                            ? 'Totais'
+                            : col.key === 'worked'
+                              ? fmtMinutos(totalsToRender.worked)
+                              : col.key === 'positive'
+                                ? fmtMinutos(totalsToRender.positive)
+                                : col.key === 'negative'
+                                  ? fmtMinutos(totalsToRender.negative)
+                                  : col.key === 'late'
+                                    ? fmtMinutos(totalsToRender.late)
+                                    : col.key === 'missing'
+                                      ? fmtMinutos(totalsToRender.missing)
+                                      : '';
+                        return (
+                          <td key={col.key} className="px-2 py-2 tabular-nums whitespace-nowrap">
+                            {value}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           )}

@@ -44,6 +44,7 @@ const AdminPreFolha: React.FC = () => {
   const [resultados, setResultados] = useState<CalculatedPayrollRow[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [calculando, setCalculando] = useState(false);
+  const [exportandoPdf, setExportandoPdf] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Atualiza datas quando mês/ano mudam
@@ -169,6 +170,63 @@ const AdminPreFolha: React.FC = () => {
     a.click();
     URL.revokeObjectURL(url);
     setMessage({ type: 'success', text: 'Arquivo JSON exportado com sucesso!' });
+  };
+
+  const exportPdf = async () => {
+    if (resultados.length === 0 || exportandoPdf) return;
+    setExportandoPdf(true);
+    try {
+      const { jsPDF } = await import('jspdf');
+      const autoTable = (await import('jspdf-autotable')).default;
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const title = 'Pré-Folha de Jornada';
+      const periodLabel = `${dataInicio} a ${dataFim}`;
+
+      doc.setFontSize(14);
+      doc.text(title, 14, 12);
+      doc.setFontSize(10);
+      doc.text(`Período: ${periodLabel}`, 14, 18);
+
+      const rows = resultados.map((row) => [
+        row.employee_name,
+        `${row.worked_hours.toFixed(2)}h`,
+        `${row.overtime_hours.toFixed(2)}h`,
+        `${row.absence_hours.toFixed(2)}h`,
+        `${row.night_hours.toFixed(2)}h`,
+        `${row.late_hours.toFixed(2)}h`,
+        String(row.work_days),
+        String(row.absence_days),
+      ]);
+
+      autoTable(doc, {
+        startY: 24,
+        head: [
+          [
+            'Funcionário',
+            'Normais',
+            'Extras',
+            'Faltas',
+            'Noturno',
+            'Atrasos',
+            'Dias Trab.',
+            'Dias Falta',
+          ],
+        ],
+        body: rows,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [79, 70, 229] },
+        theme: 'striped',
+      });
+
+      const filename = `pre_folha_${ano}_${String(mes).padStart(2, '0')}.pdf`;
+      doc.save(filename);
+      setMessage({ type: 'success', text: 'PDF exportado com sucesso!' });
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: 'Erro ao exportar PDF. Tente novamente.' });
+    } finally {
+      setExportandoPdf(false);
+    }
   };
 
   // ============ TOTAIS ============
@@ -304,6 +362,14 @@ const AdminPreFolha: React.FC = () => {
               className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 text-sm"
             >
               <FileText className="w-4 h-4" /> CSV
+            </button>
+            <button
+              type="button"
+              onClick={exportPdf}
+              disabled={resultados.length === 0 || calculando || exportandoPdf}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 text-sm"
+            >
+              <FileText className="w-4 h-4" /> {exportandoPdf ? 'PDF…' : 'PDF'}
             </button>
             <button
               type="button"
