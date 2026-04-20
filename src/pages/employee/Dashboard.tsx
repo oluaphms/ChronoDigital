@@ -10,12 +10,27 @@ import { LogType, PunchMethod } from '../../../types';
 import type { TimeRecord } from '../../../types';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { i18n } from '../../../lib/i18n';
+import { extractLocalCalendarDateFromIso } from '../../utils/timesheetMirror';
+import { recordPunchInstantIso, recordPunchInstantMs, resolvePunchOrigin } from '../../utils/punchOrigin';
+
+function localTodayYmd(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 const EmployeeDashboard: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const navigate = useNavigate();
   useLanguage();
-  const [lastRecord, setLastRecord] = useState<{ type: string; created_at: string } | null>(null);
+  const [lastRecord, setLastRecord] = useState<{
+    type: string;
+    /** Instante oficial (timestamp ou created_at) */
+    displayAt: string;
+    originLabel: string;
+  } | null>(null);
   const [todayRecords, setTodayRecords] = useState<any[]>([]);
   const [todayHours, setTodayHours] = useState('');
   const [monthHours, setMonthHours] = useState('');
@@ -32,26 +47,41 @@ const EmployeeDashboard: React.FC = () => {
       try {
         // Otimização: carregar apenas colunas necessárias
         const rows = (await db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], {
-          columns: 'id, user_id, company_id, type, method, created_at',
-          orderBy: { column: 'created_at', ascending: false },
+          columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
           limit: 200,
         })) as any[];
-        const today = new Date().toISOString().slice(0, 10);
-        const todayList = (rows ?? []).filter((r: any) => (r.created_at || '').slice(0, 10) === today);
+        const sortedAll = [...(rows ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
+        const todayYmd = localTodayYmd();
+        const todayList = sortedAll.filter(
+          (r: any) => extractLocalCalendarDateFromIso(recordPunchInstantIso(r)) === todayYmd,
+        );
         const now = new Date();
         const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-        const monthList = (rows ?? []).filter((r: any) => (r.created_at || '').slice(0, 10) >= monthStart);
+        const monthList = sortedAll.filter(
+          (r: any) => extractLocalCalendarDateFromIso(recordPunchInstantIso(r)) >= monthStart,
+        );
 
         setTodayRecords(todayList);
+        const lastPick =
+          todayList.length > 0 ? todayList[0] : sortedAll.length > 0 ? sortedAll[0] : null;
+        if (lastPick) {
+          setLastRecord({
+            type: String(lastPick.type ?? ''),
+            displayAt: recordPunchInstantIso(lastPick),
+            originLabel: resolvePunchOrigin(lastPick).label,
+          });
+        } else {
+          setLastRecord(null);
+        }
+
         if (todayList.length > 0) {
-          setLastRecord({ type: todayList[0].type, created_at: todayList[0].created_at });
           const mapped: TimeRecord[] = todayList.map((r: any) => ({
             id: r.id,
             userId: r.user_id,
             companyId: r.company_id,
             type: r.type === 'entrada' ? LogType.IN : r.type === 'saída' ? LogType.OUT : LogType.BREAK,
             method: (r.method as PunchMethod) || PunchMethod.GPS,
-            createdAt: new Date(r.created_at),
+            createdAt: new Date(recordPunchInstantIso(r)),
             ipAddress: '',
             deviceId: '',
             deviceInfo: { browser: '', os: '', isMobile: false, userAgent: '' },
@@ -60,17 +90,15 @@ const EmployeeDashboard: React.FC = () => {
           const h = Math.floor(worked);
           const m = Math.round((worked % 1) * 60);
           setTodayHours(`${h}h ${m}m`);
-        } else if ((rows ?? []).length > 0) {
-          setLastRecord({ type: rows[0].type, created_at: rows[0].created_at });
         } else {
-          setLastRecord(null);
+          setTodayHours('0h 0m');
         }
 
         if (monthList.length > 0) {
           let totalMin = 0;
           const byDay = new Map<string, TimeRecord[]>();
           monthList.forEach((r: any) => {
-            const day = (r.created_at || '').slice(0, 10);
+            const day = extractLocalCalendarDateFromIso(recordPunchInstantIso(r));
             if (!byDay.has(day)) byDay.set(day, []);
             byDay.get(day)!.push({
               id: r.id,
@@ -78,7 +106,7 @@ const EmployeeDashboard: React.FC = () => {
               companyId: r.company_id,
               type: r.type === 'entrada' ? LogType.IN : r.type === 'saída' ? LogType.OUT : LogType.BREAK,
               method: (r.method as PunchMethod) || PunchMethod.GPS,
-              createdAt: new Date(r.created_at),
+              createdAt: new Date(recordPunchInstantIso(r)),
               ipAddress: '',
               deviceId: '',
               deviceInfo: { browser: '', os: '', isMobile: false, userAgent: '' },
@@ -175,8 +203,13 @@ const EmployeeDashboard: React.FC = () => {
           <div>
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{i18n.t('dashboard.lastRecord')}</p>
             <p className="text-lg font-bold text-slate-900 dark:text-white tabular-nums">
-              {lastRecord ? new Date(lastRecord.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+              {lastRecord
+                ? new Date(lastRecord.displayAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                : '—'}
             </p>
+            {lastRecord && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Origem: {lastRecord.originLabel}</p>
+            )}
           </div>
         </div>
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 p-6 flex items-center gap-4">

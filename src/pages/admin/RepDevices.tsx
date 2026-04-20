@@ -566,7 +566,7 @@ const AdminRepDevices: React.FC = () => {
             stillInQueueOnly && !imp
               ? `${stillInQueueOnly} marcação(ões) só na fila (sem cadastro para consolidar). Ajuste PIS/CPF, nº folha ou nº identificador (crachá) e use «Consolidar».`
               : imp && stillInQueueOnly
-                ? `Espelho: ${imp} registro(s). Atenção: ${stillInQueueOnly} batida(s) ainda na fila do relógio sem cadastro (podem ser leituras antigas).`
+                ? `Espelho: ${imp} registro(s) — cada um no nome do colaborador cujo PIS/CPF/nº folha bateu com o AFD (não é “por quem bateu no relógio” se o aparelho enviar outro NIS). Atenção: ${stillInQueueOnly} batida(s) na fila sem cadastro; não entram no espelho até existir match (podem ser leituras antigas).`
                 : `Sincronizado. ${summary}`,
         });
       } else {

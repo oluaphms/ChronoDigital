@@ -52,11 +52,15 @@ function pairFromNumbers(lat: unknown, lng: unknown): { lat: number; lng: number
   return { lat: la, lng: ln };
 }
 
+import { shouldHidePunchLocation } from './punchOrigin';
+
 /**
  * Extrai lat/lng de uma linha `time_records` (colunas diretas, JSON `location`, GeoJSON, string JSON).
+ * Batidas de relógio (REP) não exibem mapa — mesmo que existam coordenadas legadas incorretas.
  */
 export function extractLatLng(row: any): { lat: number; lng: number } | null {
   if (!row || typeof row !== 'object') return null;
+  if (shouldHidePunchLocation(row)) return null;
 
   const direct = pairFromNumbers(row.latitude ?? row.lat, row.longitude ?? row.lng ?? row.lon);
   if (direct) return direct;

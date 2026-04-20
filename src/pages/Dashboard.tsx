@@ -14,6 +14,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { ExpandableTextCell } from '../components/ClickableFullContent';
 import { queryCache, TTL } from '../services/queryCache';
 import { withRetry } from '../services/retry';
+import { recordPunchInstantIso, recordPunchInstantMs, resolvePunchOrigin } from '../utils/punchOrigin';
 
 function isTimeoutLike(e: unknown): boolean {
   return /tempo esgotado|timeout/i.test(String((e as Error)?.message ?? e));
@@ -41,6 +42,11 @@ const DashboardPage: React.FC = () => {
   useLanguage();
   const { user, loading } = useCurrentUser();
   const [records, setRecords] = useState<TimeRecord[]>([]);
+  /** Última batida por horário oficial (`timestamp` ou `created_at`) + rótulo de origem. */
+  const [lastRecordSummary, setLastRecordSummary] = useState<{
+    at: Date;
+    originLabel: string;
+  } | null>(null);
   const [balance, setBalance] = useState<TimeBalanceRow | null>(null);
   const [pendingRequests, setPendingRequests] = useState<RequestRow[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -57,7 +63,7 @@ const DashboardPage: React.FC = () => {
         // Paralelo, mas falha isolada: um timeout em `time_records` não derruba saldo/solicitações.
         const [recRes, balRes, reqRes] = await Promise.allSettled([
           queryCache.getOrFetch(
-            `time_records:user:${user.id}:recent`,
+            `time_records:user:${user.id}:recent:v2`,
             () =>
               withRetry(
                 () =>
@@ -65,10 +71,9 @@ const DashboardPage: React.FC = () => {
                     'time_records',
                     [{ column: 'user_id', operator: 'eq', value: user.id }],
                     {
-                      // Só o necessário para os cards — menos I/O que `*`
-                      columns: 'id,user_id,company_id,type,method,created_at',
-                      orderBy: { column: 'created_at', ascending: false },
-                      limit: 50,
+                      columns:
+                        'id,user_id,company_id,type,method,created_at,timestamp,source,origin,latitude,longitude',
+                      limit: 80,
                     },
                   ) as Promise<any[]>,
                 {
@@ -130,23 +135,35 @@ const DashboardPage: React.FC = () => {
           console.error('[Dashboard] requests:', reqRes.reason);
         }
 
-        const mapped: TimeRecord[] =
-          (rows ?? []).map((r: any) => ({
-            id: r.id,
-            userId: r.user_id,
-            companyId: r.company_id,
-            type: (r.type as LogType) ?? LogType.IN,
-            method: r.method,
-            photoUrl: r.photo_url ?? undefined,
-            location: r.location ?? undefined,
-            justification: r.justification ?? undefined,
-            createdAt: new Date(r.created_at),
-            ipAddress: r.ip_address ?? '',
-            deviceId: r.device_id ?? '',
-            fraudFlags: r.fraud_flags ?? [],
-            deviceInfo: r.device_info ?? { browser: '', os: '', isMobile: false, userAgent: '' },
-            adjustments: r.adjustments ?? [],
-          }));
+        const raw = rows ?? [];
+        const sorted = [...raw].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
+        const lastRaw = sorted[0];
+        if (lastRaw) {
+          const iso = recordPunchInstantIso(lastRaw);
+          setLastRecordSummary({
+            at: new Date(iso),
+            originLabel: resolvePunchOrigin(lastRaw).label,
+          });
+        } else {
+          setLastRecordSummary(null);
+        }
+
+        const mapped: TimeRecord[] = sorted.map((r: any) => ({
+          id: r.id,
+          userId: r.user_id,
+          companyId: r.company_id,
+          type: (r.type as LogType) ?? LogType.IN,
+          method: r.method,
+          photoUrl: r.photo_url ?? undefined,
+          location: r.location ?? undefined,
+          justification: r.justification ?? undefined,
+          createdAt: new Date(recordPunchInstantIso(r)),
+          ipAddress: r.ip_address ?? '',
+          deviceId: r.device_id ?? '',
+          fraudFlags: r.fraud_flags ?? [],
+          deviceInfo: r.device_info ?? { browser: '', os: '', isMobile: false, userAgent: '' },
+          adjustments: r.adjustments ?? [],
+        }));
         setRecords(mapped);
 
         const b = balanceRows?.[0];
@@ -214,13 +231,14 @@ const DashboardPage: React.FC = () => {
         <StatCard
           label="Último registro"
           value={
-            lastPunch
-              ? lastPunch.createdAt.toLocaleTimeString('pt-BR', {
+            lastRecordSummary
+              ? lastRecordSummary.at.toLocaleTimeString('pt-BR', {
                   hour: '2-digit',
                   minute: '2-digit',
                 })
               : '--:--'
           }
+          helperText={lastRecordSummary ? `Origem: ${lastRecordSummary.originLabel}` : undefined}
           icon={<ClockIcon className="w-5 h-5" />}
           tone="slate"
         />

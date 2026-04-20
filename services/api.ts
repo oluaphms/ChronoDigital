@@ -10,9 +10,11 @@ import {
 } from '../src/utils/localDateTimeToIso';
 
 /**
- * Espelho de ponto: filtrar pelo instante da batida (`timestamp`), não por `created_at`.
- * Batidas do relógio importadas mais tarde ou com sync atrasado ficavam fora do período e o dia aparecia vazio (FOLGA/FALTA em todas as colunas).
- * Linhas legadas sem `timestamp` continuam a usar `created_at` no intervalo.
+ * Espelho de ponto: priorizar o instante da batida (`timestamp`) no intervalo civil local.
+ * - `main`: `timestamp` dentro do período (caso normal).
+ * - `legacy`: sem `timestamp`, mas `created_at` no período.
+ * - `beforeStart` / `afterEnd`: `created_at` no período e `timestamp` **fora** do intervalo (relógio/AFD com
+ *   data errada, importação tardia, ou `source` ≠ `rep` — não depender de `source` para a linha aparecer).
  */
 export async function fetchTimeRecordsForMirrorWindow(
   baseFilters: Filter[],
@@ -23,8 +25,9 @@ export async function fetchTimeRecordsForMirrorWindow(
 ): Promise<any[]> {
   const periodStartTs = localCalendarDayStartUtc(periodStartYmd);
   const periodEndTs = localCalendarDayEndUtc(periodEndYmd);
+  const cap = Math.min(2000, limit);
 
-  const [main, legacy] = await Promise.all([
+  const [main, legacy, beforeStart, afterEnd] = await Promise.all([
     db.select(
       'time_records',
       [
@@ -44,12 +47,34 @@ export async function fetchTimeRecordsForMirrorWindow(
         { column: 'created_at', operator: 'lte', value: periodEndTs },
       ],
       { column: 'created_at', ascending: orderAscending },
-      Math.min(2000, limit)
+      cap
+    ),
+    db.select(
+      'time_records',
+      [
+        ...baseFilters,
+        { column: 'timestamp', operator: 'lt', value: periodStartTs },
+        { column: 'created_at', operator: 'gte', value: periodStartTs },
+        { column: 'created_at', operator: 'lte', value: periodEndTs },
+      ],
+      { column: 'created_at', ascending: orderAscending },
+      cap
+    ),
+    db.select(
+      'time_records',
+      [
+        ...baseFilters,
+        { column: 'timestamp', operator: 'gt', value: periodEndTs },
+        { column: 'created_at', operator: 'gte', value: periodStartTs },
+        { column: 'created_at', operator: 'lte', value: periodEndTs },
+      ],
+      { column: 'created_at', ascending: orderAscending },
+      cap
     ),
   ]);
 
   const byId = new Map<string, any>();
-  for (const r of [...(main ?? []), ...(legacy ?? [])]) {
+  for (const r of [...(main ?? []), ...(legacy ?? []), ...(beforeStart ?? []), ...(afterEnd ?? [])]) {
     if (r?.id) byId.set(String(r.id), r);
   }
   return Array.from(byId.values()).sort((a, b) => {

@@ -137,7 +137,7 @@ export function startSyncService(opts) {
       }
 
       try {
-        const { data, error } = await supabase.rpc('rep_ingest_punch', {
+        const rpcPayload = {
           p_company_id: r.company_id,
           p_rep_device_id: isUuidLike(r.rep_id) ? r.rep_id : null,
           p_pis: r.p_pis || null,
@@ -147,10 +147,31 @@ export function startSyncService(opts) {
           p_data_hora: r.p_data_hora,
           p_tipo_marcacao: r.p_tipo_marcacao || 'E',
           p_nsr: r.nsr != null ? Number(r.nsr) : null,
-          p_raw_data: { ...rawObj, local_sync: true },
+          p_raw_data: { ...rawObj, local_sync: true, rep_id_original: r.rep_id || null },
           p_only_staging: false,
           p_apply_schedule: false,
-        });
+        };
+
+        let { data, error } = await supabase.rpc('rep_ingest_punch', rpcPayload);
+
+        // Dispositivo no SQLite (rep_id) não existe em public.rep_devices na nuvem → FK falha.
+        // Reenviar com rep_device_id NULL (índice único company_id+nsr quando device é null).
+        const msg0 = error ? error.message || String(error) : '';
+        if (
+          error &&
+          rpcPayload.p_rep_device_id &&
+          /rep_punch_logs_rep_device_id_fkey|23503/i.test(msg0)
+        ) {
+          console.warn(
+            `[SYNC] rep_devices sem id=${rpcPayload.p_rep_device_id} — retentando com p_rep_device_id NULL`
+          );
+          const second = await supabase.rpc('rep_ingest_punch', {
+            ...rpcPayload,
+            p_rep_device_id: null,
+          });
+          data = second.data;
+          error = second.error;
+        }
 
         if (error) {
           const msg = error.message || String(error);

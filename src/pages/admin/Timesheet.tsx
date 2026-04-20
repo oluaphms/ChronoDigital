@@ -8,18 +8,18 @@ import PageHeader from '../../components/PageHeader';
 import { LoadingState, Button } from '../../../components/UI';
 import { FileDown, FileSpreadsheet, Lock, Plus, RefreshCw } from 'lucide-react';
 import { AddTimeRecordModal } from '../../components/AddTimeRecordModal';
-import { ManualRecordModal } from '../../components/ManualRecordModal';
 import { EditTimeRecordModal } from '../../components/EditTimeRecordModal';
 import { SkeletonFiltro, TimesheetTableSkeleton } from '../../components/TimesheetTableSkeleton';
 import {
   buildDayMirrorSummary,
   DayMirror,
   isManualRecord,
+  isRepMirrorRecord,
+  isStatusRecord,
   formatMinutes,
   getDayStatus,
-  getStatusOverride,
   normalizeRecordTypeForMirror,
-  recordMirrorInstant,
+  recordEffectiveMirrorInstant,
 } from '../../utils/timesheetMirror';
 import { getEmployeeSchedule, getEmployeeTimesheetScheduleContext } from '../../services/timeProcessingService';
 import type { DayScheduleWindow } from '../../utils/timesheetMirror';
@@ -31,6 +31,7 @@ import {
 } from '../../services/queryCache';
 import { enumerateLocalCalendarDays } from '../../utils/localDateTimeToIso';
 import { sameUserId } from '../../utils/userIdMatch';
+import { resolvePunchOrigin } from '../../utils/punchOrigin';
 
 /** Filtros do espelho por utilizador — sobrevivem a novo login na mesma aba/navegador. */
 function adminTimesheetFiltersKey(userId: string) {
@@ -47,6 +48,9 @@ function localDateKey(d = new Date()): string {
 
 type AdminEmployee = { id: string; nome: string; department_id?: string; role?: string };
 
+/** Célula sem batida (pedido de UX). */
+const EMPTY_DASH = '----';
+
 type TimeRecord = {
   id: string;
   user_id: string;
@@ -57,6 +61,9 @@ type TimeRecord = {
   latitude?: number | null;
   longitude?: number | null;
   is_manual?: boolean;
+  source?: string | null;
+  method?: string | null;
+  origin?: string | null;
 };
 
 const AdminTimesheet: React.FC = () => {
@@ -93,8 +100,6 @@ const AdminTimesheet: React.FC = () => {
   const [closingLoading, setClosingLoading] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedManualRecord, setSelectedManualRecord] = useState<TimeRecord | null>(null);
-  const [showManualModal, setShowManualModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [recordToEdit, setRecordToEdit] = useState<TimeRecord | null>(null);
 
@@ -303,8 +308,8 @@ const AdminTimesheet: React.FC = () => {
         let createdIso = data.created_at;
         if (typeof r.timestamp === 'string') {
           createdIso = r.timestamp;
-        } else if (r.timestamp != null && (typeof r.timestamp === 'number' || r.timestamp instanceof Date)) {
-          createdIso = new Date(r.timestamp).toISOString();
+        } else if (r.timestamp != null && (typeof r.timestamp === 'number' || typeof r.timestamp === 'object')) {
+          createdIso = new Date(r.timestamp as number | Date).toISOString();
         }
         mergeRow = buildMergeRow(mergeId, createdIso);
       } else {
@@ -345,27 +350,21 @@ const AdminTimesheet: React.FC = () => {
     if (!filterUserId || !periodValid) return;
     const emp = employees.find((e) => e.id === filterUserId);
     const rows: string[] = [
-      'Data,Colaborador,Entrada,Saída Intervalo,Volta Intervalo,Saída,Horas trabalhadas,Status',
+      'Data,Colaborador,Entrada,Saída Intervalo,Volta Intervalo,Saída,Horas trabalhadas',
     ];
     for (const date of periodDates) {
       const day = empMirror.get(date);
       if (!day) continue;
-      const override = getStatusOverride(day);
-      const st = override
-        ? getDayStatus(day, scheduleWorkDays ?? undefined, expectedWindowForYmd(date)).label
-        : holidayDates.has(date)
-          ? 'FERIADO'
-          : getDayStatus(day, scheduleWorkDays ?? undefined, expectedWindowForYmd(date)).label || '';
+      const dash = (v: string | null | undefined) => (v != null && String(v).trim() !== '' ? v : EMPTY_DASH);
       rows.push(
         [
           formatDateBR(date),
           emp?.nome || '',
-          day.entradaInicio || '-',
-          day.saidaIntervalo || '-',
-          day.voltaIntervalo || '-',
-          day.saidaFinal || '-',
-          formatMinutes(day.workedMinutes),
-          st,
+          dash(day.entradaInicio),
+          dash(day.saidaIntervalo),
+          dash(day.voltaIntervalo),
+          dash(day.saidaFinal),
+          day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : EMPTY_DASH,
         ].join(','),
       );
     }
@@ -412,56 +411,49 @@ const AdminTimesheet: React.FC = () => {
     }
   };
 
-  const renderDayBadge = (day: DayMirror, dateStr: string) => {
-    const override = getStatusOverride(day);
-    if (!override && holidayDates.has(dateStr)) {
-      return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-300">
-          FERIADO
-        </span>
-      );
-    }
-    const { label, color } = getDayStatus(day, scheduleWorkDays ?? undefined, expectedWindowForYmd(dateStr));
-    if (!label) return null;
-    const map: Record<string, string> = {
-      green: 'bg-green-100 text-green-800 border-green-300 dark:bg-green-900/30 dark:text-green-300',
-      red: 'bg-red-100 text-red-800 border-red-300 dark:bg-red-900/30 dark:text-red-300',
-      orange: 'bg-orange-100 text-orange-800 border-orange-300',
-      purple: 'bg-purple-100 text-purple-800 border-purple-300',
-      indigo: 'bg-indigo-100 text-indigo-800 border-indigo-300',
-      slate: 'bg-slate-100 text-slate-700 border-slate-300',
-    };
-    return (
-      <span
-        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${map[color] || map.red}`}
-      >
-        {label}
-      </span>
-    );
-  };
-
   const renderTimeCell = (time: string | null, record?: TimeRecord) => {
-    const isManual = record && isManualRecord(record);
+    const isManual = !!(record && isManualRecord(record));
+    const fromRep = !!(record && isRepMirrorRecord(record));
+    const display = time != null && String(time).trim() !== '' ? String(time).trim() : EMPTY_DASH;
+    const isEmpty = display === EMPTY_DASH;
+    const clickable = !!(record && isManual);
     return (
       <span
-        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-sm font-medium cursor-pointer ${
+        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-sm font-medium ${
+          clickable
+            ? 'cursor-pointer'
+            : isEmpty
+              ? 'cursor-default text-slate-400 dark:text-slate-500'
+              : 'cursor-default text-slate-700 dark:text-slate-300'
+        } ${
           isManual
             ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-300 dark:border-blue-700'
-            : 'text-slate-700 dark:text-slate-300'
+            : ''
         }`}
         onClick={() => {
-          if (isManual && record) {
-            setSelectedManualRecord(record);
-            setShowManualModal(true);
-          } else if (record) {
-            setRecordToEdit(record);
-            setShowEditModal(true);
-          }
+          if (!clickable || !record) return;
+          const ts = (record.timestamp && String(record.timestamp).trim()) || record.created_at;
+          setRecordToEdit({ ...record, created_at: ts });
+          setShowEditModal(true);
         }}
-        title={isManual ? `Batida manual: ${record?.manual_reason || 'Sem motivo'}` : 'Clique para editar'}
+        title={
+          isEmpty
+            ? 'Sem batida'
+            : isManual
+              ? `Batida manual: ${record?.manual_reason || 'Sem motivo'}. Clique para editar. · Origem: ${resolvePunchOrigin(record!).label}`
+              : `${fromRep ? 'Batida do registrador (REP / relógio)' : 'Batida pelo app/dispositivo'}. Não editável no espelho. · Origem: ${record ? resolvePunchOrigin(record).label : '—'}`
+        }
       >
-        {time || '—'}
+        {display}
         {isManual && <span className="text-blue-500 font-bold">*</span>}
+        {fromRep && !isManual && (
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400"
+            aria-hidden
+          >
+            REP
+          </span>
+        )}
       </span>
     );
   };
@@ -679,13 +671,6 @@ const AdminTimesheet: React.FC = () => {
         >
           Mostrar todas
         </button>
-        <span className="inline-flex items-center gap-2">
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800">FOLGA</span> /
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800">FERIADO</span>
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800">FALTA</span>
-        </span>
       </div>
 
       {/* Tabela */}
@@ -717,7 +702,6 @@ const AdminTimesheet: React.FC = () => {
               <thead className="bg-slate-50 dark:bg-slate-800/50">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-400">Data</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-400">Status</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-400">Entrada</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-400">Saída int.</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-400">Volta int.</th>
@@ -729,18 +713,20 @@ const AdminTimesheet: React.FC = () => {
                 {periodDates.map((date) => {
                   const day = empMirror.get(date);
                   if (!day) return null;
-                  const noRecords = !day.records || day.records.length === 0;
+                  const hasRealRecords = day.records.some((r) => !isStatusRecord(r));
                   const dayStatus = getDayStatus(day, scheduleWorkDays ?? undefined, expectedWindowForYmd(date));
-                  const dayBadge = renderDayBadge(day, date);
-                  const badgeInTotal = ['incompleto', 'folga', 'extra', 'falta'].includes(dayStatus.status);
+                  let dataNote: 'Folga' | 'Falta' | 'Feriado' | null = null;
+                  if (holidayDates.has(date)) dataNote = 'Feriado';
+                  else if (dayStatus.status === 'folga') dataNote = 'Folga';
+                  else if (dayStatus.status === 'falta') dataNote = 'Falta';
                   const fmt = (iso: string) =>
                     new Date(iso).toLocaleTimeString('pt-BR', {
                       hour: '2-digit',
                       minute: '2-digit',
                       hour12: false,
                     });
-                  const recordIso = (r: TimeRecord) => recordMirrorInstant(r);
-                  const fmtRecord = (r: TimeRecord) => fmt(recordIso(r));
+                  const recordIsoForDay = (r: TimeRecord) => recordEffectiveMirrorInstant(r, date);
+                  const fmtRecord = (r: TimeRecord) => fmt(recordIsoForDay(r));
                   const pick = (t: string | null, typ: ReturnType<typeof normalizeRecordTypeForMirror>) => {
                     if (!t) return undefined;
                     return (
@@ -749,25 +735,79 @@ const AdminTimesheet: React.FC = () => {
                     );
                   };
                   const entradaRecord = day.entradaInicio
-                    ? day.records.find(
-                        (r) => normalizeRecordTypeForMirror(r.type) === 'entrada' && fmtRecord(r) === day.entradaInicio,
-                      ) || day.records.find((r) => fmtRecord(r) === day.entradaInicio)
+                    ? (() => {
+                        const sameTime = day.records.filter((r) => fmtRecord(r) === day.entradaInicio);
+                        const rep = sameTime.find((r) => isRepMirrorRecord(r));
+                        return (
+                          rep ||
+                          sameTime.find((r) => normalizeRecordTypeForMirror(r.type) === 'entrada') ||
+                          sameTime[0]
+                        );
+                      })()
                     : undefined;
                   const saidaIntRecord = pick(day.saidaIntervalo, 'intervalo_saida');
                   const voltaIntRecord = pick(day.voltaIntervalo, 'intervalo_volta');
                   const saidaRecord = pick(day.saidaFinal, 'saida');
+                  const renderMirrorSlot = (t: string | null, rec?: TimeRecord) => {
+                    const hasTime = t != null && String(t).trim() !== '';
+                    if (hasTime) return renderTimeCell(t, rec);
+                    if (dataNote === 'Falta') {
+                      return (
+                        <span className="inline-flex px-2 py-1 rounded text-sm font-semibold text-red-600 dark:text-red-400">
+                          Falta
+                        </span>
+                      );
+                    }
+                    if (dataNote === 'Folga') {
+                      return (
+                        <span className="inline-flex px-2 py-1 rounded text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+                          Folga
+                        </span>
+                      );
+                    }
+                    if (dataNote === 'Feriado') {
+                      return (
+                        <span className="inline-flex px-2 py-1 rounded text-sm font-semibold text-amber-700 dark:text-amber-300">
+                          Feriado
+                        </span>
+                      );
+                    }
+                    return renderTimeCell(null, undefined);
+                  };
                   return (
                     <tr key={date} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
-                      <td className="px-3 py-2 text-slate-800 dark:text-slate-200 whitespace-nowrap">
-                        {formatDateBR(date)}
+                      <td className="px-3 py-2 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top">
+                        <div>{formatDateBR(date)}</div>
+                        {dataNote && (
+                          <div
+                            className={`text-xs font-semibold mt-0.5 ${
+                              dataNote === 'Falta'
+                                ? 'text-red-600 dark:text-red-400'
+                                : dataNote === 'Folga'
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : dataNote === 'Feriado'
+                                    ? 'text-amber-700 dark:text-amber-300'
+                                    : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            {dataNote}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-3 py-2">{dayBadge}</td>
-                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.entradaInicio, entradaRecord)}</td>
-                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.saidaIntervalo, saidaIntRecord)}</td>
-                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.voltaIntervalo, voltaIntRecord)}</td>
-                      <td className="px-3 py-2">{noRecords ? dayBadge : renderTimeCell(day.saidaFinal, saidaRecord)}</td>
+                      <td className="px-3 py-2">
+                        {renderMirrorSlot(hasRealRecords ? day.entradaInicio : null, hasRealRecords ? entradaRecord : undefined)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {renderMirrorSlot(hasRealRecords ? day.saidaIntervalo : null, hasRealRecords ? saidaIntRecord : undefined)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {renderMirrorSlot(hasRealRecords ? day.voltaIntervalo : null, hasRealRecords ? voltaIntRecord : undefined)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {renderMirrorSlot(hasRealRecords ? day.saidaFinal : null, hasRealRecords ? saidaRecord : undefined)}
+                      </td>
                       <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">
-                        {badgeInTotal ? dayBadge : day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : '—'}
+                        {hasRealRecords && day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : EMPTY_DASH}
                       </td>
                     </tr>
                   );
@@ -784,16 +824,6 @@ const AdminTimesheet: React.FC = () => {
         onSubmit={handleAddRecord}
         employees={filteredEmployees}
         companyId={companyId}
-      />
-      <ManualRecordModal
-        isOpen={showManualModal}
-        onClose={() => {
-          setShowManualModal(false);
-          setSelectedManualRecord(null);
-        }}
-        reason={selectedManualRecord?.manual_reason || ''}
-        timestamp={selectedManualRecord?.created_at}
-        type={selectedManualRecord?.type}
       />
       <EditTimeRecordModal
         isOpen={showEditModal}

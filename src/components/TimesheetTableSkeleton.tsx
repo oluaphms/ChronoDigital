@@ -1,27 +1,10 @@
 import React from 'react';
 
-const ADMIN_HEADERS = [
-  'Colaborador',
-  'Data',
-  'Entrada (início)',
-  'Intervalo (pausa)',
-  'Retorno',
-  'Saída (final)',
-  'Horas trabalhadas',
-  'Localização',
-  'Status',
-] as const;
+/** Alinhado ao espelho admin (Data + horários + total). */
+const ADMIN_HEADERS = ['Data', 'Entrada', 'Saída int.', 'Volta int.', 'Saída', 'Total'] as const;
 
 /** Alinhado ao espelho do colaborador (mesmas colunas do admin, sem colaborador). */
-const EMPLOYEE_HEADERS = [
-  'Data',
-  'Status',
-  'Entrada',
-  'Saída int.',
-  'Volta int.',
-  'Saída',
-  'Total',
-] as const;
+const EMPLOYEE_HEADERS = ['Data', 'Entrada', 'Saída int.', 'Volta int.', 'Saída', 'Total'] as const;
 
 /**
  * Placeholders para os filtros do espelho (colaborador, departamento, datas) antes dos dados chegarem.
@@ -76,7 +59,7 @@ export function TimesheetTableSkeleton({ variant }: { variant: 'admin' | 'employ
       aria-busy="true"
       aria-label="Carregando espelho de ponto"
     >
-      <table className={`w-full text-xs sm:text-sm ${variant === 'admin' ? 'min-w-[860px] md:min-w-0' : ''}`}>
+      <table className={`w-full text-xs sm:text-sm ${variant === 'admin' ? 'min-w-[640px] md:min-w-0' : ''}`}>
         <thead>
           <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
             {headers.map((h) => (
@@ -98,14 +81,7 @@ export function TimesheetTableSkeleton({ variant }: { variant: 'admin' | 'employ
                   <div
                     className="h-3.5 rounded-md bg-slate-200/90 dark:bg-slate-700/80 animate-pulse"
                     style={{
-                      width:
-                        colIdx === 0
-                          ? variant === 'admin'
-                            ? '72%'
-                            : '68%'
-                          : colIdx === 1 && variant === 'admin'
-                            ? '56%'
-                            : '48%',
+                      width: colIdx === 0 ? '68%' : '48%',
                     }}
                   />
                 </td>

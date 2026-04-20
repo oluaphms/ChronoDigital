@@ -17,6 +17,27 @@ export interface TimeRecord {
   longitude?: number | null;
   is_manual?: boolean;
   adjusted?: boolean;
+  /** Origem da batida no `time_records` (ex.: `rep` = relógio). */
+  source?: string | null;
+  method?: string | null;
+  /** Migração: `rep` | `mobile` | `admin` — reforço semântico além de `source`. */
+  origin?: string | null;
+  source_type?: string | null;
+}
+
+/** Batida vinda do REP / relógio (priorizar na coluna «Entrada» do espelho). */
+export function isRepMirrorRecord(record: TimeRecord): boolean {
+  const o = String(record.origin ?? '')
+    .trim()
+    .toLowerCase();
+  if (o === 'rep') return true;
+  const s = String(record.source ?? '')
+    .trim()
+    .toLowerCase();
+  const m = String(record.method ?? '')
+    .trim()
+    .toLowerCase();
+  return s === 'rep' || m === 'rep' || s === 'clock';
 }
 
 /** Tipo canônico para o espelho (REP/interpretação usam grafias diferentes). */
@@ -52,6 +73,58 @@ export function recordMirrorInstant(record: TimeRecord): string {
   if (ts && String(ts).trim()) return ts;
   if (ca && String(ca).trim()) return ca;
   return new Date().toISOString();
+}
+
+/**
+ * Data civil (YYYY-MM-DD) para agrupar a batida no espelho no período [start,end].
+ * Se o instante oficial (`timestamp`) cai fora do período mas `created_at` cai dentro (ex.: AFD com ano errado,
+ * importação REP tardia), usa a data de `created_at` para a grelha — senão a batida «sumia» em abril/2026.
+ */
+export function calendarDateForEspelhoRow(
+  record: TimeRecord,
+  periodStartYmd: string,
+  periodEndYmd: string
+): string {
+  const primary = extractLocalCalendarDateFromIso(recordIso(record));
+  if (primary >= periodStartYmd && primary <= periodEndYmd) return primary;
+  const fallback = extractLocalCalendarDateFromIso(record.created_at);
+  if (fallback >= periodStartYmd && fallback <= periodEndYmd) return fallback;
+  return primary;
+}
+
+/**
+ * Combina um dia civil local (YYYY-MM-DD) com hora/minuto/segundo **locais** do instante da batida,
+ * para quando a batida cai na grelha por `created_at` mas o relógio oficial (`timestamp`) está noutro ano/dia.
+ */
+function mergeLocalCalendarDayWithWallTimeFromInstant(dayYmd: string, instantIso: string): string {
+  const t = new Date(instantIso);
+  const [ys, ms, ds] = dayYmd.split('-');
+  const y = parseInt(ys || '0', 10);
+  const mo = parseInt(ms || '1', 10);
+  const d = parseInt(ds || '1', 10);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) {
+    return instantIso;
+  }
+  const merged = new Date(y, mo - 1, d, t.getHours(), t.getMinutes(), t.getSeconds(), t.getMilliseconds());
+  return merged.toISOString();
+}
+
+/**
+ * Instantâneo usado para horas no dia `dayDateStr` da grelha: alinha com `calendarDateForEspelhoRow`.
+ * Se o dia da grelha veio do `created_at` (timestamp fora do período), preserva o horário de parede do `timestamp`.
+ */
+export function recordEffectiveMirrorInstant(record: TimeRecord, dayDateStr: string): string {
+  const pri = extractLocalCalendarDateFromIso(recordIso(record));
+  if (pri === dayDateStr) return recordIso(record);
+  const ca = extractLocalCalendarDateFromIso(record.created_at);
+  if (ca === dayDateStr) {
+    const ts = record.timestamp && String(record.timestamp).trim();
+    if (ts) {
+      return mergeLocalCalendarDayWithWallTimeFromInstant(dayDateStr, ts);
+    }
+    return record.created_at;
+  }
+  return recordIso(record);
 }
 
 export interface DayMirror {
@@ -128,32 +201,76 @@ export function isManualRecord(record: TimeRecord): boolean {
 /**
  * Ordena registros por horário
  */
-function sortRecordsByTime(records: TimeRecord[]): TimeRecord[] {
-  return [...records].sort((a, b) => 
-    new Date(recordIso(a)).getTime() - new Date(recordIso(b)).getTime()
+function sortRecordsByTime(records: TimeRecord[], dayDateStr: string): TimeRecord[] {
+  return [...records].sort(
+    (a, b) =>
+      new Date(recordEffectiveMirrorInstant(a, dayDateStr)).getTime() -
+      new Date(recordEffectiveMirrorInstant(b, dayDateStr)).getTime()
   );
 }
 
 /**
  * Constrói o resumo diário a partir dos registros de um dia
  */
-function buildDaySummary(records: TimeRecord[]): DayMirror {
+/** Indica tipo «pausa» vindo do hardware (E/S/P) ou texto legado. */
+function isPausaRawType(record: TimeRecord): boolean {
+  const raw = String(record.type ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+  return raw === 'pausa' || raw === 'p';
+}
+
+/**
+ * Ordena batidas do dia e expõe horários — útil para debug e regras por sequência (1ª…4ª).
+ */
+export function classifyPunch(recordsDoDia: TimeRecord[], dayDateStr: string): {
+  sorted: TimeRecord[];
+  times: string[];
+} {
+  const realRecords = recordsDoDia.filter((r) => !isStatusRecord(r));
+  const sorted = sortRecordsByTime(realRecords, dayDateStr);
+  const times = sorted.map((r) => extractTime(recordEffectiveMirrorInstant(r, dayDateStr)));
+  if (import.meta.env.DEV && sorted.length === 4) {
+    // eslint-disable-next-line no-console
+    console.log('[CLASSIFY] registros do dia:', sorted.length);
+    // eslint-disable-next-line no-console
+    console.log('[CLASSIFY] ordem:', times.join(', '));
+    // eslint-disable-next-line no-console
+    console.log('[CLASSIFY] tipos: entrada, saída_int, volta_int, saída');
+  }
+  return { sorted, times };
+}
+
+function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
   const realRecords = records.filter((r) => !isStatusRecord(r));
-  const sorted = sortRecordsByTime(realRecords);
-  const date = extractLocalCalendarDateFromIso(
-    recordIso((sorted[0] || records[0] || { created_at: new Date().toISOString() }) as TimeRecord),
-  );
-  
+  const sorted = sortRecordsByTime(realRecords, dayDateStr);
+  const date = dayDateStr;
+
   let entradaInicio: string | null = null;
   let saidaIntervalo: string | null = null;
   let voltaIntervalo: string | null = null;
   let saidaFinal: string | null = null;
-  
+
   // Interpreta a sequência de batidas baseado na ordem e tipo
   for (const record of sorted) {
-    const time = extractTime(recordIso(record));
+    const time = extractTime(recordEffectiveMirrorInstant(record, dayDateStr));
+
+    // Duas marcações «pausa» (P) no relógio: a 1ª = saída intervalo; a 2ª = volta intervalo.
+    if (isPausaRawType(record)) {
+      if (saidaIntervalo == null) {
+        saidaIntervalo = time;
+      } else if (voltaIntervalo == null) {
+        voltaIntervalo = time;
+      } else {
+        saidaIntervalo = time;
+      }
+      continue;
+    }
+
     const norm = normalizeRecordTypeForMirror(record.type);
-    
+
     switch (norm) {
       case 'entrada':
         if (!entradaInicio) {
@@ -183,8 +300,19 @@ function buildDaySummary(records: TimeRecord[]): DayMirror {
     }
   }
 
+  // Quatro batidas e ainda sem «Volta intervalo» — preenche pelas posições 1–4 (entrada … saída final).
+  if (sorted.length === 4 && voltaIntervalo == null) {
+    const { times: seqTimes } = classifyPunch(realRecords, dayDateStr);
+    if (seqTimes.length === 4) {
+      entradaInicio = seqTimes[0]!;
+      saidaIntervalo = seqTimes[1]!;
+      voltaIntervalo = seqTimes[2]!;
+      saidaFinal = seqTimes[3]!;
+    }
+  }
+
   // Fallback por ordem cronológica (caso tipos estejam incompletos ou inconsistentes)
-  const times = sorted.map((r) => extractTime(recordIso(r)));
+  const times = sorted.map((r) => extractTime(recordEffectiveMirrorInstant(r, dayDateStr)));
   const middle = times.slice(1, -1);
   if (!entradaInicio && times.length > 0) entradaInicio = times[0];
   if (!saidaFinal && times.length > 1) saidaFinal = times[times.length - 1];
@@ -202,7 +330,47 @@ function buildDaySummary(records: TimeRecord[]): DayMirror {
     saidaIntervalo = null;
     voltaIntervalo = null;
   }
-  
+
+  // Entrada «oficial» do dia: se existir marcação do relógio com tipo entrada, prevalece sobre
+  // mobile/web (evita intervalo ou batida errada ocupar a coluna Entrada).
+  const repEntradas = sorted.filter(
+    (r) =>
+      isRepMirrorRecord(r) && normalizeRecordTypeForMirror(r.type) === 'entrada',
+  );
+  if (repEntradas.length > 0) {
+    repEntradas.sort(
+      (a, b) =>
+        new Date(recordEffectiveMirrorInstant(a, dayDateStr)).getTime() -
+        new Date(recordEffectiveMirrorInstant(b, dayDateStr)).getTime(),
+    );
+    const firstRep = repEntradas[0];
+    entradaInicio = extractTime(recordEffectiveMirrorInstant(firstRep, dayDateStr));
+  }
+
+  // Início de intervalo no mobile gravado como segunda «entrada» (erro comum) em vez de pausa:
+  // com só 2 batidas o fallback `middle = times.slice(1,-1)` fica vazio e o horário «some» do espelho.
+  if (!saidaIntervalo) {
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const cur = sorted[i];
+      const next = sorted[i + 1];
+      if (isStatusRecord(cur) || isStatusRecord(next)) continue;
+      const ct = normalizeRecordTypeForMirror(cur.type);
+      const nt = normalizeRecordTypeForMirror(next.type);
+      const tCur = new Date(recordEffectiveMirrorInstant(cur, dayDateStr)).getTime();
+      const tNext = new Date(recordEffectiveMirrorInstant(next, dayDateStr)).getTime();
+      if (tNext <= tCur) continue;
+      if (
+        isRepMirrorRecord(cur) &&
+        !isRepMirrorRecord(next) &&
+        ct === 'entrada' &&
+        nt === 'entrada'
+      ) {
+        saidaIntervalo = extractTime(recordEffectiveMirrorInstant(next, dayDateStr));
+        break;
+      }
+    }
+  }
+
   // Calcula minutos trabalhados
   let workedMinutes = 0;
   if (entradaInicio && saidaFinal) {
@@ -230,19 +398,23 @@ function buildDaySummary(records: TimeRecord[]): DayMirror {
 }
 
 /**
- * Agrupa registros por data
+ * Agrupa registros por data (respeita período do espelho — ver `calendarDateForEspelhoRow`).
  */
-function groupRecordsByDate(records: TimeRecord[]): Map<string, TimeRecord[]> {
+function groupRecordsByDate(
+  records: TimeRecord[],
+  periodStartYmd: string,
+  periodEndYmd: string
+): Map<string, TimeRecord[]> {
   const groups = new Map<string, TimeRecord[]>();
-  
+
   for (const record of records) {
-    const date = extractLocalCalendarDateFromIso(recordIso(record));
+    const date = calendarDateForEspelhoRow(record, periodStartYmd, periodEndYmd);
     if (!groups.has(date)) {
       groups.set(date, []);
     }
     groups.get(date)!.push(record);
   }
-  
+
   return groups;
 }
 
@@ -254,19 +426,19 @@ export function buildDayMirrorSummary(
   startDate: string,
   endDate: string
 ): Map<string, DayMirror> {
-  const byDate = groupRecordsByDate(records);
+  const byDate = groupRecordsByDate(records, startDate, endDate);
   const result = new Map<string, DayMirror>();
-  
+
   // Preenche todos os dias no período (sem problemas de fuso)
   const start = new Date(startDate + 'T00:00:00');
   const end = new Date(endDate + 'T00:00:00');
-  
+
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const dateStr = localCalendarYmd(d);
     const dayRecords = byDate.get(dateStr) || [];
-    
+
     if (dayRecords.length > 0) {
-      result.set(dateStr, buildDaySummary(dayRecords));
+      result.set(dateStr, buildDaySummary(dayRecords, dateStr));
     } else {
       // Dia sem registros
       result.set(dateStr, {
@@ -302,8 +474,9 @@ export function hasManualRecord(dayMirror: DayMirror): boolean {
 
 /**
  * Retorna o status do dia (FOLGA, FALTA, EXTRA, NORMAL, etc.)
- * @param workDays dias com jornada (`Date.getDay()`: 0=dom … 6=sáb). Se omitido, assume seg–sex.
- * @param expectedWindow jornada esperada naquele dia da semana (evita tratar sábado útil como extra).
+ * @param workDays dias com jornada na escala (`Date.getDay()`: 0=dom … 6=sáb). Fora disso = folga (sem batida).
+ * @param expectedWindow jornada esperada naquele dia (para EXTRA por fora da janela).
+ * Folga: dia sem jornada na escala e sem batida. Falta: dia útil sem batidas ou sem as quatro colunas do espelho.
  */
 export function getDayStatus(
   day: DayMirror,
@@ -327,24 +500,26 @@ export function getDayStatus(
   
   const hasRecords = day.records.some((r) => !isStatusRecord(r));
 
+  /** Dia sem jornada na escala (`workDays`): folga sem batidas; batidas em folga = extra. */
   if (!isWorkday) {
     if (hasRecords) return { status: 'extra', label: 'EXTRA', color: 'purple' };
     return { status: 'folga', label: 'FOLGA', color: 'green' };
   }
 
-  // Se não tem registros em dia útil = FALTA
+  // Dia útil sem batidas = falta
   if (!hasRecords) {
     return { status: 'falta', label: 'FALTA', color: 'red' };
   }
 
-  const incomplete =
-    !day.entradaInicio ||
-    !day.saidaFinal ||
-    (day.saidaIntervalo && !day.voltaIntervalo) ||
-    (!day.saidaIntervalo && day.voltaIntervalo);
+  // Dia útil: exige as quatro marcações do espelho (entrada, saída int., volta int., saída final)
+  const fourComplete =
+    !!day.entradaInicio &&
+    !!day.saidaIntervalo &&
+    !!day.voltaIntervalo &&
+    !!day.saidaFinal;
 
-  if (incomplete) {
-    return { status: 'incompleto', label: 'INCOMPLETO', color: 'orange' };
+  if (!fourComplete) {
+    return { status: 'falta', label: 'FALTA', color: 'red' };
   }
 
   if (expectedWindow) {

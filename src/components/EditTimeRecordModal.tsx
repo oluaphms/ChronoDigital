@@ -5,6 +5,22 @@ import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { TIPOS_BATIDA, mapPunchTypeToDb, mapDbToPunchType } from '../constants/punchTypes';
 import { localDateAndTimeToIsoUtc } from '../utils/localDateTimeToIso';
 
+const STATUS_TAG_REGEX = /\[STATUS:(FOLGA|FALTA|EXTRA)\]/i;
+
+function parseStatusTypeFromReason(manualReason: string | null | undefined): 'FOLGA' | 'FALTA' | 'EXTRA' | null {
+  const m = String(manualReason || '').match(STATUS_TAG_REGEX);
+  if (!m) return null;
+  return m[1].toUpperCase() as 'FOLGA' | 'FALTA' | 'EXTRA';
+}
+
+/** Remove o prefixo [STATUS:…] para editar só o texto livre no formulário. */
+function stripStatusTag(manualReason: string): string {
+  return String(manualReason || '')
+    .replace(/\s*\[STATUS:(FOLGA|FALTA|EXTRA)\]\s*/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 interface EditTimeRecordModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -12,6 +28,8 @@ interface EditTimeRecordModalProps {
     id: string;
     user_id: string;
     created_at: string;
+    /** Instante oficial da batida (espelho prioriza sobre created_at). */
+    timestamp?: string | null;
     type: string;
     manual_reason?: string | null;
   } | null;
@@ -28,6 +46,8 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
     date: '',
     time: '',
     type: 'ENTRADA',
+    entry_mode: 'HORARIO' as 'HORARIO' | 'STATUS',
+    status_type: 'FOLGA' as 'FOLGA' | 'FALTA' | 'EXTRA',
     manual_reason: '',
   });
   const [submitting, setSubmitting] = useState(false);
@@ -35,13 +55,29 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
 
   useEffect(() => {
     if (record && isOpen) {
-      const date = new Date(record.created_at);
-      setForm({
-        date: date.toISOString().slice(0, 10),
-        time: date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false }),
-        type: mapDbToPunchType(record.type),
-        manual_reason: record.manual_reason || '',
-      });
+      const instant = record.timestamp && String(record.timestamp).trim() ? record.timestamp : record.created_at;
+      const date = new Date(instant);
+      const rawReason = record.manual_reason || '';
+      const st = parseStatusTypeFromReason(rawReason);
+      if (st) {
+        setForm({
+          date: date.toISOString().slice(0, 10),
+          time: '12:00',
+          type: 'ENTRADA',
+          entry_mode: 'STATUS',
+          status_type: st,
+          manual_reason: stripStatusTag(rawReason),
+        });
+      } else {
+        setForm({
+          date: date.toISOString().slice(0, 10),
+          time: date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false }),
+          type: mapDbToPunchType(record.type),
+          entry_mode: 'HORARIO',
+          status_type: 'FOLGA',
+          manual_reason: rawReason,
+        });
+      }
     }
   }, [record, isOpen]);
 
@@ -53,14 +89,26 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
     setError(null);
 
     try {
-      const created_at = localDateAndTimeToIsoUtc(form.date, form.time);
-      
+      const created_at =
+        form.entry_mode === 'STATUS'
+          ? localDateAndTimeToIsoUtc(form.date, '12:00')
+          : localDateAndTimeToIsoUtc(form.date, form.time);
+
+      const statusTag = form.entry_mode === 'STATUS' ? `[STATUS:${form.status_type}]` : '';
+      const baseReason = form.manual_reason.trim();
+      const manual_reason =
+        form.entry_mode === 'STATUS'
+          ? [statusTag, baseReason || 'Lançamento de status'].filter(Boolean).join(' ').trim()
+          : baseReason || null;
+
       const { error: updateError } = await supabase
         .from('time_records')
         .update({
           created_at,
-          type: mapPunchTypeToDb(form.type),
-          manual_reason: form.manual_reason || null,
+          timestamp: created_at,
+          updated_at: new Date().toISOString(),
+          type: mapPunchTypeToDb(form.entry_mode === 'STATUS' ? 'ENTRADA' : form.type),
+          manual_reason,
         })
         .eq('id', record.id);
 
@@ -129,7 +177,28 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                Tipo de lançamento
+              </label>
+              <select
+                value={form.entry_mode}
+                onChange={(e) => {
+                  const mode = e.target.value as 'HORARIO' | 'STATUS';
+                  setForm((f) => ({
+                    ...f,
+                    entry_mode: mode,
+                    ...(mode === 'STATUS' ? { time: '12:00', type: 'ENTRADA' as const } : {}),
+                  }));
+                }}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              >
+                <option value="HORARIO">Batida (horário)</option>
+                <option value="STATUS">Status (Folga/Falta/Extra)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
                   Data
@@ -142,36 +211,60 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
-                  Horário
-                </label>
-                <input
-                  type="time"
-                  required
-                  value={form.time}
-                  onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
-                />
-              </div>
+              {form.entry_mode === 'HORARIO' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                    Horário
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={form.time}
+                    onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                    Status
+                  </label>
+                  <select
+                    value={form.status_type}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        status_type: e.target.value as 'FOLGA' | 'FALTA' | 'EXTRA',
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                  >
+                    <option value="FOLGA">Folga</option>
+                    <option value="FALTA">Falta</option>
+                    <option value="EXTRA">Extra</option>
+                  </select>
+                </div>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
-                Tipo de Batida
-              </label>
-              <select
-                value={form.type}
-                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
-              >
-                {TIPOS_BATIDA.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {form.entry_mode === 'HORARIO' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
+                  Tipo de Batida
+                </label>
+                <select
+                  value={form.type}
+                  onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                >
+                  {TIPOS_BATIDA.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">
