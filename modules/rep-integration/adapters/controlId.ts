@@ -18,6 +18,7 @@ import {
   parseAfdLine,
   afdRecordWallTimeToUtcIso,
   wallTimeInZoneToUtcMs,
+  matriculaFromAfdPisField,
 } from '../repParser';
 import {
   sanitizeDigits,
@@ -747,14 +748,18 @@ const ControlIdAdapter: RepVendorAdapter = {
         timezone: afdTz,
       });
     }
-    return records.map((rec) => ({
-      pis: rec.cpfOuPis,
-      cpf: rec.cpfOuPis,
-      data_hora: afdRecordWallTimeToUtcIso(rec, afdTz),
-      tipo: normalizeTipo(rec.tipo),
-      nsr: rec.nsr,
-      raw: { ...rec, source: 'controlid_afd' },
-    }));
+    return records.map((rec) => {
+      const badgeMat = matriculaFromAfdPisField(rec.cpfOuPis);
+      return {
+        pis: rec.cpfOuPis,
+        cpf: rec.cpfOuPis,
+        matricula: badgeMat,
+        data_hora: afdRecordWallTimeToUtcIso(rec, afdTz),
+        tipo: normalizeTipo(rec.tipo),
+        nsr: rec.nsr,
+        raw: { ...rec, source: 'controlid_afd', matricula_derived: badgeMat ?? null },
+      };
+    });
   },
 };
 

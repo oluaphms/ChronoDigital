@@ -4,7 +4,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ParsedAfdRecord, RepDevice, PunchFromDevice } from './types';
-import { afdRecordToIsoDateTime } from './repParser';
+import { afdRecordToIsoDateTime, matriculaFromAfdPisField } from './repParser';
 
 export interface IngestResult {
   success: boolean;
@@ -89,7 +89,7 @@ export async function ingestAfdRecords(
       rep_device_id: repDeviceId,
       pis: rec.cpfOuPis,
       cpf: rec.cpfOuPis,
-      matricula: null,
+      matricula: matriculaFromAfdPisField(rec.cpfOuPis) ?? null,
       nome_funcionario: null,
       data_hora: iso,
       tipo_marcacao: rec.tipo,

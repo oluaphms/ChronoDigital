@@ -96,12 +96,12 @@ function normalizeEventType(type: string): string {
   if (t === 'saida') return 'saída';
   if (t === 'entrada') return 'entrada';
   if (t === 'pausa') return 'pausa';
-  if (t === 'batida') return 'batida';  -- Deixa o backend interpretar
+  if (t === 'batida') return 'batida';
   if (t === 'e') return 'entrada';
   if (t === 's') return 'saída';
   if (t === 'p') return 'pausa';
-  if (t === 'b') return 'batida';  -- Deixa o backend interpretar
-  return 'batida';  -- Padrão: deixa o backend interpretar pela escala
+  if (t === 'b') return 'batida';
+  return 'batida';
 }
 
 export default async function handler(request: Request): Promise<Response> {

@@ -51,7 +51,13 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
     const hora = normalizeTime(horaStr!);
     if (!data || !hora) return null;
     const digits = (cpfPis || '').replace(/\D/g, '');
-    const cpfOuPis = digits.length <= 11 ? digits.padStart(11, '0') : digits.slice(0, 11);
+    /** Campo 10–14 posições: em vários firmwares os 11 últimos dígitos são PIS/CPF/crachá (prefixo é lixo). */
+    const cpfOuPis =
+      digits.length <= 11
+        ? digits.padStart(11, '0')
+        : digits.length <= 14
+          ? digits.slice(-11).padStart(11, '0')
+          : digits.slice(0, 11);
     const tipoNorm = normalizeMarcacaoTipo(tipoMarc);
     return { nsr, data, hora, cpfOuPis, tipo: tipoNorm, raw: line };
   }
@@ -79,6 +85,24 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
     tipo: tipoNorm,
     raw: line,
   };
+}
+
+/**
+ * O campo AFD de 11 posições costuma ser PIS ou CPF, mas muitos relógios gravam **crachá/matrícula**
+ * preenchido com zeros à esquerda (ex.: 00000705412). Esse valor não casa com PIS/CPF no cadastro;
+ * derivamos a matrícula para `rep_ingest_punch` casar com `numero_identificador` / `numero_folha`.
+ * Não usa só `ltrim('0')` para não quebrar PIS que começa por zero válido (ex.: 012…).
+ */
+export function matriculaFromAfdPisField(cpfOuPis11: string): string | undefined {
+  const d = (cpfOuPis11 || '').replace(/\D/g, '').padStart(11, '0').slice(0, 11);
+  if (d.length !== 11) return undefined;
+  const m = d.match(/^0{3,}([1-9]\d{0,8})$/);
+  if (m) return m[1] ?? undefined;
+  if (/^0{3,}/.test(d)) {
+    const stripped = d.replace(/^0+/, '') || '';
+    if (stripped.length >= 4 && stripped.length <= 9 && /^[1-9]/.test(stripped)) return stripped;
+  }
+  return undefined;
 }
 
 function normalizeDate(ddmmaaaa: string): string | null {

@@ -51,6 +51,7 @@ type UserRowRepPush = {
   cpf: string | null;
   pis_pasep: string | null;
   numero_folha: string | null;
+  numero_identificador: string | null;
   company_id: string;
   role: string | null;
 };
@@ -60,7 +61,7 @@ async function fetchUserRowForRepPush(
   userId: string,
   expectedCompanyId: string
 ): Promise<UserRowRepPush | Response> {
-  const select = 'nome, email, cpf, pis_pasep, numero_folha, company_id, role';
+  const select = 'nome, email, cpf, pis_pasep, numero_folha, numero_identificador, company_id, role';
   const ctx = getServiceSupabase();
   if (ctx) {
     const { data, error } = await ctx.admin.from('users').select(select).eq('id', userId).maybeSingle();
@@ -145,7 +146,7 @@ async function handlePushEmployee(request: Request): Promise<Response> {
       nome: (row.nome || row.email || 'Funcionário').trim(),
       cpf: row.cpf,
       pis: row.pis_pasep,
-      matricula: row.numero_folha,
+      matricula: row.numero_folha?.trim() || row.numero_identificador?.trim() || undefined,
     };
 
     const result = await pushEmployeeToDeviceServer(device, payload);

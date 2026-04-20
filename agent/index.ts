@@ -9,6 +9,7 @@ import { loadAgentConfig, type AgentConfig } from './config';
 import { OfflineQueue } from './queue';
 import { AgentLogger } from './services/agentLogger';
 import { aggregateEspelhoCycle, runAgentTick } from './services/syncRunner.service';
+import { startSyncService } from '../services/syncService.js';
 
 async function tick(cfg: AgentConfig): Promise<void> {
   const queue = new OfflineQueue(cfg.sqliteDbPath);
@@ -48,6 +49,17 @@ async function main(): Promise<void> {
   });
 
   log.connOk(`Agente iniciado - próximo ciclo em ${cfg.intervalMs / 1000}s`);
+
+  if ((process.env.CLOCK_LOCAL_TIME_RECORDS_SYNC || '1').trim() !== '0') {
+    const syncInterval = parseInt(process.env.LOCAL_TIME_RECORDS_SYNC_INTERVAL_MS || '15000', 10) || 15000;
+    startSyncService({
+      sqliteDbPath: cfg.sqliteDbPath,
+      supabaseUrl: cfg.supabaseUrl,
+      serviceRoleKey: cfg.serviceRoleKey,
+      intervalMs: Math.max(5000, syncInterval),
+    });
+    log.connOk(`Sync local → Supabase: intervalo ${Math.max(5000, syncInterval) / 1000}s (desligar: CLOCK_LOCAL_TIME_RECORDS_SYNC=0)`);
+  }
 
   await tick(cfg);
   setInterval(() => {

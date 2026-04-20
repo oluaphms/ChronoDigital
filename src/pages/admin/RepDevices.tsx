@@ -24,6 +24,8 @@ import {
 import { testRepDeviceConnection, syncRepDevice } from '../../../modules/rep-integration/repSyncJob';
 import type { RepIngestBatchProgress } from '../../../modules/rep-integration/repService';
 import { promotePendingRepPunchLogs } from '../../../modules/rep-integration/repService';
+import { matriculaFromAfdPisField } from '../../../modules/rep-integration/repParser';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { LS_TIMESHEET_SPECIAL_BARS, readSpecialBarsPref, SPECIAL_BARS_CHANGED } from '../../utils/timesheetLayoutPrefs';
 import {
   pushEmployeeToDeviceViaApi,
@@ -33,6 +35,7 @@ import {
 import type { RepDeviceClockSet, RepExchangeOp, RepUserFromDevice } from '../../../modules/rep-integration/types';
 import { upsertTimeClockDeviceMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
 import type { RepDeviceRowForMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
+import { invalidateCompanyListCaches } from '../../services/queryCache';
 
 type RepDeviceRow = {
   id: string;
@@ -93,7 +96,6 @@ const TIPOS_CONEXAO = [
   { value: 'api', label: 'API do fabricante' },
 ];
 
-const LS_REP_STAGING = 'chrono_rep_receive_staging';
 const LS_REP_ALLOCATE = 'chrono_rep_receive_allocate';
 const LS_REP_SKIP_BLOCKED = 'chrono_rep_receive_skip_blocked';
 const REP_RECEIVE_UI_TIMEOUT_MS = 8 * 60 * 1000;
@@ -143,6 +145,81 @@ function buildLocalClockForRep(mode671: boolean): RepDeviceClockSet {
   return clock;
 }
 
+/** Alinhado a `rep_afd_canonical_11_digits` no Supabase (PIS/CPF campo AFD). */
+function repAfdCanonical11(raw: string | null | undefined): string | null {
+  const d = (raw ?? '').replace(/\D/g, '');
+  if (d.length === 0) return null;
+  if (d.length <= 11) return d.padStart(11, '0');
+  if (d.length <= 14) return d.slice(-11);
+  return d.slice(0, 11);
+}
+
+function repMaskTailDigits(raw: string | null | undefined, tail: number): string {
+  const d = (raw ?? '').replace(/\D/g, '');
+  if (d.length === 0) return '—';
+  if (d.length <= tail) return `…${d}`;
+  return `…${d.slice(-tail)}`;
+}
+
+/** Lista no log os identificadores das batidas ainda sem funcionário (para cruzar com o cadastro). */
+async function appendRepPendingQueueDiagnostics(
+  client: SupabaseClient,
+  companyId: string,
+  deviceId: string,
+  log: (line: string) => void
+): Promise<void> {
+  const { data, error } = await client
+    .from('rep_punch_logs')
+    .select('nsr, pis, cpf, matricula, data_hora')
+    .eq('company_id', companyId)
+    .eq('rep_device_id', deviceId)
+    .is('time_record_id', null)
+    .order('data_hora', { ascending: true })
+    .limit(5);
+
+  if (error) {
+    log(`Não foi possível ler a fila pendente (diagnóstico): ${error.message}`);
+    return;
+  }
+  if (!data?.length) return;
+
+  log('Diagnóstico — batidas ainda na fila (cruzar com PIS/CPF, nº folha ou nº crachá no utilizador):');
+  const tailsCanon = new Set<string>();
+  let sawLikelyPisNotBadge = false;
+  for (const row of data) {
+    const pisC = repAfdCanonical11(row.pis as string | null);
+    const cpfC = repAfdCanonical11(row.cpf as string | null);
+    const canon = pisC || cpfC;
+    const derived =
+      canon != null && canon.length === 11 ? matriculaFromAfdPisField(canon) ?? null : null;
+    if (canon && derived == null) sawLikelyPisNotBadge = true;
+    if (canon && canon.length >= 4) tailsCanon.add(canon.slice(-4));
+    const matStored = (row.matricula != null && String(row.matricula).trim() !== ''
+      ? String(row.matricula).trim()
+      : null) as string | null;
+    const t = row.data_hora ? String(row.data_hora).slice(0, 16).replace('T', ' ') : '—';
+    const campoAfd =
+      derived != null
+        ? 'crachá (estim.)'
+        : canon
+          ? 'NIS/PIS (11 díg.)'
+          : '—';
+    log(
+      `  · NSR ${row.nsr ?? '—'} | ${t} | campo AFD: ${campoAfd} | fim PIS/CPF canón.: ${canon ? repMaskTailDigits(canon, 4) : '—'} | matr. no log: ${matStored ?? '—'} | crachá derivado (zeros): ${derived ?? '—'}`
+    );
+  }
+  if (sawLikelyPisNotBadge) {
+    log(
+      'Nota: quando «crachá derivado (zeros)» fica «—», o relógio está a enviar **NIS/PIS** (padrão de crachá com zeros não se aplica). O espelho casa com **PIS/PASEP** com os **mesmos 11 dígitos**, ou **CPF**, ou **nº folha / nº identificador** com o **mesmo valor numérico** (ex.: PIS completo no campo crachá).'
+    );
+  }
+  if (tailsCanon.size > 1) {
+    log(
+      'As pendências têm **fins de PIS/CPF canónico diferentes** — são **identificadores distintos** (várias pessoas ou vários NIS). Cada um precisa de **um colaborador** na mesma empresa com esse PIS (ou o número equivalente em folha/crachá).'
+    );
+  }
+}
+
 const AdminRepDevices: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [devices, setDevices] = useState<RepDeviceRow[]>([]);
@@ -168,8 +245,6 @@ const AdminRepDevices: React.FC = () => {
   const [sendReceiveOpen, setSendReceiveOpen] = useState(false);
   const [srDeviceId, setSrDeviceId] = useState('');
   const [srLog, setSrLog] = useState('');
-  /** Salvar só em rep_punch_logs até consolidar */
-  const [srStaging, setSrStaging] = useState(false);
   /** Marcar atraso na entrada vs escala ao importar */
   const [srAllocate, setSrAllocate] = useState(false);
   /** Se marcado, não oferece no envio ao relógio inativos/demitidos/invisíveis. */
@@ -281,7 +356,6 @@ const AdminRepDevices: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    setSrStaging(readLsBool(LS_REP_STAGING, false));
     setSrAllocate(readLsBool(LS_REP_ALLOCATE, false));
     setSrSkipBlocked(readLsBool(LS_REP_SKIP_BLOCKED, true));
     setSrSpecialBars(readSpecialBarsPref());
@@ -407,7 +481,8 @@ const AdminRepDevices: React.FC = () => {
     try {
       const r = await withUiTimeout(
         syncRepDevice(supabase, d.id, {
-          onlyStaging: srStaging,
+          /** Sempre grava na folha quando o cadastro (PIS/CPF/matrícula) coincide — espelho de ponto. */
+          onlyStaging: false,
           applySchedule: srAllocate,
           receiveScope,
           onBatchProgress: (p: RepIngestBatchProgress) => {
@@ -420,17 +495,54 @@ const AdminRepDevices: React.FC = () => {
         'Receber batidas'
       );
       if (r.ok) {
-        const staged = r.staged ?? 0;
-        const imp = r.imported ?? 0;
+        let imp = r.imported ?? 0;
+        let stillInQueueOnly = 0;
         const dup = r.duplicated ?? 0;
         const unf = r.userNotFound ?? 0;
         const received = r.received ?? 0;
+
+        appendSrLog(`Bruto do relógio (esta leitura): ${received} marcação(ões).`);
+
+        const consolidateCompanyId = d.company_id || user?.companyId;
+        if (consolidateCompanyId && user?.companyId) {
+          appendSrLog('Consolidando fila pendente neste relógio (gravar no espelho quando houver cadastro)…');
+          const pr = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id);
+          if (pr.success) {
+            const promoted = pr.promoted ?? 0;
+            const skipped = pr.skippedNoUser ?? 0;
+            imp += promoted;
+            stillInQueueOnly = skipped;
+            if (promoted > 0) {
+              appendSrLog(`${promoted} marcação(ões) extra(s) na folha a partir da fila (consolidadas agora).`);
+            }
+            if (skipped > 0) {
+              const backlogHint =
+                skipped > received
+                  ? ` Inclui batida(s) de dias/leituras anteriores — agora o relógio só enviou ${received}.`
+                  : '';
+              appendSrLog(
+                `${skipped} batida(s) deste relógio ainda só em rep_punch_logs (sem PIS/CPF/nº folha/nº identificador (crachá) que bata com o cadastro).${backlogHint} Corrija utilizadores e use «Consolidar» se precisar. Se o cadastro já estiver certo: confirme migrações REP no Supabase (20260420200000–20260420260000) e build recente da app — senão o servidor não normaliza PIS/CPF AFD (11 dígitos), deriva crachá nem casa folha/crachá.`
+              );
+              await appendRepPendingQueueDiagnostics(supabase, consolidateCompanyId, d.id, appendSrLog);
+            }
+          } else {
+            appendSrLog(`Aviso: não foi possível consolidar a fila: ${pr.error ?? 'erro desconhecido'}.`);
+          }
+          invalidateCompanyListCaches(user.companyId);
+        }
+
         const parts: string[] = [];
-        if (imp) parts.push(`${imp} registro(s) na folha (time_records)`);
-        if (staged) parts.push(`${staged} na fila temporária (rep_punch_logs)`);
+        if (imp) parts.push(`${imp} registro(s) no espelho (folha / time_records)`);
+        if (stillInQueueOnly) {
+          const qHint =
+            stillInQueueOnly > received
+              ? `fila do relógio: ${stillInQueueOnly} sem cadastro (o número pode ser maior que as ${received} batida(s) de agora — há pendências antigas)`
+              : `${stillInQueueOnly} ainda só em rep_punch_logs (sem cadastro)`;
+          parts.push(qHint);
+        }
         if (unf) {
           parts.push(
-            `${unf} recebida(s) sem funcionário correspondente no sistema (confira PIS/CPF ou use a fila temporária)`
+            `${unf} recebida(s) sem funcionário correspondente no sistema (alinhe PIS/CPF ou número de folha com o cadastro)`
           );
         }
         if (dup) parts.push(`${dup} ignorada(s) (NSR já importado)`);
@@ -439,12 +551,11 @@ const AdminRepDevices: React.FC = () => {
           summary = parts.join('; ');
         } else if (received > 0) {
           summary =
-            'Nenhuma marcação nova (todas já constavam como NSR ou não puderam ser gravadas). Confira cadastro PIS/CPF e a opção de fila temporária.';
+            'Nenhuma marcação nova na folha (NSR já importado ou sem correspondência de cadastro). Confira PIS/CPF/matrícula no utilizador e no relógio.';
         } else {
           summary =
             'O relógio não devolveu nenhuma marcação nesta leitura. Confira fabricante «Control iD», IP/porta/HTTPS, batidas no aparelho, fuso horário (afd_timezone em config_extra do relógio) e se não há «last_afd_nsr» no JSON extra apontando além do último NSR (isso força AFD vazio).';
         }
-        appendSrLog(`Bruto do relógio: ${received} marcação(ões).`);
         if (r.ingestErrors?.length) {
           appendSrLog(`Erros ao gravar: ${r.ingestErrors.slice(0, 3).join(' | ')}`);
         }
@@ -452,9 +563,11 @@ const AdminRepDevices: React.FC = () => {
         setMessage({
           type: 'success',
           text:
-            staged && !imp
-              ? `${staged} marcação(ões) na fila temporária. Use «Consolidar pendentes» para gravar na folha.`
-              : `Sincronizado. ${summary}`,
+            stillInQueueOnly && !imp
+              ? `${stillInQueueOnly} marcação(ões) só na fila (sem cadastro para consolidar). Ajuste PIS/CPF, nº folha ou nº identificador (crachá) e use «Consolidar».`
+              : imp && stillInQueueOnly
+                ? `Espelho: ${imp} registro(s). Atenção: ${stillInQueueOnly} batida(s) ainda na fila do relógio sem cadastro (podem ser leituras antigas).`
+                : `Sincronizado. ${summary}`,
         });
       } else {
         const errLine = toUiString(r.error, 'Erro ao sincronizar');
@@ -486,11 +599,12 @@ const AdminRepDevices: React.FC = () => {
       return;
     }
     if (!getSupabaseClient() || !user?.companyId) return;
+    const consolidateCompanyId = d.company_id || user.companyId;
     setPromotingId(d.id);
     setMessage(null);
     appendSrLog(`Consolidando pendentes do relógio «${d.nome_dispositivo}»…`);
     try {
-      const pr = await promotePendingRepPunchLogs(supabase, user.companyId, d.id);
+      const pr = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id);
       if (!pr.success) {
         const err = pr.error || 'Falha ao consolidar';
         appendSrLog(`Falha: ${err}`);
@@ -500,10 +614,14 @@ const AdminRepDevices: React.FC = () => {
       const promoted = pr.promoted ?? 0;
       const skipped = pr.skippedNoUser ?? 0;
       appendSrLog(`Consolidado: ${promoted} registro(s) na folha; ${skipped} pendente(s) sem funcionário identificado.`);
+      if (skipped > 0) {
+        await appendRepPendingQueueDiagnostics(supabase, consolidateCompanyId, d.id, appendSrLog);
+      }
       setMessage({
         type: 'success',
         text: `${promoted} marcação(ões) gravadas na folha.${skipped ? ` ${skipped} ignorada(s) (sem cadastro).` : ''}`,
       });
+      invalidateCompanyListCaches(user.companyId);
       await loadDevices();
     } catch (e) {
       appendSrLog(`Erro: ${(e as Error).message}`);
@@ -1414,30 +1532,11 @@ const AdminRepDevices: React.FC = () => {
 
               <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-3 sm:p-4 space-y-3 bg-slate-50/80 dark:bg-slate-900/30">
                 <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Opções de importação e envio</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 -mt-1 mb-1">
+                  «Receber batidas» grava diretamente no espelho (<code className="text-[10px]">time_records</code>) quando
+                  PIS/CPF/matrícula coincidem com o cadastro; em seguida consolida pendentes antigos do mesmo relógio.
+                </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
-                <label className="flex gap-2 items-start cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={srStaging}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setSrStaging(v);
-                      try {
-                        localStorage.setItem(LS_REP_STAGING, v ? '1' : '0');
-                      } catch {
-                        /* ignore */
-                      }
-                    }}
-                    className="mt-0.5 rounded border-slate-300"
-                  />
-                  <span className="text-sm text-slate-700 dark:text-slate-300">
-                    Salvar batidas em tabela temporária
-                    <span className="block text-[11px] text-slate-500 dark:text-slate-400 font-normal mt-0.5">
-                      Importa só para <code className="text-[10px]">rep_punch_logs</code>; use «Consolidar pendentes» para
-                      gerar <code className="text-[10px]">time_records</code> na folha.
-                    </span>
-                  </span>
-                </label>
                 <label className="flex gap-2 items-start cursor-pointer">
                   <input
                     type="checkbox"

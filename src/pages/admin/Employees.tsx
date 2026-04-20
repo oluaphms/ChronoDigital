@@ -1575,7 +1575,12 @@ const AdminEmployees: React.FC = () => {
                           <input type="text" value={form.pis_pasep} onChange={(e) => setForm({ ...form, pis_pasep: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">Nº Identificador</label>
+                          <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1">
+                            Nº Identificador
+                          </label>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">
+                            Mesmo valor que o Control iD envia como matrícula/crachá no REP (não exige CPF no cadastro).
+                          </p>
                           <input type="text" value={form.numero_identificador} onChange={(e) => setForm({ ...form, numero_identificador: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white" />
                         </div>
                         <div>

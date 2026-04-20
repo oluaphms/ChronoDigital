@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight, FileDown, MapPin } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileDown, MapPin, RefreshCw } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { fetchTimeRecordsForMirrorWindow } from '../../../services/api';
 import { LoadingState } from '../../../components/UI';
 import {
   buildDayMirrorSummary,
@@ -23,11 +24,8 @@ import { extractLatLng } from '../../utils/reverseGeocode';
 import { ExpandableStreetCell } from '../../components/ClickableFullContent';
 import { TimesheetTableSkeleton } from '../../components/TimesheetTableSkeleton';
 import { readSpecialBarsPref, SPECIAL_BARS_CHANGED } from '../../utils/timesheetLayoutPrefs';
-import {
-  enumerateLocalCalendarDays,
-  localCalendarDayEndUtc,
-  localCalendarDayStartUtc,
-} from '../../utils/localDateTimeToIso';
+import { invalidateAfterPunch } from '../../services/queryCache';
+import { enumerateLocalCalendarDays } from '../../utils/localDateTimeToIso';
 
 /** Data local YYYY-MM-DD (evita UTC deslocar o “hoje” no max do input). */
 function localDateKey(d = new Date()): string {
@@ -57,6 +55,8 @@ const EmployeeTimesheet: React.FC = () => {
   const [scheduleWindowsByDow, setScheduleWindowsByDow] = useState<Record<number, DayScheduleWindow | null> | null>(
     null,
   );
+  /** Força novo fetch ao clicar em «Atualizar batidas». */
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     const sync = () => setSpecialBarsLayout(readSpecialBarsPref());
@@ -121,16 +121,13 @@ const EmployeeTimesheet: React.FC = () => {
       try {
         const startDate = periodStart;
         const endDate = periodEnd;
-        const rowsP = db.select(
-          'time_records',
-          [
-            { column: 'user_id', operator: 'eq', value: user.id },
-            { column: 'created_at', operator: 'gte', value: localCalendarDayStartUtc(startDate) },
-            { column: 'created_at', operator: 'lte', value: localCalendarDayEndUtc(endDate) },
-          ],
-          { column: 'created_at', ascending: false },
-          2000,
-        ) as Promise<any[]>;
+        const rowsP = fetchTimeRecordsForMirrorWindow(
+          [{ column: 'user_id', operator: 'eq', value: user.id }],
+          startDate,
+          endDate,
+          false,
+          2000
+        );
 
         let holidayRows: any[] = [];
         if (companyId) {
@@ -169,7 +166,7 @@ const EmployeeTimesheet: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, companyId, periodStart, periodEnd, periodValid]);
+  }, [user?.id, companyId, periodStart, periodEnd, periodValid, refreshNonce]);
 
   const mirrorRecords = useMemo((): MirrorTimeRecord[] => {
     return (records ?? []).map((r: any) => ({
@@ -309,6 +306,19 @@ const EmployeeTimesheet: React.FC = () => {
             className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
           />
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (user?.id && companyId) invalidateAfterPunch(user.id, companyId);
+            setRefreshNonce((n) => n + 1);
+          }}
+          disabled={!periodValid || loadingData}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Recarrega batidas do servidor (ex.: após o admin importar do relógio)"
+        >
+          <RefreshCw className={`w-4 h-4 ${loadingData ? 'animate-spin' : ''}`} aria-hidden />
+          Atualizar batidas
+        </button>
         <button
           type="button"
           onClick={exportPDF}

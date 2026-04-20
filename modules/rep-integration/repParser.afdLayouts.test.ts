@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { parseAfdLine, parseAFD } from './repParser';
+import { parseAfdLine, parseAFD, matriculaFromAfdPisField } from './repParser';
+
+describe('matriculaFromAfdPisField', () => {
+  it('deriva crachá quando o AFD preenche com zeros à esquerda', () => {
+    expect(matriculaFromAfdPisField('00000705412')).toBe('705412');
+  });
+  it('não deriva PIS/CPF típicos (poucos zeros à esquerda)', () => {
+    expect(matriculaFromAfdPisField('02966742765')).toBeUndefined();
+    expect(matriculaFromAfdPisField('06891516404')).toBeUndefined();
+  });
+});
+
+describe('parseAfdLine tipo 3/7 — campo identificação 12–14 dígitos', () => {
+  it('usa os últimos 11 dígitos como PIS/crachá (prefixo de 3 dígitos + crachá)', () => {
+    const line = '00001644032404202410070012300000705412';
+    const r = parseAfdLine(line);
+    expect(r).not.toBeNull();
+    expect(r!.cpfOuPis).toBe('00000705412');
+    expect(matriculaFromAfdPisField(r!.cpfOuPis)).toBe('705412');
+  });
+});
 
 describe('parseAfdLine — layout Portaria (NSR + tipo 3/7 + data + hora + PIS)', () => {
   it('parseia linha compacta tipo 3 (como no REP iDClass)', () => {

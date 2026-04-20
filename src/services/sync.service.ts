@@ -45,6 +45,11 @@ export interface OfflineClockPersistenceHooks {
     companyId: string | null;
     timeLogsTable: string;
     rows: Record<string, unknown>[];
+    /**
+     * true = apenas SQLite `time_records` (worker `syncService.js` → Supabase); não grava `pending_punches`.
+     * @see CLOCK_SYNC_DEFER_CLOUD_TO_WORKER
+     */
+    skipPendingPunches?: boolean;
   }) => Promise<string[]>;
   /** Após `restPostBulk` bem-sucedido. */
   markRowsSynced: (ids: string[]) => Promise<void>;
@@ -225,6 +230,12 @@ export async function runSyncCycle(options: SyncCycleOptions): Promise<SyncCycle
   };
 }
 
+function shouldDeferCloudToRepWorker(offlineClockPersistence?: OfflineClockPersistenceHooks): boolean {
+  if (!offlineClockPersistence) return false;
+  const v = (process.env.CLOCK_SYNC_DEFER_CLOUD_TO_WORKER || '1').trim();
+  return v !== '0' && v.toLowerCase() !== 'false';
+}
+
 async function syncOneDevice(
   cfg: SupabaseRestConfig,
   row: DeviceRow,
@@ -240,8 +251,9 @@ async function syncOneDevice(
 ): Promise<DeviceSyncResult> {
   const deviceId = row.id;
   const lastSync = row.last_sync ?? undefined;
+  const deferCloud = shouldDeferCloudToRepWorker(offlineClockPersistence);
   try {
-    logger.sync(`Início da sincronização`, deviceId, { brand: config.brand, lastSync });
+    logger.sync(`Início da sincronização`, deviceId, { brand: config.brand, lastSync, deferCloudToWorker: deferCloud });
     const adapter = getAdapter(config.brand);
     const records = await adapter.fetch(config, lastSync);
     const rows: Record<string, unknown>[] = [];
@@ -260,6 +272,10 @@ async function syncOneDevice(
       rows.push(toInsertRow(r, dedupe));
     }
 
+    if (rows.length > 0) {
+      console.log(`[COLETA] device=${deviceId} ${rows.length} registro(s) normalizado(s) (dedupe em memória)`);
+    }
+
     let stagedIds: string[] = [];
     if (rows.length > 0 && offlineClockPersistence) {
       stagedIds = await offlineClockPersistence.stageRowsBeforeSend({
@@ -267,48 +283,57 @@ async function syncOneDevice(
         companyId: row.company_id,
         timeLogsTable,
         rows,
+        skipPendingPunches: deferCloud,
       });
-      logger.sync(`Persistido localmente antes do envio: ${stagedIds.length} evento(s)`, deviceId, {
+      const localLabel = deferCloud ? 'time_records+worker' : 'pending_punches+nuvem';
+      console.log(`[LOCAL] device=${deviceId} ${rows.length} linha(s) espelhadas (${localLabel}); pending_ids=${stagedIds.length}`);
+      logger.sync(`Persistido localmente: ${rows.length} evento(s) (${localLabel})`, deviceId, {
         staged: stagedIds.length,
+        rows: rows.length,
+        deferCloud,
       });
     }
 
-    try {
-      if (apiPunchSender) {
-        // Modo API intermediária (recomendado): validação centralizada no servidor
-        const apiResult = await apiPunchSender.send({
-          deviceId,
-          companyId: row.company_id,
-          rows,
-        });
-        if (!apiResult.success) {
-          throw new Error(apiResult.error || 'Falha ao enviar via API');
+    if (!deferCloud) {
+      try {
+        if (apiPunchSender) {
+          const apiResult = await apiPunchSender.send({
+            deviceId,
+            companyId: row.company_id,
+            rows,
+          });
+          if (!apiResult.success) {
+            throw new Error(apiResult.error || 'Falha ao enviar via API');
+          }
+        } else {
+          await restPostBulk(cfg, timeLogsTable, rows);
         }
-      } else {
-        // Modo REST direto (legacy): service role direto ao banco
-        await restPostBulk(cfg, timeLogsTable, rows);
+      } catch (bulkErr) {
+        if (stagedIds.length > 0 && offlineClockPersistence) {
+          await offlineClockPersistence.onSendFailed?.({ deviceId, ids: stagedIds, error: bulkErr });
+        } else {
+          await onBulkInsertFailure?.({
+            deviceId,
+            companyId: row.company_id,
+            timeLogsTable,
+            rows,
+            error: bulkErr,
+          });
+        }
+        throw bulkErr;
       }
-    } catch (bulkErr) {
-      if (stagedIds.length > 0 && offlineClockPersistence) {
-        await offlineClockPersistence.onSendFailed?.({ deviceId, ids: stagedIds, error: bulkErr });
-      } else {
-        await onBulkInsertFailure?.({
-          deviceId,
-          companyId: row.company_id,
-          timeLogsTable,
-          rows,
-          error: bulkErr,
-        });
-      }
-      throw bulkErr;
-    }
 
-    if (stagedIds.length > 0 && offlineClockPersistence) {
-      await offlineClockPersistence.markRowsSynced(stagedIds);
+      if (stagedIds.length > 0 && offlineClockPersistence) {
+        await offlineClockPersistence.markRowsSynced(stagedIds);
+      }
+    } else if (rows.length > 0) {
+      console.log(
+        `[LOCAL] Nuvem adiada ao worker syncService.js (rep_ingest_punch). Desativar: CLOCK_SYNC_DEFER_CLOUD_TO_WORKER=0`
+      );
     }
 
     let espelho: PromoteEspelhoResult | undefined;
-    if (!skipEspelhoPromote && row.company_id) {
+    if (!deferCloud && !skipEspelhoPromote && row.company_id) {
       try {
         espelho = await promoteClockEventsToEspelho(cfg, {
           timeLogsTable,

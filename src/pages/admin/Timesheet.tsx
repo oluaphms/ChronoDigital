@@ -6,7 +6,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState, Button } from '../../../components/UI';
-import { FileDown, FileSpreadsheet, Lock, Plus } from 'lucide-react';
+import { FileDown, FileSpreadsheet, Lock, Plus, RefreshCw } from 'lucide-react';
 import { AddTimeRecordModal } from '../../components/AddTimeRecordModal';
 import { ManualRecordModal } from '../../components/ManualRecordModal';
 import { EditTimeRecordModal } from '../../components/EditTimeRecordModal';
@@ -24,7 +24,11 @@ import {
 import { getEmployeeSchedule, getEmployeeTimesheetScheduleContext } from '../../services/timeProcessingService';
 import type { DayScheduleWindow } from '../../utils/timesheetMirror';
 import { closeTimesheet, isTimesheetClosed } from '../../services/timeProcessingService';
-import { invalidateAfterPunch, invalidateAfterTimesheetMonthClose } from '../../services/queryCache';
+import {
+  invalidateAfterPunch,
+  invalidateAfterTimesheetMonthClose,
+  invalidateCompanyListCaches,
+} from '../../services/queryCache';
 import { enumerateLocalCalendarDays } from '../../utils/localDateTimeToIso';
 import { sameUserId } from '../../utils/userIdMatch';
 
@@ -546,6 +550,21 @@ const AdminTimesheet: React.FC = () => {
                 Selecione o período para carregar os registros do espelho.
               </p>
             )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="inline-flex items-center gap-2 shrink-0"
+              disabled={!periodValid || loadingEspelho || !companyId}
+              title="Recarrega batidas do servidor (útil após importar do relógio ou outro terminal)"
+              onClick={() => {
+                if (companyId) invalidateCompanyListCaches(companyId);
+                void loadEspelho();
+              }}
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingEspelho ? 'animate-spin' : ''}`} aria-hidden />
+              Atualizar batidas
+            </Button>
           </div>
         )}
       </section>

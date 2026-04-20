@@ -3,11 +3,61 @@
  * Centraliza Promise.all e evita fetch duplicado / ordem inconsistente entre telas.
  */
 
-import { db } from './supabaseClient';
+import { db, type Filter } from './supabaseClient';
 import {
   localCalendarDayEndUtc,
   localCalendarDayStartUtc,
 } from '../src/utils/localDateTimeToIso';
+
+/**
+ * Espelho de ponto: filtrar pelo instante da batida (`timestamp`), não por `created_at`.
+ * Batidas do relógio importadas mais tarde ou com sync atrasado ficavam fora do período e o dia aparecia vazio (FOLGA/FALTA em todas as colunas).
+ * Linhas legadas sem `timestamp` continuam a usar `created_at` no intervalo.
+ */
+export async function fetchTimeRecordsForMirrorWindow(
+  baseFilters: Filter[],
+  periodStartYmd: string,
+  periodEndYmd: string,
+  orderAscending: boolean,
+  limit: number
+): Promise<any[]> {
+  const periodStartTs = localCalendarDayStartUtc(periodStartYmd);
+  const periodEndTs = localCalendarDayEndUtc(periodEndYmd);
+
+  const [main, legacy] = await Promise.all([
+    db.select(
+      'time_records',
+      [
+        ...baseFilters,
+        { column: 'timestamp', operator: 'gte', value: periodStartTs },
+        { column: 'timestamp', operator: 'lte', value: periodEndTs },
+      ],
+      { column: 'timestamp', ascending: orderAscending },
+      limit
+    ),
+    db.select(
+      'time_records',
+      [
+        ...baseFilters,
+        { column: 'timestamp', operator: 'is', value: null },
+        { column: 'created_at', operator: 'gte', value: periodStartTs },
+        { column: 'created_at', operator: 'lte', value: periodEndTs },
+      ],
+      { column: 'created_at', ascending: orderAscending },
+      Math.min(2000, limit)
+    ),
+  ]);
+
+  const byId = new Map<string, any>();
+  for (const r of [...(main ?? []), ...(legacy ?? [])]) {
+    if (r?.id) byId.set(String(r.id), r);
+  }
+  return Array.from(byId.values()).sort((a, b) => {
+    const ta = new Date(a.timestamp ?? a.created_at).getTime();
+    const tb = new Date(b.timestamp ?? b.created_at).getTime();
+    return orderAscending ? ta - tb : tb - ta;
+  });
+}
 
 export type AdminTimesheetEmployee = { id: string; nome: string; department_id?: string; role?: string };
 export type AdminTimesheetDepartment = { id: string; name: string };
@@ -97,19 +147,12 @@ export async function buscarEspelhoRegistros(
   periodEnd: string,
 ): Promise<any[]> {
   const cid = String(companyId).trim();
-  const periodStartTs = localCalendarDayStartUtc(periodStart);
-  const periodEndTs = localCalendarDayEndUtc(periodEnd);
-  return (
-    (await db.select(
-      'time_records',
-      [
-        { column: 'company_id', operator: 'eq', value: cid },
-        { column: 'created_at', operator: 'gte', value: periodStartTs },
-        { column: 'created_at', operator: 'lte', value: periodEndTs },
-      ],
-      { column: 'created_at', ascending: false },
-      1000,
-    )) ?? []
+  return fetchTimeRecordsForMirrorWindow(
+    [{ column: 'company_id', operator: 'eq', value: cid }],
+    periodStart,
+    periodEnd,
+    false,
+    1000
   );
 }
 
@@ -126,20 +169,15 @@ export async function buscarEspelhoAdmin(
   holidays: AdminHolidayRow[];
 }> {
   const cid = String(companyId).trim();
-  const periodStartTs = localCalendarDayStartUtc(periodStart);
-  const periodEndTs = localCalendarDayEndUtc(periodEnd);
 
   const [usersRows, recordsRows, departmentsRows, legacyEmployeesRows, shiftsRows, holidaysRows] = await Promise.all([
     db.select('users', [{ column: 'company_id', operator: 'eq', value: cid }]) as Promise<any[]>,
-    db.select(
-      'time_records',
-      [
-        { column: 'company_id', operator: 'eq', value: cid },
-        { column: 'created_at', operator: 'gte', value: periodStartTs },
-        { column: 'created_at', operator: 'lte', value: periodEndTs },
-      ],
-      { column: 'created_at', ascending: true },
-      8000,
+    fetchTimeRecordsForMirrorWindow(
+      [{ column: 'company_id', operator: 'eq', value: cid }],
+      periodStart,
+      periodEnd,
+      true,
+      8000
     ) as Promise<any[]>,
     db.select('departments', [{ column: 'company_id', operator: 'eq', value: cid }]) as Promise<any[]>,
     db.select('employees', [{ column: 'company_id', operator: 'eq', value: cid }]).catch(() => []) as Promise<any[]>,
