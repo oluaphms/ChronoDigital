@@ -1,7 +1,7 @@
 -- Consolidação de regras de ponto com compatibilidade retroativa
 CREATE TABLE IF NOT EXISTS public.company_rules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID NOT NULL,
+  company_id TEXT NOT NULL,
   work_on_saturday BOOLEAN NOT NULL DEFAULT false,
   saturday_overtime_type TEXT NOT NULL DEFAULT '100' CHECK (saturday_overtime_type IN ('50', '100')),
   time_bank_enabled BOOLEAN NOT NULL DEFAULT false,
@@ -26,16 +26,32 @@ INSERT INTO public.company_rules (
   dsr_enabled
 )
 SELECT
-  o.company_id,
-  COALESCE(o.work_on_saturday, o.saturday_is_workday, false),
+  o.company_id::text,
+  COALESCE(
+    NULLIF(to_jsonb(o)->>'work_on_saturday', '')::boolean,
+    NULLIF(to_jsonb(o)->>'saturday_is_workday', '')::boolean,
+    false
+  ),
   CASE
-    WHEN COALESCE(o.saturday_overtime_type, '') ILIKE '%50%' THEN '50'
+    WHEN COALESCE(to_jsonb(o)->>'saturday_overtime_type', '') ILIKE '%50%' THEN '50'
     ELSE '100'
   END,
-  COALESCE(o.bank_hours_enabled, gs.allow_time_bank, false),
-  COALESCE(o.tolerance_minutes, gs.late_tolerance_minutes, 10),
-  COALESCE(o.night_additional_percent, 20),
-  COALESCE(o.dsr_enabled, true)
+  COALESCE(
+    NULLIF(to_jsonb(o)->>'bank_hours_enabled', '')::boolean,
+    gs.allow_time_bank,
+    false
+  ),
+  COALESCE(
+    NULLIF(to_jsonb(o)->>'tolerance_minutes', '')::integer,
+    gs.late_tolerance_minutes,
+    10
+  ),
+  COALESCE(
+    NULLIF(to_jsonb(o)->>'night_additional_percent', '')::numeric,
+    (NULLIF(to_jsonb(o)->>'night_additional', '')::numeric * 100),
+    20
+  ),
+  COALESCE(NULLIF(to_jsonb(o)->>'dsr_enabled', '')::boolean, true)
 FROM public.overtime_rules o
 LEFT JOIN public.global_settings gs ON true
 ON CONFLICT (company_id) DO NOTHING;
