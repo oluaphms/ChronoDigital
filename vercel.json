@@ -62,6 +62,14 @@
       "destination": "/api/rep-bridge?slug=:slug"
     },
     {
+      "source": "/api/punches",
+      "destination": "/api/punch"
+    },
+    {
+      "source": "/api/accept-employee-invite",
+      "destination": "/api/employee-invite/accept"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

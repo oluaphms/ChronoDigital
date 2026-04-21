@@ -16,6 +16,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { PUNCH_SOURCE_WEB } from '../src/constants/punchSource';
+import { sendPunch } from '../src/services/sendPunch.service';
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -41,6 +43,13 @@ const RequestSchema = z.object({
   deviceId: z.string().min(1),
   companyId: z.string().min(1),
   punches: z.array(PunchSchema).min(1).max(1000),
+});
+const SinglePunchSchema = z.object({
+  employeeId: z.string().min(1),
+  companyId: z.string().min(1),
+  type: z.string().min(1),
+  method: z.string().optional(),
+  timestamp: z.string().min(1),
 });
 
 export type PunchPayload = z.infer<typeof PunchSchema>;
@@ -102,16 +111,6 @@ export default async function handler(request: Request): Promise<Response> {
     return Response.json({ error: 'Body JSON inválido.' }, { status: 400, headers: corsHeaders });
   }
 
-  const parsed = RequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return Response.json(
-      { error: 'Schema inválido.', details: parsed.error.format() },
-      { status: 400, headers: corsHeaders }
-    );
-  }
-
-  const { deviceId, companyId, punches } = parsed.data;
-
   // Conexão Supabase (service role - NUNCA exposta no frontend)
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
   const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
@@ -125,6 +124,47 @@ export default async function handler(request: Request): Promise<Response> {
   const supabase = createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  const maybeLegacy = typeof body === 'object' && body !== null && 'employeeId' in body && 'timestamp' in body;
+  const isLegacyPunches = maybeLegacy;
+  if (isLegacyPunches) {
+    const parsed = SinglePunchSchema.safeParse(body);
+    if (!parsed.success) {
+      return Response.json(
+        { error: 'Schema inválido.', details: parsed.error.format() },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const { employeeId, companyId, type, method, timestamp } = parsed.data;
+    const ts = new Date(timestamp);
+    if (Number.isNaN(ts.getTime())) {
+      return Response.json({ error: 'timestamp inválido.' }, { status: 400, headers: corsHeaders });
+    }
+    try {
+      await sendPunch(supabase, {
+        employee_id: employeeId,
+        company_id: companyId,
+        type,
+        method: method || 'api',
+        created_at: ts.toISOString(),
+        source: PUNCH_SOURCE_WEB,
+      });
+      return Response.json({ success: true }, { status: 200, headers: corsHeaders });
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message: unknown }).message) : String(e);
+      return Response.json({ error: msg }, { status: 500, headers: corsHeaders });
+    }
+  }
+
+  const parsed = RequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Schema inválido.', details: parsed.error.format() },
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
+  const { deviceId, companyId, punches } = parsed.data;
 
   // ===== VALIDAÇÃO DE DEVICE =====
   // Verificar se o device existe, pertence à company e está ativo
