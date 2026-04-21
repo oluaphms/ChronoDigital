@@ -204,9 +204,10 @@ const AppMain: React.FC = () => {
   const [selectedMethod, setSelectedMethod] = useState<PunchMethod | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
+  /** Só bloqueia splash quando há cache de sessão a validar — login pode renderizar logo (sem “Protegendo…” longo). */
   const [isInitialLoading, setIsInitialLoading] = useState(() => {
     if (!checkSupabaseConfigured()) return false;
-    return readCachedUser() === null;
+    return readCachedUser() != null;
   });
   const [company, setCompany] = useState<Company | null>(null);
   const [routeLoadAttempt, setRouteLoadAttempt] = useState(0);

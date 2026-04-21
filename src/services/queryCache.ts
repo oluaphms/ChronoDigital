@@ -92,6 +92,7 @@ export function invalidateCompanyListCaches(companyId: string): void {
   if (!companyId) return;
   queryCache.invalidate(`users:${companyId}`);
   queryCache.invalidate(`time_records:week:${companyId}`);
+  queryCache.invalidate(`time_records:admin_dash:v3:${companyId}`);
   queryCache.invalidate(`admin_report:${companyId}`);
   useCatalogStore.getState().clearCompany(companyId);
 }

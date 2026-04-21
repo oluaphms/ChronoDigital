@@ -10,6 +10,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
 import { extractLatLng } from '../../utils/reverseGeocode';
+import { recordPunchInstantIso, recordPunchInstantMs } from '../../utils/punchOrigin';
 import { LoadingState } from '../../../components/UI';
 import {
   MapPin,
@@ -66,7 +67,7 @@ function inferStatus(
   now: Date
 ): { status: PresenceStatus; lastPunch?: string; lastType?: string; pairCount: number } {
   const sorted = [...records].sort(
-    (a, b) => new Date(a.timestamp || a.created_at).getTime() - new Date(b.timestamp || b.created_at).getTime()
+    (a, b) => recordPunchInstantMs(a) - recordPunchInstantMs(b),
   );
   const last = sorted[sorted.length - 1];
   const type = (t: string) => (t || '').toLowerCase().replace('saída', 'saida').replace('saida', 'saida');
@@ -79,7 +80,7 @@ function inferStatus(
   }
   const pairCount = Math.min(entradas, saidas);
   const lastType = last ? type(last.type) : null;
-  const lastTs = last ? last.timestamp || last.created_at : null;
+  const lastTs = last ? recordPunchInstantIso(last) : null;
 
   if (sorted.length === 0) {
     const hour = now.getHours();
@@ -130,14 +131,14 @@ const AdminMonitoring: React.FC = () => {
         ) as Promise<TimeRecordRow[]>,
       ]);
       const users = usersRows ?? [];
-      const records = recentRecords ?? [];
+      const records = [...(recentRecords ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
       const lastByUser = new Map<string, { type: string; at: string; lat?: number; lng?: number }>();
       records.forEach((r: TimeRecordRow) => {
         if (!lastByUser.has(r.user_id)) {
           const coord = extractLatLng(r);
           lastByUser.set(r.user_id, {
             type: r.type,
-            at: r.created_at,
+            at: recordPunchInstantIso(r),
             lat: coord?.lat,
             lng: coord?.lng,
           });

@@ -1,25 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { Clock, CalendarDays, Activity, Scale, ClipboardList, LogIn, LogOut, FileEdit, FileText, CalendarClock } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
-import { db, checkSupabaseConfigured } from '../../services/supabaseClient';
+import { db, checkSupabaseConfigured, supabase, getSupabaseClient } from '../../services/supabaseClient';
 import { Button, LoadingState } from '../../../components/UI';
 import { calculateWorkedHours } from '../../utils/timeCalculations';
+import { calcularHorasHojeMs, formatarTempoLegivel, localTodayYmd } from '../../utils/workedHoursToday';
 import { LogType, PunchMethod } from '../../../types';
 import type { TimeRecord } from '../../../types';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { i18n } from '../../../lib/i18n';
 import { extractLocalCalendarDateFromIso } from '../../utils/timesheetMirror';
 import { recordPunchInstantIso, recordPunchInstantMs, resolvePunchOrigin } from '../../utils/punchOrigin';
-
-function localTodayYmd(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 const EmployeeDashboard: React.FC = () => {
   const { user, loading } = useCurrentUser();
@@ -40,12 +33,16 @@ const EmployeeDashboard: React.FC = () => {
   const [scheduleName, setScheduleName] = useState<string>('—');
   const [loadingData, setLoadingData] = useState(true);
 
-  useEffect(() => {
-    if (!user || !checkSupabaseConfigured()) return;
-    const load = async () => {
-      setLoadingData(true);
+  const loadDashboard = useCallback(
+    async (options?: { showLoading?: boolean }) => {
+      const showLoading = options?.showLoading !== false;
+      if (!user) return;
+      if (!checkSupabaseConfigured()) {
+        setLoadingData(false);
+        return;
+      }
+      if (showLoading) setLoadingData(true);
       try {
-        // Otimização: carregar apenas colunas necessárias
         const rows = (await db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], {
           columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
           limit: 200,
@@ -61,9 +58,9 @@ const EmployeeDashboard: React.FC = () => {
           (r: any) => extractLocalCalendarDateFromIso(recordPunchInstantIso(r)) >= monthStart,
         );
 
-        setTodayRecords(todayList);
-        const lastPick =
-          todayList.length > 0 ? todayList[0] : sortedAll.length > 0 ? sortedAll[0] : null;
+        const todaySortedAsc = [...todayList].sort((a, b) => recordPunchInstantMs(a) - recordPunchInstantMs(b));
+        setTodayRecords(todaySortedAsc);
+        const lastPick = sortedAll.length > 0 ? sortedAll[0] : null;
         if (lastPick) {
           setLastRecord({
             type: String(lastPick.type ?? ''),
@@ -74,22 +71,8 @@ const EmployeeDashboard: React.FC = () => {
           setLastRecord(null);
         }
 
-        if (todayList.length > 0) {
-          const mapped: TimeRecord[] = todayList.map((r: any) => ({
-            id: r.id,
-            userId: r.user_id,
-            companyId: r.company_id,
-            type: r.type === 'entrada' ? LogType.IN : r.type === 'saída' ? LogType.OUT : LogType.BREAK,
-            method: (r.method as PunchMethod) || PunchMethod.GPS,
-            createdAt: new Date(recordPunchInstantIso(r)),
-            ipAddress: '',
-            deviceId: '',
-            deviceInfo: { browser: '', os: '', isMobile: false, userAgent: '' },
-          }));
-          const worked = calculateWorkedHours(mapped, now);
-          const h = Math.floor(worked);
-          const m = Math.round((worked % 1) * 60);
-          setTodayHours(`${h}h ${m}m`);
+        if (todaySortedAsc.length > 0) {
+          setTodayHours(formatarTempoLegivel(calcularHorasHojeMs(todaySortedAsc)));
         } else {
           setTodayHours('0h 0m');
         }
@@ -123,7 +106,6 @@ const EmployeeDashboard: React.FC = () => {
         }
 
         try {
-          // Otimização: carregar apenas colunas necessárias
           const reqs = (await db.select('requests', [{ column: 'user_id', operator: 'eq', value: user.id }], {
             columns: 'id, status',
             limit: 100,
@@ -171,11 +153,38 @@ const EmployeeDashboard: React.FC = () => {
       } catch (e) {
         console.error(e);
       } finally {
-        setLoadingData(false);
+        if (showLoading) setLoadingData(false);
       }
+    },
+    [user],
+  );
+
+  useEffect(() => {
+    void loadDashboard({ showLoading: true });
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    if (!user?.id || !getSupabaseClient() || !checkSupabaseConfigured()) return;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const channel = supabase
+      .channel(`employee_dash_records_${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'time_records', filter: `user_id=eq.${user.id}` },
+        () => {
+          if (t) clearTimeout(t);
+          t = setTimeout(() => {
+            t = null;
+            void loadDashboard({ showLoading: false });
+          }, 400);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (t) clearTimeout(t);
+      void supabase.removeChannel(channel);
     };
-    load();
-  }, [user?.id, user?.schedule_id]);
+  }, [user?.id, loadDashboard]);
 
   const statusLabel = lastRecord?.type === 'entrada' ? i18n.t('dashboard.statusWorking') : lastRecord?.type === 'pausa' ? i18n.t('dashboard.statusBreak') : i18n.t('dashboard.statusOff');
 
@@ -291,7 +300,7 @@ const EmployeeDashboard: React.FC = () => {
             <li key={r.id} className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
               <span className="font-medium text-slate-900 dark:text-white capitalize">{r.type === 'entrada' ? i18n.t('punch.typeIn') : r.type === 'saída' ? i18n.t('punch.typeOut') : r.type === 'pausa' ? i18n.t('punch.typeBreak') : r.type}</span>
               <span className="tabular-nums text-slate-600 dark:text-slate-300">
-                {new Date(r.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                {new Date(recordPunchInstantIso(r)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
               </span>
             </li>
           ))}

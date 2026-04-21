@@ -270,14 +270,17 @@ const EmployeeClockIn: React.FC = () => {
       setGeoLiveStatus('captured');
     })();
 
-    const stopWatch = watchGeoPosition((r) => {
-      if (cancelled) return;
-      if (r.ok && r.position) {
-        setGeo(r.position);
-        setGpsFailReason(null);
-        setGeoLiveStatus('captured');
-      }
-    }, { minIntervalMs: 5000, timeout: 20000, maximumAge: 0 });
+    const stopWatch = watchGeoPosition(
+      (r) => {
+        if (cancelled) return;
+        if (r.ok && r.position) {
+          setGeo(r.position);
+          setGpsFailReason(null);
+          setGeoLiveStatus('captured');
+        }
+      },
+      { minIntervalMs: 3000, timeout: 25000, maximumAge: 0, enableHighAccuracy: true },
+    );
 
     return () => {
       cancelled = true;

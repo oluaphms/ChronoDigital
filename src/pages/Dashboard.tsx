@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { CalendarDays, Clock as ClockIcon, Inbox, Layers3 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, isSupabaseConfigured, supabase, getSupabaseClient } from '../services/supabaseClient';
 import { TimeRecord, LogType } from '../../types';
 import PageHeader from '../components/PageHeader';
 import StatCard from '../components/StatCard';
 import DataTable from '../components/DataTable';
 import { LoadingState, EmptyState } from '../../components/UI';
-import { calculateWorkedHours } from '../utils/timeCalculations';
+import { extractLocalCalendarDateFromIso } from '../utils/timesheetMirror';
+import { calcularHorasHojeMs, formatarTempoLegivel, localTodayYmd } from '../utils/workedHoursToday';
 import { formatRequestType, formatWorkflowStatus } from '../../lib/i18n';
 import { useLanguage } from '../contexts/LanguageContext';
 import { ExpandableTextCell } from '../components/ClickableFullContent';
@@ -41,6 +42,7 @@ interface TimeBalanceRow {
 const DashboardPage: React.FC = () => {
   useLanguage();
   const { user, loading } = useCurrentUser();
+  const [rtTick, setRtTick] = useState(0);
   const [records, setRecords] = useState<TimeRecord[]>([]);
   /** Última batida por horário oficial (`timestamp` ou `created_at`) + rótulo de origem. */
   const [lastRecordSummary, setLastRecordSummary] = useState<{
@@ -194,14 +196,38 @@ const DashboardPage: React.FC = () => {
     };
 
     load();
-  }, [user]);
+  }, [user, rtTick]);
+
+  useEffect(() => {
+    if (!user?.id || !getSupabaseClient() || !isSupabaseConfigured()) return;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const channel = supabase
+      .channel(`portal_dash_${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'time_records', filter: `user_id=eq.${user.id}` },
+        () => {
+          if (t) clearTimeout(t);
+          t = setTimeout(() => {
+            t = null;
+            queryCache.invalidate(`time_records:user:${user.id}`);
+            setRtTick((x) => x + 1);
+          }, 400);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (t) clearTimeout(t);
+      void supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const todayHours = useMemo(() => {
-    if (!records.length) return '00h 00m';
-    const hours = calculateWorkedHours(records, new Date());
-    const h = Math.floor(hours);
-    const m = Math.round((hours - h) * 60);
-    return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`;
+    const ymd = localTodayYmd();
+    const todayRecs = records.filter(
+      (r) => extractLocalCalendarDateFromIso(r.createdAt.toISOString()) === ymd,
+    );
+    return formatarTempoLegivel(calcularHorasHojeMs(todayRecs.map((r) => ({ created_at: r.createdAt.toISOString() }))));
   }, [records]);
 
   const lastPunch = records[0] ?? null;

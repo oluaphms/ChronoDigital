@@ -5,6 +5,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
 import { extractLatLng } from '../../utils/reverseGeocode';
+import { recordPunchInstantIso, recordPunchInstantMs } from '../../utils/punchOrigin';
 import { LoadingState } from '../../../components/UI';
 import { MapPin, RefreshCw } from 'lucide-react';
 
@@ -34,14 +35,15 @@ const EmployeeMonitoring: React.FC = () => {
         db.select('time_records', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }, 500) as Promise<any[]>,
       ]);
       const users = usersRows ?? [];
-      const records = recordsRows ?? [];
+      const records = [...(recordsRows ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
       const lastByUser = new Map<string, { type: string; at: string; lat?: number; lng?: number }>();
       records.forEach((r: any) => {
         if (!lastByUser.has(r.user_id)) {
           const coord = extractLatLng(r);
+          const atIso = recordPunchInstantIso(r);
           lastByUser.set(r.user_id, {
             type: r.type,
-            at: r.created_at,
+            at: atIso,
             lat: coord?.lat,
             lng: coord?.lng,
           });
