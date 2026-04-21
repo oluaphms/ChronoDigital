@@ -484,9 +484,10 @@ const ControlIdAdapter: RepVendorAdapter = {
       });
       const attempt671 = await pushAttempt(true, userAdd, userUpdate);
       if (attempt671.ok) return attempt671;
+      const failed671 = attempt671 as { ok: false; addHint: string; updHint: string };
       return {
         ok: false,
-        message: `Control iD: inclusão falhou (${attempt671.addHint}). Atualização também falhou (${attempt671.updHint}).${hint671}`,
+        message: `Control iD: inclusão falhou (${failed671.addHint}). Atualização também falhou (${failed671.updHint}).${hint671}`,
       };
     }
 
@@ -531,7 +532,8 @@ const ControlIdAdapter: RepVendorAdapter = {
       }
     }
 
-    if (!attempt.ok && isPisFormatRejection(attempt.addHint, attempt.updHint)) {
+    const currentAttempt = attempt as { ok: false; addHint: string; updHint: string };
+    if (isPisFormatRejection(currentAttempt.addHint, currentAttempt.updHint)) {
       let altAdd: Record<string, unknown>;
       let altUpd: Record<string, unknown>;
       try {
