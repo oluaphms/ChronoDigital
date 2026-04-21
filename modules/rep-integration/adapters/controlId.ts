@@ -396,9 +396,9 @@ const ControlIdAdapter: RepVendorAdapter = {
 
     const resolved = resolveControlIdIdentity(configMode671, cpfDigits, pisNorm, pisRawSanitized);
     if (!resolved.ok) {
-      return { ok: false, message: resolved.message };
+      return { ok: false, message: (resolved as { ok: false; message: string }).message };
     }
-    const { use671Api, idDigits } = resolved;
+    const { use671Api, idDigits } = resolved as { ok: true; use671Api: boolean; idDigits: string };
 
     const fonteIdentificador =
       pisNorm != null

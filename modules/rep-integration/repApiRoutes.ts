@@ -122,7 +122,7 @@ async function handlePushEmployee(request: Request): Promise<Response> {
     }
     const parsed = await readRequestJsonBody(request);
     if (!parsed.ok) {
-      return Response.json({ error: parsed.error }, { status: 400, headers });
+      return Response.json({ error: (parsed as { ok: false; error: string }).error }, { status: 400, headers });
     }
     const raw = parsed.value;
     const body = (raw && typeof raw === 'object' ? raw : {}) as { device_id?: string; user_id?: string };
@@ -175,7 +175,7 @@ async function handleExchange(request: Request): Promise<Response> {
     }
     const parsedEx = await readRequestJsonBody(request);
     if (!parsedEx.ok) {
-      return Response.json({ error: parsedEx.error }, { status: 400, headers });
+      return Response.json({ error: (parsedEx as { ok: false; error: string }).error }, { status: 400, headers });
     }
     const rawEx = parsedEx.value;
     const body = (rawEx && typeof rawEx === 'object' ? rawEx : {}) as {
