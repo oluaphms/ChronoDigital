@@ -76,4 +76,15 @@ describe('getDayStatus — escala com sábado útil (6x1)', () => {
     const st = getDayStatus(day, [1, 2, 3, 4, 5], { entrada: '08:00', saida: '17:00', toleranceMin: 0 });
     expect(st.status).toBe('falta');
   });
+
+  it('feriado não pode ser falta no espelho', () => {
+    const day = baseDay({
+      date: '2026-04-21',
+      records: [],
+    });
+    const holidays = new Set<string>(['2026-04-21']);
+    const st = getDayStatus(day, [1, 2, 3, 4, 5], { entrada: '08:00', saida: '17:00', toleranceMin: 0 }, holidays);
+    expect(st.status).toBe('holiday');
+    expect(st.label).toBe('FERIADO');
+  });
 });

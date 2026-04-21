@@ -91,19 +91,22 @@ export async function calculateDailyTimesheet(
   const records = await getDayRecords(employeeId, dateStr);
   const nightMinutes = calculateNightHours(records);
 
-  const isWorkDay = !dailyResult.scheduled_day_off;
-  const expectedMin = isWorkDay
-    ? dailyResult.expected_minutes > 0
-      ? dailyResult.expected_minutes
-      : expectedMinutes
-    : 0;
-  const isAbsence = isWorkDay && dailyResult.total_worked_minutes === 0;
+  const isHoliday = dayType === 'HOLIDAY';
+  const isWorkDay = !dailyResult.scheduled_day_off && !isHoliday;
+  const expectedMin = isHoliday
+    ? 0
+    : isWorkDay
+      ? dailyResult.expected_minutes > 0
+        ? dailyResult.expected_minutes
+        : expectedMinutes
+      : 0;
+  const isAbsence = !isHoliday && isWorkDay && dailyResult.total_worked_minutes === 0;
 
   // Calcula minutos de falta
   let absenceMinutes = 0;
   if (isAbsence) {
     absenceMinutes = expectedMin;
-  } else if (isWorkDay && dailyResult.total_worked_minutes < expectedMin) {
+  } else if (!isHoliday && isWorkDay && dailyResult.total_worked_minutes < expectedMin) {
     absenceMinutes = expectedMin - dailyResult.total_worked_minutes;
   }
 
@@ -111,7 +114,7 @@ export async function calculateDailyTimesheet(
     date: dateStr,
     dayType,
     workedMinutes: dailyResult.total_worked_minutes,
-    expectedMinutes: dailyResult.expected_minutes,
+    expectedMinutes: expectedMin,
     companyRules,
     schedule: null,
   });
@@ -121,13 +124,13 @@ export async function calculateDailyTimesheet(
     company_id: companyId,
     date: dateStr,
     worked_minutes: dailyResult.total_worked_minutes,
-    expected_minutes: isWorkDay ? expectedMin : 0,
+    expected_minutes: expectedMin,
     overtime_minutes: overtimeByRule.overtime_50_minutes + overtimeByRule.overtime_100_minutes,
     absence_minutes: absenceMinutes,
     night_minutes: nightMinutes,
     late_minutes: dailyResult.late_minutes,
     is_absence: isAbsence,
-    is_holiday: dayType === 'HOLIDAY',
+    is_holiday: isHoliday,
     raw_data: {
       day_type: dayType,
       overtime_50_minutes: overtimeByRule.overtime_50_minutes,

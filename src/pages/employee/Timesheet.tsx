@@ -395,7 +395,12 @@ const EmployeeTimesheet: React.FC = () => {
                   const day = empMirror.get(date);
                   if (!day) return null;
                   const hasRealRecords = day.records.some((r) => !isStatusRecord(r));
-                  const dayStatus = getDayStatus(day, scheduleWorkDays ?? undefined, expectedWindowForYmd(date));
+                  const dayStatus = getDayStatus(
+                    day,
+                    scheduleWorkDays ?? undefined,
+                    expectedWindowForYmd(date),
+                    holidayDates,
+                  );
                   let dataNote: 'Folga' | 'Falta' | 'Feriado' | null = null;
                   if (holidayDates.has(date)) dataNote = 'Feriado';
                   else if (dayStatus.status === 'folga') dataNote = 'Folga';

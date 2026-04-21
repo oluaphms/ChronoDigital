@@ -3,6 +3,7 @@ import {
   applyNightRules,
   calculateDSR,
   calculateOvertime,
+  classifyDay,
   getBrazilianHolidays,
   type CompanyRules,
 } from './timeEngine';
@@ -77,6 +78,14 @@ describe('timeEngine consolidated rules', () => {
     expect(holidays.has('2026-02-17')).toBe(true); // Carnaval
     expect(holidays.has('2026-04-03')).toBe(true); // Sexta-feira Santa
     expect(holidays.has('2026-06-04')).toBe(true); // Corpus Christi
+  });
+
+  it('21/04 é classificado como HOLIDAY automaticamente', async () => {
+    const dayType = await classifyDay({
+      date: '2026-04-21',
+      company: { id: '' },
+    });
+    expect(dayType).toBe('HOLIDAY');
   });
 
   it('adicional noturno aplica hora reduzida + adicional percentual', () => {

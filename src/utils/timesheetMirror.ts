@@ -481,15 +481,17 @@ export function hasManualRecord(dayMirror: DayMirror): boolean {
 export function getDayStatus(
   day: DayMirror,
   workDays?: number[],
-  expectedWindow?: DayScheduleWindow | null
+  expectedWindow?: DayScheduleWindow | null,
+  holidayDates?: Set<string>
 ): { status: string; label: string; color: string } {
   const override = getStatusOverride(day);
   if (override === 'folga') return { status: 'folga', label: 'FOLGA', color: 'green' };
   if (override === 'falta') return { status: 'falta', label: 'FALTA', color: 'red' };
   if (override === 'extra') return { status: 'extra', label: 'EXTRA', color: 'purple' };
 
-  // Verifica se é feriado
-  // TODO: Implementar verificação de feriado quando tiver dados de feriados
+  if (holidayDates?.has(day.date)) {
+    return { status: 'holiday', label: 'FERIADO', color: 'amber' };
+  }
   
   // Usa T12:00:00 para evitar problemas de fuso horário
   const date = new Date(day.date + 'T12:00:00');

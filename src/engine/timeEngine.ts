@@ -87,6 +87,10 @@ export interface NightRuleResult {
   additionalMinutes: number;
 }
 
+export function getBrazilianFixedHolidays(): string[] {
+  return ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '12-25'];
+}
+
 const DEFAULT_COMPANY_RULES: CompanyRules = {
   work_on_saturday: false,
   saturday_overtime_type: '100',
@@ -152,7 +156,7 @@ export function getBrazilianHolidays(year: number, location?: string): Set<strin
 
   const holidays = new Set<string>();
   // Feriados nacionais fixos
-  ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '12-25'].forEach((md) => {
+  getBrazilianFixedHolidays().forEach((md) => {
     holidays.add(`${year}-${md}`);
   });
 
@@ -208,14 +212,23 @@ async function getManualHolidayDates(companyId: string, year: number): Promise<S
   return out;
 }
 
+export async function isHoliday(date: string, company: { id?: string; city?: string; state?: string }): Promise<boolean> {
+  const dateStr = date.slice(0, 10);
+  const year = Number(dateStr.slice(0, 4));
+  const location = company.city || company.state || 'BR';
+  const automatic = getBrazilianHolidays(year, location);
+  const manual = await getManualHolidayDates(company.id || '', year);
+  return automatic.has(dateStr) || manual.has(dateStr);
+}
+
 export async function classifyDay(input: DayClassificationInput): Promise<DayType> {
   const dateStr = input.date.slice(0, 10);
-  const year = Number(dateStr.slice(0, 4));
-  const location = input.employee?.city || input.company.city || input.company.state || 'BR';
-  const automatic = getBrazilianHolidays(year, location);
-  const manual = await getManualHolidayDates(input.company.id || '', year);
-  const merged = new Set<string>([...automatic, ...manual]);
-  if (merged.has(dateStr)) return 'HOLIDAY';
+  const company = {
+    id: input.company.id,
+    city: input.employee?.city || input.company.city,
+    state: input.employee?.state || input.company.state,
+  };
+  if (await isHoliday(dateStr, company)) return 'HOLIDAY';
 
   const dayOfWeek = new Date(`${dateStr}T12:00:00`).getDay();
   if (dayOfWeek === 0) return 'SUNDAY';
