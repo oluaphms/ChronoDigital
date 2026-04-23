@@ -13,7 +13,6 @@ const STATIC_ASSETS = [
   '/index.html',
   '/manifest.json',
   '/favicon.ico',
-  '/favicon.svg',
   '/1024.png',
   '/play_store_512.png',
 ];
@@ -195,7 +194,7 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'SmartPonto';
   const options = {
     body: data.body || 'Nova notificação',
-    icon: '/favicon.svg',
+    icon: '/favicon.ico',
     badge: '/favicon.ico',
     vibrate: [200, 100, 200],
     data: data

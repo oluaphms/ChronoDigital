@@ -1,7 +1,7 @@
 import React from 'react';
 
-/** Ícone vetorial em /public (favicon) — uso em barras e menus */
-export const BRAND_ICON_SVG = '/favicon.svg';
+/** Ícone principal em /public (favicon) — uso em barras e menus */
+export const BRAND_ICON = '/favicon.ico';
 
 /** Arte quadrada alta resolução — login e PWA */
 export const BRAND_IMAGE_1024 = '/1024.png';
@@ -18,9 +18,9 @@ const SIZE_CONFIG: Record<
   BrandLogoSize,
   { box: string; src: string; rounded: string }
 > = {
-  xs: { box: 'w-8 h-8', src: BRAND_ICON_SVG, rounded: 'rounded-lg' },
-  sm: { box: 'w-10 h-10', src: BRAND_ICON_SVG, rounded: 'rounded-xl' },
-  md: { box: 'w-14 h-14', src: BRAND_ICON_SVG, rounded: 'rounded-2xl' },
+  xs: { box: 'w-8 h-8', src: BRAND_ICON, rounded: 'rounded-lg' },
+  sm: { box: 'w-10 h-10', src: BRAND_ICON, rounded: 'rounded-xl' },
+  md: { box: 'w-14 h-14', src: BRAND_ICON, rounded: 'rounded-2xl' },
   lg: { box: 'w-20 h-20', src: BRAND_IMAGE_1024, rounded: 'rounded-3xl' },
   /** Login: substitui título + slogan; mantém proporção da arte 1024.png */
   hero: {
@@ -32,7 +32,7 @@ const SIZE_CONFIG: Record<
 
 /**
  * Logotipo PontoWebDesk a partir dos arquivos em `/public`
- * (favicon.svg, 1024.png).
+ * (favicon.ico, 1024.png).
  */
 function imgDimensions(size: BrandLogoSize): { w: number; h: number } {
   if (size === 'xs') return { w: 32, h: 32 };

@@ -75,7 +75,7 @@ function showReminder(title: string, body: string) {
   try {
     const n = new Notification(title, {
       body,
-      icon: '/favicon.svg',
+      icon: '/favicon.ico',
       tag: 'smartponto-reminder',
     });
     n.onclick = () => {
