@@ -346,6 +346,14 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
   if (!saidaIntervalo && middle.length > 0) saidaIntervalo = middle[0];
   if (!voltaIntervalo && middle.length > 1) voltaIntervalo = middle[middle.length - 1];
 
+  // Fallback operacional: com 3+ batidas e saída de intervalo já conhecida, garantir 3ª batida visível em volta.
+  if (!voltaIntervalo && !!saidaIntervalo && times.length >= 3) {
+    const third = times[2]!;
+    if (third !== saidaIntervalo) {
+      voltaIntervalo = third;
+    }
+  }
+
   const hasIntervalType = sanitized.some((r) => {
     const n = normalizeRecordTypeForMirror(r.type);
     return n === 'intervalo_saida' || n === 'intervalo_volta';

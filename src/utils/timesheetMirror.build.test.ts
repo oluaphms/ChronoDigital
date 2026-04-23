@@ -252,4 +252,5 @@ describe('buildDayMirrorSummary — prioridade relógio (rep)', () => {
     expect(dm?.voltaIntervalo).toBe('14:04');
     expect(dm?.saidaFinal).toBeNull();
   });
+
 });

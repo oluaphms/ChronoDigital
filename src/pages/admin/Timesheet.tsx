@@ -746,6 +746,12 @@ const AdminTimesheet: React.FC = () => {
                       minute: '2-digit',
                       hour12: false,
                     });
+                  const hhmmToMin = (hhmm: string | null | undefined): number | null => {
+                    if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
+                    const [h, m] = hhmm.split(':').map((v) => Number(v));
+                    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+                    return h * 60 + m;
+                  };
                   const recordIsoForDay = (r: TimeRecord) => recordEffectiveMirrorInstant(r, date);
                   const fmtRecord = (r: TimeRecord) => fmt(recordIsoForDay(r));
                   const pick = (t: string | null, typ: ReturnType<typeof normalizeRecordTypeForMirror>) => {
@@ -767,8 +773,33 @@ const AdminTimesheet: React.FC = () => {
                       })()
                     : undefined;
                   const saidaIntRecord = pick(day.saidaIntervalo, 'intervalo_saida');
-                  const voltaIntRecord = pick(day.voltaIntervalo, 'intervalo_volta');
+                  let voltaIntRecord = pick(day.voltaIntervalo, 'intervalo_volta');
                   const saidaRecord = pick(day.saidaFinal, 'saida');
+                  let voltaSlotTime = day.voltaIntervalo;
+
+                  // Fallback visual: se a volta ficou vazia, mas existe batida entre saída de intervalo e saída final,
+                  // exibe essa batida na coluna "Volta int." para não "sumir" no espelho.
+                  if (!voltaSlotTime && day.saidaIntervalo) {
+                    const startMin = hhmmToMin(day.saidaIntervalo);
+                    const endMin = hhmmToMin(day.saidaFinal);
+                    const hasRecord = (r?: TimeRecord) => !!r?.id;
+                    const takenIds = new Set<string>(
+                      [entradaRecord, saidaIntRecord, voltaIntRecord, saidaRecord]
+                        .filter(hasRecord)
+                        .map((r) => r!.id),
+                    );
+                    const candidates = day.records
+                      .filter((r) => !isStatusRecord(r))
+                      .filter((r) => !takenIds.has(r.id))
+                      .map((r) => ({ rec: r, time: fmtRecord(r), min: hhmmToMin(fmtRecord(r)) }))
+                      .filter((x) => x.min != null && (startMin == null || x.min > startMin))
+                      .filter((x) => endMin == null || x.min < endMin)
+                      .sort((a, b) => (a.min ?? 0) - (b.min ?? 0));
+                    if (candidates.length > 0) {
+                      voltaIntRecord = candidates[0]!.rec;
+                      voltaSlotTime = candidates[0]!.time;
+                    }
+                  }
                   const renderMirrorSlot = (t: string | null, rec?: TimeRecord) => {
                     const hasTime = t != null && String(t).trim() !== '';
                     if (hasTime) return renderTimeCell(t, rec);
@@ -822,7 +853,7 @@ const AdminTimesheet: React.FC = () => {
                         {renderMirrorSlot(hasRealRecords ? day.saidaIntervalo : null, hasRealRecords ? saidaIntRecord : undefined)}
                       </td>
                       <td className="px-3 py-2">
-                        {renderMirrorSlot(hasRealRecords ? day.voltaIntervalo : null, hasRealRecords ? voltaIntRecord : undefined)}
+                        {renderMirrorSlot(hasRealRecords ? voltaSlotTime : null, hasRealRecords ? voltaIntRecord : undefined)}
                       </td>
                       <td className="px-3 py-2">
                         {renderMirrorSlot(hasRealRecords ? day.saidaFinal : null, hasRealRecords ? saidaRecord : undefined)}
