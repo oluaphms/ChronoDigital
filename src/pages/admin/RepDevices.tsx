@@ -83,6 +83,18 @@ type EmployeeForRep = {
   status: string;
   invisivel: boolean;
   demissao: string | null;
+  pis_pasep?: string | null;
+  numero_identificador?: string | null;
+  numero_folha?: string | null;
+};
+
+type PendingPunchDiag = {
+  nsr: number | null;
+  dataHora: string;
+  pisCanon: string | null;
+  cpfCanon: string | null;
+  matricula: string | null;
+  campoAfd: string;
 };
 
 function isEmployeeEligibleForRepPush(e: EmployeeForRep): boolean {
@@ -293,6 +305,8 @@ const AdminRepDevices: React.FC = () => {
   const [srConsolidateOnlyUserId, setSrConsolidateOnlyUserId] = useState('');
   /** Botão «Consolidar»: só pendentes no dia civil deste computador (recebimento «só hoje» já usa a mesma janela automaticamente). */
   const [srManualConsolidateLocalToday, setSrManualConsolidateLocalToday] = useState(false);
+  /** Diagnóstico de PIS pendentes na fila */
+  const [pendingPisModal, setPendingPisModal] = useState<{ open: boolean; rows: PendingPunchDiag[] }>({ open: false, rows: [] });
   /** Sub-modal: enviar / status / funcionários / config */
   const [srSendDialogOpen, setSrSendDialogOpen] = useState(false);
   const [srPushAllRunning, setSrPushAllRunning] = useState(false);
@@ -368,6 +382,9 @@ const AdminRepDevices: React.FC = () => {
         status?: string | null;
         invisivel?: boolean | null;
         demissao?: string | null;
+        pis_pasep?: string | null;
+        numero_identificador?: string | null;
+        numero_folha?: string | null;
       }[];
       const allowed = new Set(['employee', 'hr', 'admin']);
       const list = (rows || [])
@@ -378,6 +395,9 @@ const AdminRepDevices: React.FC = () => {
           status: (r.status || 'active').trim(),
           invisivel: r.invisivel === true,
           demissao: r.demissao || null,
+          pis_pasep: r.pis_pasep || null,
+          numero_identificador: r.numero_identificador || null,
+          numero_folha: r.numero_folha || null,
         }))
         .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
       setEmployees(list);
@@ -895,6 +915,84 @@ const AdminRepDevices: React.FC = () => {
     } finally {
       setPromotingId(null);
     }
+  };
+
+  const loadPendingPisDiagnostics = async () => {
+    const d = srSelectedDevice;
+    if (!d || !user?.companyId) return;
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    const localDay = srManualConsolidateLocalToday ? getLocalCalendarDayBoundsIso() : undefined;
+
+    let q = client
+      .from('rep_punch_logs')
+      .select('nsr, pis, cpf, matricula, data_hora')
+      .eq('company_id', user.companyId)
+      .eq('rep_device_id', d.id)
+      .is('time_record_id', null);
+
+    if (localDay) {
+      q = q.gte('data_hora', localDay.startIso).lte('data_hora', localDay.endIso);
+    }
+
+    const { data, error } = await q.order('data_hora', { ascending: false }).limit(50);
+
+    if (error) {
+      setMessage({ type: 'error', text: 'Erro ao buscar pendências: ' + error.message });
+      return;
+    }
+
+    const rows: PendingPunchDiag[] = (data || []).map((row: any) => {
+      const pisC = repAfdCanonical11(row.pis as string | null);
+      const cpfC = repAfdCanonical11(row.cpf as string | null);
+      const canon = pisC || cpfC;
+      const derived = canon != null && canon.length === 11 ? matriculaFromAfdPisField(canon) ?? null : null;
+      const campoAfd = derived != null ? 'crachá (estim.)' : canon ? 'NIS/PIS (11 díg.)' : '—';
+
+      return {
+        nsr: row.nsr ?? null,
+        dataHora: row.data_hora ? String(row.data_hora).slice(0, 16).replace('T', ' ') : '—',
+        pisCanon: pisC,
+        cpfCanon: cpfC,
+        matricula: (row.matricula != null && String(row.matricula).trim() !== '' ? String(row.matricula).trim() : null) as string | null,
+        campoAfd,
+      };
+    });
+
+    setPendingPisModal({ open: true, rows });
+  };
+
+  // Normaliza PIS/CPF para 11 dígitos canônicos (igual ao SQL rep_afd_canonical_11_digits)
+  const normalizePisTo11Digits = (raw: string | null | undefined): string => {
+    const d = (raw || '').replace(/\D/g, '');
+    if (!d) return '';
+    if (d.length <= 11) {
+      return d.padStart(11, '0');
+    } else if (d.length <= 14) {
+      return d.slice(-11);
+    } else {
+      return d.slice(0, 11);
+    }
+  };
+
+  const findEmployeeByPis = (pisCanon: string | null, matricula: string | null) => {
+    if (!pisCanon && !matricula) return null;
+
+    // Normaliza o PIS do relógio para 11 dígitos
+    const cleanPis = normalizePisTo11Digits(pisCanon);
+    const cleanMat = (matricula || '').replace(/\D/g, '');
+
+    return employees.find((e) => {
+      // Normaliza o PIS do cadastro também para 11 dígitos antes de comparar
+      const empPis = normalizePisTo11Digits(e.pis_pasep);
+      const empIdent = (e.numero_identificador || '').replace(/\D/g, '');
+      const empFolha = (e.numero_folha || '').replace(/\D/g, '');
+
+      if (cleanPis && (empPis === cleanPis || empIdent === cleanPis || empFolha === cleanPis)) return true;
+      if (cleanMat && (empPis === cleanMat || empIdent === cleanMat || empFolha === cleanMat)) return true;
+      return false;
+    }) || null;
   };
 
   const srRunSendClock = async () => {
@@ -2001,12 +2099,21 @@ const AdminRepDevices: React.FC = () => {
               </details>
 
               <div className="rounded-xl border border-slate-200 dark:border-slate-600 p-4 flex flex-col flex-1 min-h-[280px]">
-                <label
-                  htmlFor="rep-sr-log"
-                  className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2"
-                >
-                  Registro de atividade
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label
+                    htmlFor="rep-sr-log"
+                    className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400"
+                  >
+                    Registro de atividade
+                  </label>
+                  <button
+                    type="button"
+                    onClick={loadPendingPisDiagnostics}
+                    className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium"
+                  >
+                    Ver PIS pendentes →
+                  </button>
+                </div>
                 <textarea
                   id="rep-sr-log"
                   readOnly
@@ -2346,6 +2453,118 @@ const AdminRepDevices: React.FC = () => {
             <Button className="mt-4" variant="secondary" onClick={() => setUsersModal(null)}>
               Fechar
             </Button>
+          </div>
+        </div>
+      )}
+
+      {pendingPisModal.open && (
+        <div
+          className="fixed inset-0 z-[140] flex items-center justify-center bg-black/60 p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPendingPisModal({ open: false, rows: [] })}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col p-4 sm:p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-700">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                  Diagnóstico de PIS/Crachá pendentes
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Batidas na fila (rep_punch_logs) que ainda não foram consolidadas por falta de cadastro compatível.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setPendingPisModal({ open: false, rows: [] })}
+              >
+                Fechar
+              </Button>
+            </div>
+
+            <div className="overflow-auto flex-1 max-h-[60vh] rounded-lg border border-slate-200 dark:border-slate-600 mt-4">
+              {pendingPisModal.rows.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  Nenhuma batida pendente na fila nesta janela de data.
+                </div>
+              ) : (
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-50 dark:bg-slate-900/50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">Data/Hora</th>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">NSR</th>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">Tipo Campo</th>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">PIS/CPF (canônico)</th>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">Matrícula</th>
+                      <th className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">Colaborador encontrado?</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {pendingPisModal.rows.map((row, i) => {
+                      const emp = findEmployeeByPis(row.pisCanon, row.matricula);
+                      return (
+                        <tr key={i} className="hover:bg-slate-50/80 dark:hover:bg-slate-700/30">
+                          <td className="px-3 py-2 text-slate-800 dark:text-slate-100 whitespace-nowrap">{row.dataHora}</td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{row.nsr ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{row.campoAfd}</td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-300 font-mono">
+                            {row.pisCanon ? repMaskTailDigits(row.pisCanon, 4) : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{row.matricula ?? '—'}</td>
+                          <td className="px-3 py-2">
+                            {emp ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                                {emp.nome}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                                Não cadastrado
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+              <p className="text-xs text-amber-800 dark:text-amber-200">
+                <strong>Como corrigir:</strong> Acesse a tela de <strong>Colaboradores</strong> e cadastre o{' '}
+                <strong>Nº PIS/PASEP</strong> (11 dígitos) ou <strong>Nº Identificador (crachá)</strong> com o mesmo valor
+                que o relógio envia. Depois clique em <strong>«Consolidar»</strong> para mover as batidas da fila para o
+                espelho de ponto.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPendingPisModal({ open: false, rows: [] })}
+              >
+                Fechar
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => {
+                  setPendingPisModal({ open: false, rows: [] });
+                  window.location.href = '/admin/employees';
+                }}
+              >
+                Ir para Colaboradores
+              </Button>
+            </div>
           </div>
         </div>
       )}
