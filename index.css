@@ -63,6 +63,17 @@
   --radius-2xl: 2.5rem;
   --radius-3xl: 3rem;
   --radius-full: 9999px;
+
+  /* Logo PontoWebDesk (tema claro) */
+  --logo-primary: #5b21b6;      /* Roxo escuro - relógio e PONTO */
+  --logo-secondary: #7c3aed;    /* Roxo médio - WEBDESK e botão */
+  --logo-fingerprint: #a78bfa;  /* Lavanda - fingerprint */
+  --logo-glow: #8b5cf6;         /* Roxo brilho - glow efeitos */
+  /* textura: preencimentos / camadas; traços do mostrador usam --fingerprint-ridge */
+  --fingerprint-opacity: 0.35;
+  --fingerprint-ridge: 0.6;
+  --fingerprint-webdesk-tint: 0.15;
+  --fingerprint-webdesk-pattern: 0.45;
 }
 
 /* Dark Mode Variables */
@@ -71,6 +82,564 @@
   --color-slate-100: #1e293b;
   --color-slate-200: #334155;
   --color-slate-300: #475569;
+
+  /* Logo (tema escuro) */
+  --logo-primary: #e5e7eb;        /* Cinza claro - relógio e PONTO */
+  --logo-secondary: #c4b5fd;      /* Lavanda - WEBDESK e botão */
+  --logo-fingerprint: #8b5cf6;    /* Roxo brilhante - fingerprint */
+  --logo-glow: #a78bfa;         /* Lavanda glow - efeitos neon */
+  --fingerprint-opacity: 0.55;
+  --fingerprint-ridge: 0.9;
+  --fingerprint-webdesk-tint: 0.25;
+  --fingerprint-webdesk-pattern: 0.6;
+}
+
+/* ============================================
+   LOGO DINÂMICA - Versão Light/Dark Profissional
+   ============================================ */
+
+.logo {
+  color: var(--logo-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
+  transition: filter 0.2s ease, color 0.2s ease;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.12));
+}
+
+.dark .logo {
+  filter: drop-shadow(0 2px 8px rgba(139, 92, 246, 0.25));
+}
+
+.dark .logo:hover {
+  filter: drop-shadow(0 4px 16px rgba(139, 92, 246, 0.4));
+}
+
+.logo svg {
+  display: block;
+  overflow: visible;
+}
+
+/* Fingerprint - círculos concêntricos sutis */
+.logo .fingerprint {
+  stroke: var(--logo-fingerprint);
+  stroke-width: 2;
+  fill: none;
+  opacity: 0.25;
+  transition: stroke 0.2s ease, opacity 0.2s ease;
+}
+
+.dark .logo .fingerprint {
+  opacity: 0.4;
+}
+
+/* Stroke do relógio - usa currentColor */
+.logo .stroke {
+  stroke: currentColor;
+  stroke-width: 3;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.2s ease;
+}
+
+/* Borda do relógio */
+.logo .clock-border {
+  stroke-width: 3.5;
+}
+
+/* Ponteiros do relógio */
+.logo .clock-hand {
+  stroke-width: 3;
+}
+
+/* Botão do cronômetro */
+.logo .fill-accent {
+  fill: var(--logo-secondary);
+  transition: fill 0.2s ease;
+}
+
+/* Texto principal PONTO - usa currentColor */
+.logo .text-main {
+  fill: currentColor;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition: fill 0.2s ease;
+}
+
+/* Texto subtítulo WEBDESK */
+.logo .text-sub {
+  fill: var(--logo-secondary);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 4px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition: fill 0.2s ease;
+}
+
+/* Tamanhos responsivos */
+.logo[data-size="sm"] svg {
+  width: 140px;
+}
+
+.logo[data-size="md"] svg {
+  width: 180px;
+}
+
+.logo[data-size="lg"] svg {
+  width: 260px;
+}
+
+/* Responsivo mobile */
+@media (max-width: 480px) {
+  .logo[data-size="lg"] svg {
+    width: 220px;
+  }
+
+  .logo .text-main {
+    font-size: 24px;
+  }
+
+  .logo .text-sub {
+    font-size: 16px;
+    letter-spacing: 3px;
+  }
+}
+
+.logo .stroke {
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.logo .text-main,
+.logo .text-sub {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: 0.04em;
+}
+
+.logo .text-main {
+  fill: currentColor;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.logo .text-sub {
+  fill: var(--logo-secondary);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* — Wordmark (fingerprint + PONTO / WEBDESK) — */
+.logo .logo-wordmark-svg {
+  width: 100%;
+  max-width: 220px;
+  color: var(--logo-primary);
+  display: block;
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.1));
+  transition: filter 0.25s ease, color 0.25s ease;
+}
+
+.dark .logo .logo-wordmark-svg {
+  filter: drop-shadow(0 4px 18px rgba(139, 92, 246, 0.25));
+}
+
+.logo .logo-wordmark-svg .stroke {
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.logo .logo-wordmark-svg .text-main {
+  fill: currentColor;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.logo .logo-wordmark-svg .text-sub {
+  fill: var(--logo-secondary);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 2px;
+}
+
+/* Pattern tile: cor via currentColor no <pattern> (compatível com fill url) */
+.logo .logo-wordmark-svg defs pattern.fp-pattern-root {
+  color: var(--logo-fingerprint);
+}
+
+.logo .logo-wordmark-svg defs .fp-lines circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  opacity: 0.7;
+}
+
+/* Anéis dentro do mostrador: traço real, visível (não depende de pattern fill) */
+.logo .logo-wordmark-svg .fp-clock-texture {
+  pointer-events: none;
+}
+
+.logo .logo-wordmark-svg .fp-clock-ring {
+  fill: none;
+  stroke: var(--logo-fingerprint);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-opacity: var(--fingerprint-ridge);
+  vector-effect: non-scaling-stroke;
+}
+
+/* Faixa WEBDESK: roxo muito leve + textura (pattern) com opacidade controlada */
+.logo .logo-wordmark-svg .fp-webdesk-tint {
+  fill: var(--logo-fingerprint);
+  fill-opacity: var(--fingerprint-webdesk-tint);
+  pointer-events: none;
+}
+
+.logo .logo-wordmark-svg .fp-webdesk-pattern {
+  opacity: var(--fingerprint-webdesk-pattern);
+  pointer-events: none;
+}
+
+/* Ícone pequeno (sidebar): traços, não pattern */
+.logo .fingerprint {
+  fill: none;
+  stroke: var(--logo-fingerprint);
+  stroke-width: 2;
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.logo[data-size="hero"] .logo-wordmark-svg {
+  width: 180px;
+  min-height: 68px;
+}
+
+@media (min-width: 640px) {
+  .logo[data-size="hero"] .logo-wordmark-svg {
+    width: 200px;
+  }
+}
+
+@media (min-width: 768px) {
+  .logo[data-size="hero"] .logo-wordmark-svg {
+    width: 220px;
+  }
+}
+
+/* compact wordmark (ex.: listagens com marca maior) */
+.logo[data-size="lg"] .logo-wordmark-svg {
+  width: 100%;
+  max-width: 200px;
+  min-height: 0;
+  height: 4.5rem;
+}
+
+/* ícone relógio (sidebars) */
+.logo[data-size="xs"] .logo-icon-svg {
+  width: 2rem;
+  height: 2rem;
+}
+
+.logo[data-size="sm"] .logo-icon-svg {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.logo[data-size="md"] .logo-icon-svg {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+
+/* traços proporcionais no ícone 64px */
+.logo .logo-icon-svg .stroke {
+  stroke-width: 2.5;
+}
+
+.logo .logo-icon-svg .fingerprint {
+  stroke-width: 1.5;
+  opacity: 0.22;
+}
+
+/* ============================================
+   LOGO AVANÇADO - EXATAMENTE como o design
+   ============================================ */
+
+/* Configurações base para o SVG avançado */
+.logo[data-variant="advanced"] .logo-wordmark-advanced {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  overflow: visible;
+}
+
+/* === FUNDO: Fingerprint DENSO igual a imagem === */
+.logo-wordmark-advanced .fp-bg {
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Garantir que todos os paths do fingerprint usem o stroke correto */
+.logo-wordmark-advanced .fp-bg path {
+  stroke: var(--logo-fingerprint);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  fill: none;
+}
+
+/* Modo claro: fingerprint bem visível */
+.logo-wordmark-advanced .fp-bg {
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+}
+
+/* Modo escuro: fingerprint brilhante com glow neon */
+.dark .logo-wordmark-advanced .fp-bg path {
+  filter: drop-shadow(0 0 4px var(--logo-glow));
+}
+
+.dark .logo-wordmark-advanced .fp-bg {
+  filter: drop-shadow(0 0 15px rgba(139, 92, 246, 0.3));
+}
+
+/* === PARTÍCULAS (modo escuro) === */
+.logo-wordmark-advanced .particles {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.dark .logo-wordmark-advanced .particles {
+  opacity: 1;
+}
+
+.logo-wordmark-advanced .particle {
+  fill: var(--logo-glow);
+  filter: drop-shadow(0 0 6px var(--logo-glow));
+}
+
+/* === RELÓGIO === */
+.logo-wordmark-advanced .clock-main {
+  transform-origin: center;
+}
+
+/* Botão do cronômetro */
+.logo-wordmark-advanced .clock-button {
+  fill: var(--logo-primary);
+  stroke: var(--logo-primary);
+  stroke-width: 2;
+}
+
+.logo-wordmark-advanced .clock-button-base {
+  fill: var(--logo-primary);
+  opacity: 0.9;
+}
+
+.dark .logo-wordmark-advanced .clock-button,
+.dark .logo-wordmark-advanced .clock-button-base {
+  fill: var(--logo-secondary);
+  stroke: var(--logo-secondary);
+}
+
+/* Linhas de velocidade à esquerda */
+.logo-wordmark-advanced .speed-lines line {
+  stroke: var(--logo-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+
+.dark .logo-wordmark-advanced .speed-lines line {
+  stroke: var(--logo-secondary);
+  opacity: 0.9;
+}
+
+/* Borda do relógio */
+.logo-wordmark-advanced .clock-border {
+  stroke: var(--logo-primary);
+  stroke-width: 3.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.dark .logo-wordmark-advanced .clock-border {
+  stroke: var(--logo-secondary);
+  filter: drop-shadow(0 0 8px var(--logo-glow));
+}
+
+/* Face do relógio - TOTALMENTE transparente para ver fingerprint atrás */
+.logo-wordmark-advanced .clock-face {
+  fill: none;
+  stroke: none;
+}
+
+/* Marcadores principais das horas (12, 3, 6, 9) */
+.logo-wordmark-advanced .clock-tick-main {
+  stroke: var(--logo-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+.dark .logo-wordmark-advanced .clock-tick-main {
+  stroke: var(--logo-secondary);
+}
+
+/* Marcadores secundários */
+.logo-wordmark-advanced .clock-tick-small {
+  stroke: var(--logo-primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.6;
+}
+
+.dark .logo-wordmark-advanced .clock-tick-small {
+  stroke: var(--logo-secondary);
+  opacity: 0.7;
+}
+
+/* Centro do relógio */
+.logo-wordmark-advanced .clock-center {
+  fill: var(--logo-primary);
+  stroke: none;
+}
+
+.dark .logo-wordmark-advanced .clock-center {
+  fill: var(--logo-secondary);
+  filter: drop-shadow(0 0 4px var(--logo-glow));
+}
+
+/* Ponteiro das horas */
+.logo-wordmark-advanced .clock-hand-hour {
+  stroke: var(--logo-primary);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dark .logo-wordmark-advanced .clock-hand-hour {
+  stroke: var(--logo-secondary);
+  filter: drop-shadow(0 0 3px var(--logo-glow));
+}
+
+/* Ponteiro dos minutos */
+.logo-wordmark-advanced .clock-hand-minute {
+  stroke: var(--logo-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dark .logo-wordmark-advanced .clock-hand-minute {
+  stroke: var(--logo-secondary);
+  filter: drop-shadow(0 0 3px var(--logo-glow));
+}
+
+/* === TEXTOS === */
+.logo-wordmark-advanced .text-ponto {
+  fill: var(--logo-primary);
+  font-size: 52px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.dark .logo-wordmark-advanced .text-ponto {
+  fill: var(--logo-primary);
+  filter: drop-shadow(0 0 12px var(--logo-glow));
+}
+
+.logo-wordmark-advanced .text-webdesk {
+  fill: var(--logo-secondary);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: 7px;
+  opacity: 1;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.dark .logo-wordmark-advanced .text-webdesk {
+  fill: var(--logo-secondary);
+  opacity: 0.95;
+}
+
+/* === LINHA CURVA === */
+.logo-wordmark-advanced .curve-line {
+  stroke: var(--logo-secondary);
+  stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.dark .logo-wordmark-advanced .curve-line {
+  stroke: var(--logo-secondary);
+  filter: drop-shadow(0 0 4px var(--logo-glow));
+  opacity: 1;
+}
+
+/* === EFEITOS HOVER === */
+.logo[data-variant="advanced"]:hover .logo-wordmark-advanced {
+  filter: drop-shadow(0 8px 24px rgba(139, 92, 246, 0.25));
+}
+
+.dark .logo[data-variant="advanced"]:hover .logo-wordmark-advanced {
+  filter: drop-shadow(0 8px 32px rgba(139, 92, 246, 0.4));
+}
+
+/* === RESPONSIVO === */
+@media (max-width: 640px) {
+  .logo[data-variant="advanced"] .logo-wordmark-advanced {
+    max-width: 300px;
+  }
+
+  .logo-wordmark-advanced .text-ponto {
+    font-size: 42px;
+    letter-spacing: 1.5px;
+  }
+
+  .logo-wordmark-advanced .text-webdesk {
+    font-size: 22px;
+    letter-spacing: 5px;
+  }
+
+  .logo-wordmark-advanced .clock-border {
+    stroke-width: 3;
+  }
+
+  .logo-wordmark-advanced .speed-lines line {
+    stroke-width: 2.5;
+  }
+}
+
+@media (max-width: 480px) {
+  .logo[data-variant="advanced"] .logo-wordmark-advanced {
+    max-width: 260px;
+  }
+
+  .logo-wordmark-advanced .text-ponto {
+    font-size: 36px;
+    letter-spacing: 1px;
+  }
+
+  .logo-wordmark-advanced .text-webdesk {
+    font-size: 18px;
+    letter-spacing: 4px;
+  }
+
+  .logo-wordmark-advanced .curve-line {
+    stroke-width: 2;
+  }
 }
 
 /* Animações */
@@ -407,6 +976,124 @@ img {
 .timesheet-special-bars table tbody td:nth-child(6) {
   box-shadow: inset 4px 0 0 0 rgb(239 68 68 / 0.5);
   padding-left: 0.65rem;
+}
+
+/* ============================================
+   LOGO DINÂMICA - Versão Light/Dark Profissional
+   ============================================ */
+
+.logo {
+  color: var(--logo-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
+  transition: filter 0.2s ease, color 0.2s ease;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.12));
+}
+
+.dark .logo {
+  filter: drop-shadow(0 2px 8px rgba(139, 92, 246, 0.25));
+}
+
+.dark .logo:hover {
+  filter: drop-shadow(0 4px 16px rgba(139, 92, 246, 0.4));
+}
+
+.logo svg {
+  display: block;
+  overflow: visible;
+}
+
+/* Fingerprint - círculos concêntricos sutis */
+.logo .fingerprint {
+  stroke: var(--logo-fingerprint);
+  stroke-width: 2;
+  fill: none;
+  opacity: 0.25;
+  transition: stroke 0.2s ease, opacity 0.2s ease;
+}
+
+.dark .logo .fingerprint {
+  opacity: 0.4;
+}
+
+/* Stroke do relógio - usa currentColor */
+.logo .stroke {
+  stroke: currentColor;
+  stroke-width: 3;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.2s ease;
+}
+
+/* Borda do relógio */
+.logo .clock-border {
+  stroke-width: 3.5;
+}
+
+/* Ponteiros do relógio */
+.logo .clock-hand {
+  stroke-width: 3;
+}
+
+/* Botão do cronômetro */
+.logo .fill-accent {
+  fill: var(--logo-secondary);
+  transition: fill 0.2s ease;
+}
+
+/* Texto principal PONTO - usa currentColor */
+.logo .text-main {
+  fill: currentColor;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition: fill 0.2s ease;
+}
+
+/* Texto subtítulo WEBDESK */
+.logo .text-sub {
+  fill: var(--logo-secondary);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 4px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition: fill 0.2s ease;
+}
+
+/* Tamanhos responsivos */
+.logo[data-size="sm"] svg {
+  width: 140px;
+}
+
+.logo[data-size="md"] svg {
+  width: 180px;
+}
+
+.logo[data-size="lg"] svg {
+  width: 260px;
+}
+
+/* Responsivo mobile */
+@media (max-width: 480px) {
+  .logo[data-size="lg"] svg {
+    width: 220px;
+  }
+
+  .logo .text-main {
+    font-size: 24px;
+  }
+
+  .logo .text-sub {
+    font-size: 16px;
+    letter-spacing: 3px;
+  }
 }
 
 /* Print Styles */

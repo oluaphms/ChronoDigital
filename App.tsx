@@ -5,7 +5,7 @@ import { queryClient } from './src/lib/queryClient';
 import { AppInitializer } from './src/components/AppInitializer';
 import { User, LogType, DailySummary, PunchMethod, Company } from './types';
 import Layout from './components/Layout';
-import { BRAND_IMAGE_1024 } from './components/BrandLogo';
+import { BrandLogo } from './components/BrandLogo';
 import Clock from './components/Clock';
 import PunchModal from './components/PunchModal';
 import Onboarding from './components/Onboarding';
@@ -1079,14 +1079,10 @@ const AppMain: React.FC = () => {
               </div>
             </button>
             <div className="relative px-6 sm:px-8 pt-9 pb-8 sm:pb-10 flex flex-col items-center bg-[#d1d5db] dark:bg-[#1f2937]">
-              <img
-                src={BRAND_IMAGE_1024}
+              <BrandLogo
+                size="lg"
+                className="relative z-10"
                 alt={`${i18n.t('app.name')} — ${i18n.t('login.slogan')}`}
-                className="relative z-10 w-[min(56vw,200px)] h-[min(56vw,200px)] sm:w-44 sm:h-44 md:w-48 md:h-48 object-contain rounded-[1.75rem]"
-                width={192}
-                height={192}
-                loading="eager"
-                decoding="async"
               />
 
             {loginStep === 'choice' ? (
