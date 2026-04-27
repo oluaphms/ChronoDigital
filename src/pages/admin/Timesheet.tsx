@@ -382,7 +382,154 @@ const AdminTimesheet: React.FC = () => {
   };
 
   const handleExportPDF = () => {
-    window.print();
+    if (!filterUserId || !periodValid) {
+      toast.addToast('error', 'Selecione um colaborador e período válido.');
+      return;
+    }
+
+    // Importar jsPDF dinamicamente
+    import('jspdf').then(({ jsPDF }) => {
+      import('jspdf-autotable').then(() => {
+        const doc = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4',
+        });
+
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const margin = 15;
+        let yPosition = margin;
+
+        // Dados do colaborador
+        const employee = employees.find(e => e.id === filterUserId);
+        const employeeName = employee?.nome || filterUserId;
+
+        // CABEÇALHO
+        doc.setFillColor(41, 128, 185);
+        doc.rect(0, 0, pageWidth, 25, 'F');
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(18);
+        doc.setFont('helvetica', 'bold');
+        doc.text('PontoWebDesk', pageWidth / 2, 12, { align: 'center' });
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text('Sistema de Registro de Ponto', pageWidth / 2, 19, { align: 'center' });
+
+        yPosition = 35;
+
+        // Título do relatório
+        doc.setTextColor(33, 37, 41);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Espelho de Ponto', margin, yPosition);
+        yPosition += 8;
+
+        // Dados do colaborador e período
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Colaborador: ${employeeName}`, margin, yPosition);
+        yPosition += 6;
+        doc.text(`Período: ${periodStart} a ${periodEnd}`, margin, yPosition);
+        yPosition += 6;
+        doc.text(`Empresa: ${user?.nome || user?.companyId || ''}`, margin, yPosition);
+        yPosition += 10;
+
+        // Linha separadora
+        doc.setDrawColor(200, 200, 200);
+        doc.line(margin, yPosition, pageWidth - margin, yPosition);
+        yPosition += 8;
+
+        // TABELA DO ESPELHO DE PONTO (formato correto)
+        if (empMirror && empMirror.size > 0) {
+          // Converter o Map para array e ordenar por data
+          const mirrorEntries = Array.from(empMirror.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+          const tableData = mirrorEntries.map(([dateKey, day]) => {
+            // Formatar data para pt-BR (YYYY-MM-DD -> DD/MM/YYYY)
+            const [year, month, dayNum] = dateKey.split('-');
+            const formattedDate = `${dayNum}/${month}/${year}`;
+
+            // Formatar horários
+            const entrada = day.entradaInicio || '----';
+            const saidaInt = day.saidaIntervalo || 'Folga';
+            const voltaInt = day.voltaIntervalo || 'Folga';
+            const saida = day.saidaFinal || '----';
+
+            // Calcular total em formato HH:MM
+            let total = '----';
+            if (day.workedMinutes && day.workedMinutes > 0) {
+              const hours = Math.floor(day.workedMinutes / 60);
+              const mins = day.workedMinutes % 60;
+              total = `${hours}:${String(mins).padStart(2, '0')}`;
+            }
+
+            // Detectar se é folga (nenhuma batida)
+            const isFolga = !day.entradaInicio && !day.saidaFinal;
+
+            if (isFolga) {
+              return [formattedDate, 'Folga', 'Folga', 'Folga', 'Folga', '----'];
+            }
+
+            return [formattedDate, entrada, saidaInt, voltaInt, saida, total];
+          });
+
+          (doc as any).autoTable({
+            startY: yPosition,
+            margin: { left: margin, right: margin },
+            head: [['Data', 'Entrada', 'Saída Int.', 'Volta Int.', 'Saída', 'Total']],
+            body: tableData,
+            styles: {
+              fontSize: 9,
+              cellPadding: 3,
+              overflow: 'linebreak',
+              halign: 'center',
+            },
+            headStyles: {
+              fillColor: [41, 128, 185],
+              textColor: 255,
+              fontStyle: 'bold',
+              halign: 'center',
+            },
+            alternateRowStyles: {
+              fillColor: [245, 245, 245],
+            },
+            columnStyles: {
+              0: { cellWidth: 22, halign: 'left' },  // Data
+              1: { cellWidth: 20 },  // Entrada
+              2: { cellWidth: 22 },  // Saída Int.
+              3: { cellWidth: 22 },  // Volta Int.
+              4: { cellWidth: 20 },  // Saída
+              5: { cellWidth: 18 },  // Total
+            },
+          });
+
+        } else {
+          doc.setFontSize(11);
+          doc.text('Nenhum registro encontrado para o período selecionado.', margin, yPosition);
+        }
+
+        // Rodapé com data de geração
+        doc.setFontSize(8);
+        doc.setTextColor(128, 128, 128);
+        doc.text(
+          `Gerado em ${new Date().toLocaleString('pt-BR')} - PontoWebDesk`,
+          pageWidth / 2,
+          doc.internal.pageSize.getHeight() - 10,
+          { align: 'center' }
+        );
+
+        // Download
+        const filename = `espelho-ponto-${employeeName.replace(/\s+/g, '-')}-${periodStart}-${periodEnd}.pdf`;
+        doc.save(filename);
+
+        toast.addToast('success', 'PDF exportado com sucesso!');
+      });
+    }).catch((err) => {
+      console.error('Erro ao carregar jsPDF:', err);
+      toast.addToast('error', 'Erro ao gerar PDF. Tente novamente.');
+    });
   };
 
   const handleCloseMonth = async () => {
