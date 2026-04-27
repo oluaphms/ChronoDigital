@@ -30,6 +30,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
   const [showIdentifier, setShowIdentifier] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const handleRoleSelect = (selectedRole: LoginRole) => {
     setRole(selectedRole);
@@ -47,6 +48,10 @@ export const LoginCard: React.FC<LoginCardProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Salvar preferência de "Lembrar-me"
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('pontowebdesk_remember_me', rememberMe ? 'true' : 'false');
+    }
     await onLogin(identifier, password, role);
   };
 
@@ -197,6 +202,23 @@ export const LoginCard: React.FC<LoginCardProps> = ({
                   >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
+                </div>
+
+                {/* Checkbox Lembrar-me */}
+                <div className="flex items-center">
+                  <input
+                    id="remember-me"
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <label
+                    htmlFor="remember-me"
+                    className="ml-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer select-none"
+                  >
+                    Lembrar-me neste dispositivo
+                  </label>
                 </div>
 
                 {/* Erro */}

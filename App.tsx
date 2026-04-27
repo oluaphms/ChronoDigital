@@ -199,7 +199,9 @@ const AppMain: React.FC = () => {
   /** Só bloqueia splash quando há cache de sessão a validar — login pode renderizar logo (sem “Protegendo…” longo). */
   const [isInitialLoading, setIsInitialLoading] = useState(() => {
     if (!checkSupabaseConfigured()) return false;
-    return readCachedUser() != null;
+    // Só mostrar loading inicial se usuário marcou "lembrar-me"
+    const rememberMe = typeof window !== 'undefined' && localStorage.getItem('pontowebdesk_remember_me') === 'true';
+    return rememberMe && readCachedUser() != null;
   });
   const [company, setCompany] = useState<Company | null>(null);
   const [routeLoadAttempt, setRouteLoadAttempt] = useState(0);
@@ -310,6 +312,18 @@ const AppMain: React.FC = () => {
         // Não usar getSession() isolado com timeout curto como “portão”: se IndexedDB/rede atrasarem,
         // a app saía antes de hidratar e o usuário via tela presa / sem perfil em cache.
         // getCurrentUser(): até 2×30s + retry delay — não cortar antes (cold start / deploy).
+        // Verificar se usuário marcou "Lembrar-me" - se não marcou, não restaurar sessão
+        const rememberMe = typeof window !== 'undefined' && localStorage.getItem('pontowebdesk_remember_me') === 'true';
+
+        if (!rememberMe) {
+          console.log('[PontoWebDesk] Sessão não restaurada (remember-me desativado)');
+          if (isMounted) {
+            clearTimeout(timeoutId);
+            setIsInitialLoading(false);
+          }
+          return;
+        }
+
         const INIT_HYDRATE_MS = 68_000;
         const currentUser = await Promise.race([
           authService.getCurrentUser(),
