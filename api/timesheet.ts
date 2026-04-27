@@ -1,13 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
-import { buildTimesheetForPeriod } from '../src/engine/timeEngine'; // supondo função exportada para montar espelho
+import { buildTimesheetForPeriod } from '../src/engine/timeEngine';
+import { getSecureCorsHeaders, checkRateLimit, getClientIP, extractBearerToken, secureCompare } from './_shared/security';
 
-const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+const ALLOWED_METHODS = 'GET, OPTIONS';
 
 export default async function handler(request: Request): Promise<Response> {
+  const corsHeaders = getSecureCorsHeaders(request, {
+    allowMethods: ALLOWED_METHODS,
+    allowHeaders: 'Content-Type, Authorization',
+  });
+
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -15,14 +17,23 @@ export default async function handler(request: Request): Promise<Response> {
     return Response.json({ error: 'Method not allowed' }, { status: 405, headers: corsHeaders });
   }
 
+  // Rate limiting por IP
+  const clientIP = getClientIP(request);
+  const rateLimit = checkRateLimit(clientIP, 'api');
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { error: 'Rate limit exceeded. Try again later.', retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000) },
+      { status: 429, headers: corsHeaders }
+    );
+  }
+
   const apiKey = (process.env.API_KEY || '').trim();
   if (!apiKey) {
     return Response.json({ error: 'API_KEY não configurada.' }, { status: 500, headers: corsHeaders });
   }
 
-  const authHeader = request.headers.get('Authorization') || '';
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  if (token !== apiKey) {
+  const token = extractBearerToken(request);
+  if (!token || !secureCompare(token, apiKey)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401, headers: corsHeaders });
   }
 

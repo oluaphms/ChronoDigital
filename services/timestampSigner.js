@@ -23,7 +23,18 @@
 
 import { createHmac, createHash, randomUUID } from 'node:crypto';
 
-const SECRET_KEY   = (process.env.TIMESTAMP_SECRET_KEY || 'pontowebdesk-default-key-change-in-prod').trim();
+// SEGURANÇA: Não permite fallback - a chave DEVE ser configurada explicitamente
+const SECRET_KEY = (process.env.TIMESTAMP_SECRET_KEY || '').trim();
+
+// Validação em tempo de importação
+if (!SECRET_KEY) {
+  console.error('[SECURITY] TIMESTAMP_SECRET_KEY não configurada. Assinatura de timestamps desativada.');
+}
+
+if (SECRET_KEY && SECRET_KEY.length < 32) {
+  console.warn('[SECURITY] TIMESTAMP_SECRET_KEY muito curta. Recomendado: mínimo 32 caracteres (256 bits).');
+}
+
 const ANCHOR_URL   = (process.env.TIMESTAMP_ANCHOR_URL   || '').trim();
 const ANCHOR_TOKEN = (process.env.TIMESTAMP_ANCHOR_TOKEN || '').trim();
 
@@ -39,8 +50,16 @@ const ANCHOR_TOKEN = (process.env.TIMESTAMP_ANCHOR_TOKEN || '').trim();
  *   action:        string,
  * }} record
  * @returns {string} hex signature
+ * @throws {Error} Se TIMESTAMP_SECRET_KEY não estiver configurada
  */
 export function signRecord(record) {
+  if (!SECRET_KEY) {
+    throw new Error(
+      'TIMESTAMP_SECRET_KEY não configurada. ' +
+      'Configure a variável de ambiente TIMESTAMP_SECRET_KEY com uma chave segura (openssl rand -hex 32).'
+    );
+  }
+
   const payload = [
     record.integrityHash,
     record.createdAt,

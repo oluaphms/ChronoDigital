@@ -217,21 +217,30 @@ async function handleExchange(request: Request): Promise<Response> {
   }
 }
 
-const corsSync: Record<string, string> = {
+/**
+ * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
+ * Estes headers estáticos são mantidos apenas para compatibilidade temporária.
+ */
+const corsSyncDeprecated: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const corsPunch: Record<string, string> = {
+/**
+ * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
+ */
+const corsPunchDeprecated: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-REP-API-Key',
 };
 
-const corsImport: Record<string, string> = {
+/**
+ * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
+ */
+const corsImportDeprecated: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 

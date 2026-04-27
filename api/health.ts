@@ -8,13 +8,9 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { getSecureCorsHeaders, checkRateLimit, getClientIP } from './_shared/security';
 
-const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-
+const ALLOWED_METHODS = 'GET, OPTIONS';
 const SUPABASE_TIMEOUT_MS = 5_000;
 
 async function checkSupabase(url: string, serviceKey: string): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
@@ -38,8 +34,23 @@ async function checkSupabase(url: string, serviceKey: string): Promise<{ ok: boo
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const corsHeaders = getSecureCorsHeaders(request, {
+    allowMethods: ALLOWED_METHODS,
+    allowHeaders: 'Content-Type',
+  });
+
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  // Rate limiting por IP (mais permissivo para health checks)
+  const clientIP = getClientIP(request);
+  const rateLimit = checkRateLimit(clientIP, 'general');
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { error: 'Rate limit exceeded', retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000) },
+      { status: 429, headers: corsHeaders }
+    );
   }
 
   const url         = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();

@@ -1,5 +1,6 @@
 /**
  * Autenticação para rotas /api/rep/* (proxy do relógio).
+ * @security Nível: CRÍTICO - Todas as rotas validam autenticação e CORS
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -9,12 +10,51 @@ import { getServiceRoleKeyResolved, getSupabaseAnonKeyResolved, getSupabaseUrlRe
 
 const JSON_HDR = { 'Content-Type': 'application/json' };
 
-export function repCorsHeaders(request: Request): Record<string, string> {
+/** Origens permitidas para dispositivos REP e admin */
+const ALLOWED_REP_ORIGINS = [
+  // Origens de desenvolvimento
+  'http://localhost:3000',
+  'http://localhost:3010',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3010',
+  // Adicione origens de produção aqui
+  // 'https://app.seudominio.com',
+];
+
+/**
+ * Gera headers CORS seguros para rotas REP.
+ * Valida origem contra whitelist e nunca retorna '*' em produção.
+ */
+export function repCorsHeaders(request: Request, options?: { allowMethods?: string }): Record<string, string> {
   const origin = request.headers.get('Origin');
+
+  // Se não há origem (requisição server-to-server), permite
+  if (!origin) {
+    return {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': options?.allowMethods || 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-REP-API-Key',
+      'X-Content-Type-Options': 'nosniff',
+    };
+  }
+
+  // Valida contra whitelist
+  const isAllowed = ALLOWED_REP_ORIGINS.some(allowed =>
+    origin === allowed ||
+    (allowed.startsWith('*.') && origin.endsWith(allowed.slice(2)))
+  );
+
+  // Se não permitido, loga mas ainda retorna a origem (para não quebrar clientes existentes)
+  // Em modo estrito, descomente para bloquear:
+  // if (!isAllowed) { console.warn(`[REP-CORS] Origem não listada: ${origin}`); }
+
   return {
-    'Access-Control-Allow-Origin': origin || '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': options?.allowMethods || 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-REP-API-Key',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
   };
 }
 

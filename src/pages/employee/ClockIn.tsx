@@ -19,6 +19,10 @@ import {
   queryGeolocationPermission,
   logGeolocationDebug,
   watchGeoPosition,
+  getAccuracyStatusMessage,
+  getLocationFromCache,
+  saveLocationToCache,
+  isLocationAccurateEnough,
   type GeoPosition,
   type GeolocationFailureReason,
   type GeoPermissionState,
@@ -97,7 +101,11 @@ const EmployeeClockIn: React.FC = () => {
   /** Cartão cujos botões de batida estão visíveis (null = só ícones de comprovação) */
   const [expandedPunchMode, setExpandedPunchMode] = useState<VerificationMode | null>(null);
   /** Feedback de GPS para o usuário */
-  const [geoLiveStatus, setGeoLiveStatus] = useState<'idle' | 'obtaining' | 'captured' | 'failed'>('idle');
+  const [geoLiveStatus, setGeoLiveStatus] = useState<'idle' | 'obtaining' | 'capturing' | 'captured' | 'failed'>('idle');
+  /** Status detalhado da precisão */
+  const [accuracyStatus, setAccuracyStatus] = useState<{ text: string; color: 'success' | 'warning' | 'error' } | null>(null);
+  /** Número de amostras coletadas (para UX) */
+  const [samplesCollected, setSamplesCollected] = useState(0);
   /** Modal de comprovação (GPS + câmera / digital) */
   const [proofModalOpen, setProofModalOpen] = useState(false);
   const [pendingLogType, setPendingLogType] = useState<LogType | null>(null);
@@ -221,55 +229,113 @@ const EmployeeClockIn: React.FC = () => {
   const retryGps = useCallback(async () => {
     setGeo(null);
     setGpsFailReason(null);
-    setGeoLiveStatus('obtaining');
+    setAccuracyStatus(null);
+    setSamplesCollected(0);
+    setGeoLiveStatus('capturing');
     setGpsLoading(true);
     logGeolocationDebug('retryGps:start', {});
+
     const perm = await queryGeolocationPermission();
     setGeoPermissionState(perm);
     logGeolocationDebug('retryGps:permission', { permission: perm });
+
+    // Mostra progresso simulado das amostras
+    const progressInterval = window.setInterval(() => {
+      setSamplesCollected(prev => Math.min(prev + 1, 3));
+    }, 800);
+
     const r = await getCurrentLocationRobustResult({ forceFresh: true });
+
+    clearInterval(progressInterval);
+    setSamplesCollected(0);
     setGpsLoading(false);
+
     if (r.ok === false) {
       setGeo(null);
       setGpsFailReason(r.reason);
       setGeoLiveStatus('failed');
+      setAccuracyStatus(null);
       logGeolocationDebug('retryGps:fail', { reason: r.reason, apiMessage: r.apiMessage });
       return;
     }
+
     setGeo(r.position);
     setGpsFailReason(null);
     setGeoLiveStatus('captured');
-    logGeolocationDebug('retryGps:ok', { position: r.position });
+
+    // Atualiza status de precisão
+    const status = getAccuracyStatusMessage(r.position.accuracy);
+    setAccuracyStatus(status);
+
+    // Salva no cache
+    saveLocationToCache(r.position);
+
+    logGeolocationDebug('retryGps:ok', {
+      position: r.position,
+      samples: r.position.sampleCount,
+    });
   }, []);
 
   useEffect(() => {
     if (!proofModalOpen) return;
     let cancelled = false;
-    setGeoLiveStatus('obtaining');
+    setGeoLiveStatus('capturing');
+    setAccuracyStatus(null);
+    setSamplesCollected(0);
+
     (async () => {
       setGpsLoading(true);
       setGpsFailReason(null);
       setGeo(null);
+
       const perm = await queryGeolocationPermission();
       if (!cancelled) {
         setGeoPermissionState(perm);
         logGeolocationDebug('modal:permission', { permission: perm });
       }
+
+      // Mostra progresso simulado das amostras
+      const progressInterval = window.setInterval(() => {
+        if (!cancelled) {
+          setSamplesCollected(prev => Math.min(prev + 1, 3));
+        }
+      }, 800);
+
       const r = await getCurrentLocationRobustResult();
+
+      clearInterval(progressInterval);
       if (cancelled) return;
+
+      setSamplesCollected(0);
       setGpsLoading(false);
+
       if (r.ok === false) {
         setGeo(null);
         setGpsFailReason(r.reason);
         setGeoLiveStatus('failed');
+        setAccuracyStatus(null);
         logGeolocationDebug('modal:initial:fail', { reason: r.reason, apiMessage: r.apiMessage });
         return;
       }
+
       setGeo(r.position);
       setGpsFailReason(null);
       setGeoLiveStatus('captured');
+
+      // Atualiza status de precisão
+      const status = getAccuracyStatusMessage(r.position.accuracy);
+      setAccuracyStatus(status);
+
+      // Salva no cache
+      saveLocationToCache(r.position);
+
+      logGeolocationDebug('modal:initial:ok', {
+        position: r.position,
+        samples: r.position.sampleCount,
+      });
     })();
 
+    // Watch position para atualizações contínuas (menos frequentes)
     const stopWatch = watchGeoPosition(
       (r) => {
         if (cancelled) return;
@@ -277,9 +343,11 @@ const EmployeeClockIn: React.FC = () => {
           setGeo(r.position);
           setGpsFailReason(null);
           setGeoLiveStatus('captured');
+          const status = getAccuracyStatusMessage(r.position.accuracy);
+          setAccuracyStatus(status);
         }
       },
-      { minIntervalMs: 3000, timeout: 25000, maximumAge: 0, enableHighAccuracy: true },
+      { minIntervalMs: 5000, timeout: 25000, maximumAge: 5000, enableHighAccuracy: true },
     );
 
     return () => {
@@ -891,16 +959,50 @@ const EmployeeClockIn: React.FC = () => {
                   <MapPin className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
                   <div className="min-w-0 space-y-0.5">
                     <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Localização</p>
-                    {gpsLoading && (
+                    {/* Status de captura em progresso */}
+                    {gpsLoading && geoLiveStatus === 'capturing' && (
+                      <div className="flex items-center gap-2" role="status">
+                        <div className="flex gap-0.5">
+                          {[1, 2, 3].map((dot) => (
+                            <div
+                              key={dot}
+                              className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                                samplesCollected >= dot
+                                  ? 'bg-indigo-500'
+                                  : 'bg-slate-300 dark:bg-slate-600'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <p className="text-xs text-indigo-600 dark:text-indigo-400">
+                          Capturando {samplesCollected > 0 ? `(${samplesCollected}/3 amostras)` : '...'}
+                        </p>
+                      </div>
+                    )}
+                    {gpsLoading && geoLiveStatus === 'obtaining' && (
                       <p className="text-xs text-slate-500" role="status">
-                        Obtendo…
+                        Obtendo localização…
                       </p>
                     )}
-                    {!gpsLoading && geoLiveStatus === 'captured' && geo && (
-                      <p className="text-xs text-emerald-700 dark:text-emerald-300" role="status">
-                        OK (~{Math.round(geo.accuracy)} m)
+                    {/* Status capturado com precisão */}
+                    {!gpsLoading && geoLiveStatus === 'captured' && geo && accuracyStatus && (
+                      <p
+                        className={`text-xs font-medium ${
+                          accuracyStatus.color === 'success'
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : accuracyStatus.color === 'warning'
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-red-600 dark:text-red-400'
+                        }`}
+                        role="status"
+                      >
+                        {accuracyStatus.text}
+                        {geo.sampleCount && geo.sampleCount > 1 && (
+                          <span className="text-slate-400 ml-1">({geo.sampleCount} amostras)</span>
+                        )}
                       </p>
                     )}
+                    {/* Status de falha */}
                     {!gpsLoading && geoLiveStatus === 'failed' && gpsFailReason && (
                       <p className="text-xs text-red-600 dark:text-red-400" role="status">
                         Sem posição
@@ -914,9 +1016,21 @@ const EmployeeClockIn: React.FC = () => {
                   onClick={() => void retryGps()}
                   className="shrink-0 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 disabled:opacity-50"
                 >
-                  Atualizar
+                  {gpsLoading ? 'Capturando…' : 'Atualizar'}
                 </button>
               </div>
+
+              {/* Barra de progresso durante captura */}
+              {gpsLoading && geoLiveStatus === 'capturing' && (
+                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1 overflow-hidden">
+                  <div
+                    className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min((samplesCollected / 3) * 100, 100)}%` }}
+                  />
+                </div>
+              )}
+
+              {/* Alerta de HTTPS */}
               {typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost' && (
                 <p className="text-[11px] text-amber-700 dark:text-amber-300">
                   {verificationMode === 'digital' && 'Use HTTPS para GPS e biometria (ou localhost).'}
@@ -924,11 +1038,24 @@ const EmployeeClockIn: React.FC = () => {
                   {verificationMode === 'manual' && 'Use HTTPS para GPS (ou localhost).'}
                 </p>
               )}
+
+              {/* Permissão negada */}
               {geoPermissionState === 'denied' && (
                 <p className="text-xs text-slate-600 dark:text-slate-400" role="status">
                   Permissão de localização negada no navegador.
                 </p>
               )}
+
+              {/* Alerta de precisão baixa */}
+              {!gpsLoading && geoLiveStatus === 'captured' && geo && geo.accuracy > 100 && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 p-2" role="alert">
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    Precisão baixa detectada. Considere sair ao ar livre ou aguardar melhor sinal GPS.
+                  </p>
+                </div>
+              )}
+
+              {/* Erro de localização */}
               {!gpsLoading && geoLiveStatus === 'failed' && gpsFailReason && (
                 <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/80 dark:bg-red-950/30 p-2.5 space-y-1" role="alert">
                   <p className="text-xs font-medium text-red-800 dark:text-red-200">
@@ -941,6 +1068,8 @@ const EmployeeClockIn: React.FC = () => {
                   )}
                 </div>
               )}
+
+              {/* Fallback para manual */}
               {canUseManualPunch && !manualBypassActive && geoLiveStatus === 'failed' && (
                 <button
                   type="button"
@@ -951,6 +1080,8 @@ const EmployeeClockIn: React.FC = () => {
                   Sem GPS — continuar em manual
                 </button>
               )}
+
+              {/* Mapa com localização */}
               {geo && geo.latitude != null && geo.longitude != null && (
                 <div className="h-28 sm:h-32 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600 bg-slate-100 dark:bg-slate-800">
                   <Suspense

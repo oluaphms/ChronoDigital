@@ -4,11 +4,9 @@
  * - POST /api/employee-invite/accept  (via rewrite legada /api/accept-employee-invite)
  */
 
-const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+import { getSecureCorsHeaders, checkRateLimit, getClientIP } from './_shared/security';
+
+const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
 type InviteRow = {
   id: string;
@@ -20,9 +18,25 @@ type InviteRow = {
 };
 
 export default async function handler(request: Request): Promise<Response> {
+  const corsHeaders = getSecureCorsHeaders(request, {
+    allowMethods: ALLOWED_METHODS,
+    allowHeaders: 'Content-Type, Authorization',
+  });
+
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
+
+  // Rate limiting por IP (mais restritivo para convites)
+  const clientIP = getClientIP(request);
+  const rateLimit = checkRateLimit(clientIP, 'login');
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { error: 'Muitas tentativas. Aguarde alguns minutos.', code: 'RATE_LIMITED', retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000) },
+      { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
   const pathname = new URL(request.url).pathname;
   const isAccept = /\/api\/employee-invite\/accept\/?$/.test(pathname);
 

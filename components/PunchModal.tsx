@@ -6,6 +6,13 @@ import { Button, LoadingState, Badge } from './UI';
 import { PontoService } from '../services/pontoService';
 import { BiometricService } from '../services/biometricService';
 import { GeocodingService } from '../services/geocodingService';
+import {
+  getCurrentLocationRobustResult,
+  geolocationReasonMessage,
+  getAccuracyStatusMessage,
+  saveLocationToCache,
+  type GeoPosition,
+} from '../src/services/locationService';
 import LocationMap from './LocationMap';
 
 interface PunchModalProps {
@@ -39,6 +46,10 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
   // Geocoding states
   const [addressInfo, setAddressInfo] = useState<string | null>(null);
   const [addressLoading, setAddressLoading] = useState(false);
+
+  // Geolocation sampling states
+  const [samplesCollected, setSamplesCollected] = useState(0);
+  const [accuracyStatus, setAccuracyStatus] = useState<{ text: string; color: 'success' | 'warning' | 'error' } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -133,34 +144,61 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const requestLocation = () => {
+  const requestLocation = async () => {
     setError(null);
     setIsLocationLoading(true);
     setAddressInfo(null);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
-        setLocation(loc);
-        setIsLocationLoading(false);
+    setAccuracyStatus(null);
+    setSamplesCollected(0);
 
-        // Geocoding reverso automático
-        setAddressLoading(true);
-        try {
-          const geoResult = await GeocodingService.reverseGeocode(loc.lat, loc.lng);
-          if (geoResult) {
-            setAddressInfo(GeocodingService.formatShortAddress(geoResult));
-          }
-        } catch (err) {
-          console.warn('Geocoding falhou:', err);
-        } finally {
-          setAddressLoading(false);
-        }
-      },
-      (err) => {
+    // Mostra progresso das amostras
+    const progressInterval = window.setInterval(() => {
+      setSamplesCollected(prev => Math.min(prev + 1, 3));
+    }, 800);
+
+    try {
+      const result = await getCurrentLocationRobustResult({ forceFresh: true });
+
+      clearInterval(progressInterval);
+      setSamplesCollected(0);
+
+      if (!result.ok) {
         setIsLocationLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
+        setError(geolocationReasonMessage(result.reason));
+        console.warn('Falha ao obter localização:', result.reason);
+        return;
+      }
+
+      const pos = result.position;
+      const loc = { lat: pos.latitude, lng: pos.longitude, accuracy: pos.accuracy };
+      setLocation(loc);
+      setIsLocationLoading(false);
+
+      // Atualiza status de precisão
+      const status = getAccuracyStatusMessage(pos.accuracy);
+      setAccuracyStatus(status);
+
+      // Salva no cache
+      saveLocationToCache(pos);
+
+      // Geocoding reverso automático
+      setAddressLoading(true);
+      try {
+        const geoResult = await GeocodingService.reverseGeocode(loc.lat, loc.lng);
+        if (geoResult) {
+          setAddressInfo(GeocodingService.formatShortAddress(geoResult));
+        }
+      } catch (err) {
+        console.warn('Geocoding falhou:', err);
+      } finally {
+        setAddressLoading(false);
+      }
+    } catch (err) {
+      clearInterval(progressInterval);
+      setSamplesCollected(0);
+      setIsLocationLoading(false);
+      setError('Não foi possível obter a localização. Verifique se o GPS está ativado.');
+    }
   };
 
   useEffect(() => {
@@ -812,85 +850,126 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
                     </div>
                   )}
 
-                  {/* ============================================ */}
-                  {/* GPS METHOD - COM MAPA E GEOCODING */}
-                  {/* ============================================ */}
-                  {method === PunchMethod.GPS && (
-                    <div className="w-full h-full relative overflow-hidden">
-                      {location ? (
-                        <>
-                          {/* Mapa Leaflet */}
-                          <LocationMap
-                            lat={location.lat}
-                            lng={location.lng}
-                            accuracy={location.accuracy}
-                          />
-                          {/* Botão para atualizar GPS */}
-                          <button
-                            type="button"
-                            onClick={requestLocation}
-                            disabled={isLocationLoading}
-                            className="absolute top-4 right-4 z-[600] inline-flex items-center justify-center w-9 h-9 rounded-full bg-slate-900/80 text-slate-200 hover:bg-slate-800 disabled:opacity-60 border border-white/10 shadow-lg"
-                            aria-label="Atualizar localização GPS"
-                          >
-                            <RefreshCw size={16} className={isLocationLoading ? 'animate-spin' : ''} />
-                          </button>
-                          {/* Overlay de informações sobre o mapa */}
-                          <div className="absolute top-0 left-0 right-0 p-4 z-[500]">
-                            <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl px-5 py-3 border border-white/10">
-                              <div className="flex items-center gap-2 mb-1">
-                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                                <span className="text-green-400 text-[10px] font-bold uppercase tracking-widest">
-                                  Sinal GPS Validado
+                {/* ============================================ */}
+                {/* GPS METHOD - COM MAPA E GEOCODING */}
+                {/* ============================================ */}
+                {method === PunchMethod.GPS && (
+                  <div className="w-full h-full relative overflow-hidden">
+                    {location ? (
+                      <>
+                        {/* Mapa Leaflet */}
+                        <LocationMap
+                          lat={location.lat}
+                          lng={location.lng}
+                          accuracy={location.accuracy}
+                        />
+                        {/* Botão para atualizar GPS */}
+                        <button
+                          type="button"
+                          onClick={() => void requestLocation()}
+                          disabled={isLocationLoading}
+                          className="absolute top-4 right-4 z-[600] inline-flex items-center justify-center w-9 h-9 rounded-full bg-slate-900/80 text-slate-200 hover:bg-slate-800 disabled:opacity-60 border border-white/10 shadow-lg"
+                          aria-label="Atualizar localização GPS"
+                        >
+                          <RefreshCw size={16} className={isLocationLoading ? 'animate-spin' : ''} />
+                        </button>
+                        {/* Overlay de informações sobre o mapa */}
+                        <div className="absolute top-0 left-0 right-0 p-4 z-[500]">
+                          <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl px-5 py-3 border border-white/10">
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className={`w-2 h-2 rounded-full animate-pulse ${
+                                accuracyStatus?.color === 'success' ? 'bg-green-500' :
+                                accuracyStatus?.color === 'warning' ? 'bg-amber-500' : 'bg-red-500'
+                              }`}></div>
+                              <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                                accuracyStatus?.color === 'success' ? 'text-green-400' :
+                                accuracyStatus?.color === 'warning' ? 'text-amber-400' : 'text-red-400'
+                              }`}>
+                                {accuracyStatus?.color === 'success' ? 'Sinal GPS Validado' :
+                                 accuracyStatus?.color === 'warning' ? 'Precisão Moderada' : 'Precisão Baixa'}
+                              </span>
+                            </div>
+                            <p className="text-white text-xs font-medium">
+                              {accuracyStatus ? accuracyStatus.text : `Precisão: ~${Math.round(location.accuracy)}m`}
+                            </p>
+                          </div>
+                        </div>
+                        {/* Endereço no rodapé do mapa */}
+                        <div className="absolute bottom-0 left-0 right-0 p-4 z-[500]">
+                          <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl px-5 py-3 border border-white/10">
+                            <div className="flex items-center gap-2">
+                              <MapPinned size={14} className="text-indigo-400 shrink-0" />
+                              {addressLoading ? (
+                                <div className="flex items-center gap-2">
+                                  <Loader2 size={12} className="animate-spin text-indigo-400" />
+                                  <span className="text-slate-400 text-xs">Identificando endereço...</span>
+                                </div>
+                              ) : addressInfo ? (
+                                <span className="text-white text-xs font-medium leading-tight">{addressInfo}</span>
+                              ) : (
+                                <span className="text-slate-400 text-xs">
+                                  {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
                                 </span>
-                              </div>
-                              <p className="text-white text-xs font-medium">
-                                Precisão: ~{Math.round(location.accuracy)}m
-                              </p>
+                              )}
                             </div>
                           </div>
-                          {/* Endereço no rodapé do mapa */}
-                          <div className="absolute bottom-0 left-0 right-0 p-4 z-[500]">
-                            <div className="bg-slate-900/80 backdrop-blur-xl rounded-2xl px-5 py-3 border border-white/10">
-                              <div className="flex items-center gap-2">
-                                <MapPinned size={14} className="text-indigo-400 shrink-0" />
-                                {addressLoading ? (
-                                  <div className="flex items-center gap-2">
-                                    <Loader2 size={12} className="animate-spin text-indigo-400" />
-                                    <span className="text-slate-400 text-xs">Identificando endereço...</span>
-                                  </div>
-                                ) : addressInfo ? (
-                                  <span className="text-white text-xs font-medium leading-tight">{addressInfo}</span>
-                                ) : (
-                                  <span className="text-slate-400 text-xs">
-                                    {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
-                                  </span>
-                                )}
-                              </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-white bg-indigo-950 p-10 text-center relative overflow-hidden">
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-500/10 via-transparent to-transparent"></div>
+                        <div className="w-24 h-24 bg-indigo-500/10 border border-indigo-500/20 rounded-full flex items-center justify-center mb-6">
+                          <Navigation
+                            size={48}
+                            className={`text-indigo-400 ${isLocationLoading ? 'animate-spin' : ''}`}
+                            style={{ animationDuration: '3s' }}
+                          />
+                        </div>
+                        <h4 className="text-xl font-bold mb-2 tracking-tight">
+                          {isLocationLoading ? 'Capturando localização...' : 'Localizando...'}
+                        </h4>
+
+                        {/* Progresso das amostras */}
+                        {isLocationLoading && (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-center gap-2">
+                              {[1, 2, 3].map((dot) => (
+                                <div
+                                  key={dot}
+                                  className={`w-2 h-2 rounded-full transition-colors ${
+                                    samplesCollected >= dot
+                                      ? 'bg-green-500'
+                                      : 'bg-indigo-600'
+                                  }`}
+                                />
+                              ))}
                             </div>
+                            <div className="w-32 bg-indigo-800 rounded-full h-1 overflow-hidden">
+                              <div
+                                className="bg-green-500 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${Math.min((samplesCollected / 3) * 100, 100)}%` }}
+                              />
+                            </div>
+                            <p className="text-indigo-400 text-xs font-medium">
+                              {samplesCollected > 0
+                                ? `Coletando amostras (${samplesCollected}/3)...`
+                                : 'Sincronizando satélites...'}
+                            </p>
                           </div>
-                        </>
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-white bg-indigo-950 p-10 text-center relative overflow-hidden">
-                          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-500/10 via-transparent to-transparent"></div>
-                          <div className="w-24 h-24 bg-indigo-500/10 border border-indigo-500/20 rounded-full flex items-center justify-center mb-6 animate-pulse">
-                            <Navigation
-                              size={48}
-                              className="text-indigo-400 animate-spin"
-                              style={{ animationDuration: '3s' }}
-                            />
-                          </div>
-                          <h4 className="text-xl font-bold mb-2 tracking-tight">Localizando...</h4>
+                        )}
+
+                        {!isLocationLoading && (
                           <div className="flex items-center gap-2 text-indigo-400">
                             <Loader2 size={16} className="animate-spin" />
                             <span className="text-xs font-bold uppercase tracking-widest">
                               Sincronizando satélites...
                             </span>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                   {/* ============================================ */}
                   {/* BIOMETRIC METHOD */}
