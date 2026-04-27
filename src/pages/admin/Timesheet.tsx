@@ -32,6 +32,14 @@ import {
 import { enumerateLocalCalendarDays } from '../../utils/localDateTimeToIso';
 import { sameUserId } from '../../utils/userIdMatch';
 import { resolvePunchOrigin } from '../../utils/punchOrigin';
+import {
+  generateProfessionalTimesheetPDF,
+  convertDayMirrorToRecords,
+  calculateHoursSummary,
+  generateDocumentHash,
+  type CompanyData,
+  type EmployeeData,
+} from '../../services/professionalPDF.service';
 
 /** Filtros do espelho por utilizador — sobrevivem a novo login na mesma aba/navegador. */
 function adminTimesheetFiltersKey(userId: string) {
@@ -381,157 +389,68 @@ const AdminTimesheet: React.FC = () => {
     toast.addToast('info', 'Arquivo gerado no formato CSV (compatível com Excel).');
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!filterUserId || !periodValid) {
       toast.addToast('error', 'Selecione um colaborador e período válido.');
       return;
     }
 
-    // Importar jsPDF dinamicamente
-    import('jspdf').then(({ jsPDF }) => {
-      import('jspdf-autotable').then(() => {
-        const doc = new jsPDF({
-          orientation: 'landscape', // Paisagem = mais espaço horizontal
-          unit: 'mm',
-          format: 'a4',
-        });
+    try {
+      setLoadingEspelho(true);
 
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const margin = 10;
-        let yPosition = margin;
+      const employee = employees.find(e => e.id === filterUserId);
+      const dept = departments.find(d => d.id === employee?.department_id);
 
-        // Dados do colaborador
-        const employee = employees.find(e => e.id === filterUserId);
-        const employeeName = employee?.nome || filterUserId;
+      // Dados da empresa
+      const companyData: CompanyData = {
+        nome: user?.nome || user?.company_name || 'Empresa',
+        cnpj: user?.company_cnpj,
+        endereco: user?.company_address,
+      };
 
-        // CABEÇALHO - Cor do sistema (roxo/indigo)
-        doc.setFillColor(79, 70, 229); // indigo-600
-        doc.rect(0, 0, pageWidth, 30, 'F');
+      // Dados do funcionário
+      const employeeData: EmployeeData = {
+        id: filterUserId,
+        nome: employee?.nome || 'Funcionário',
+        cpf: employee?.cpf,
+        pis: employee?.pis,
+        matricula: employee?.matricula || employee?.id,
+        cargo: employee?.role || employee?.cargo,
+        departamento: dept?.name || employee?.department_id,
+      };
 
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(20);
-        doc.setFont('helvetica', 'bold');
-        doc.text('PontoWebDesk', pageWidth / 2, 15, { align: 'center' });
+      // Converter espelho para registros profissionais
+      const records = convertDayMirrorToRecords(empMirror, filterUserId);
 
-        doc.setFontSize(11);
-        doc.setFont('helvetica', 'normal');
-        doc.text('Sistema de Registro de Ponto', pageWidth / 2, 23, { align: 'center' });
+      // Calcular resumo de horas
+      const summary = calculateHoursSummary(records);
 
-        yPosition = 40;
+      // Gerar hash do documento
+      const hashDocumento = generateDocumentHash(records, companyData, employeeData);
 
-        // Título do relatório
-        doc.setTextColor(33, 37, 41);
-        doc.setFontSize(14);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Espelho de Ponto', margin, yPosition);
-        yPosition += 8;
-
-        // Dados do colaborador e período
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Colaborador: ${employeeName}`, margin, yPosition);
-        yPosition += 6;
-        doc.text(`Período: ${periodStart} a ${periodEnd}`, margin, yPosition);
-        yPosition += 6;
-        doc.text(`Empresa: ${user?.nome || user?.companyId || ''}`, margin, yPosition);
-        yPosition += 10;
-
-        // Linha separadora
-        doc.setDrawColor(200, 200, 200);
-        doc.line(margin, yPosition, pageWidth - margin, yPosition);
-        yPosition += 8;
-
-        // TABELA DO ESPELHO DE PONTO (formato correto)
-        if (empMirror && empMirror.size > 0) {
-          // Converter o Map para array e ordenar por data
-          const mirrorEntries = Array.from(empMirror.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-
-          const tableData = mirrorEntries.map(([dateKey, day]) => {
-            // Formatar data para pt-BR (YYYY-MM-DD -> DD/MM/YYYY)
-            const [year, month, dayNum] = dateKey.split('-');
-            const formattedDate = `${dayNum}/${month}/${year}`;
-
-            // Formatar horários
-            const entrada = day.entradaInicio || '----';
-            const saidaInt = day.saidaIntervalo || 'Folga';
-            const voltaInt = day.voltaIntervalo || 'Folga';
-            const saida = day.saidaFinal || '----';
-
-            // Calcular total em formato HH:MM
-            let total = '----';
-            if (day.workedMinutes && day.workedMinutes > 0) {
-              const hours = Math.floor(day.workedMinutes / 60);
-              const mins = day.workedMinutes % 60;
-              total = `${hours}:${String(mins).padStart(2, '0')}`;
-            }
-
-            // Detectar se é folga (nenhuma batida)
-            const isFolga = !day.entradaInicio && !day.saidaFinal;
-
-            if (isFolga) {
-              return [formattedDate, 'Folga', 'Folga', 'Folga', 'Folga', '----'];
-            }
-
-            return [formattedDate, entrada, saidaInt, voltaInt, saida, total];
-          });
-
-          (doc as any).autoTable({
-            startY: yPosition,
-            margin: { left: margin, right: margin },
-            head: [['Data', 'Entrada', 'Saída Int.', 'Volta Int.', 'Saída', 'Total']],
-            body: tableData,
-            styles: {
-              fontSize: 8,
-              cellPadding: 2,
-              overflow: 'linebreak',
-              halign: 'center',
-            },
-            headStyles: {
-              fillColor: [79, 70, 229], // indigo-600 - cor do sistema
-              textColor: 255,
-              fontStyle: 'bold',
-              halign: 'center',
-              fontSize: 9,
-            },
-            alternateRowStyles: {
-              fillColor: [250, 250, 252], // slate-50
-            },
-            columnStyles: {
-              0: { cellWidth: 22, halign: 'center', fontStyle: 'bold' },  // Data
-              1: { cellWidth: 20, halign: 'center' },  // Entrada
-              2: { cellWidth: 25, halign: 'center' },  // Saída Int.
-              3: { cellWidth: 25, halign: 'center' },  // Volta Int.
-              4: { cellWidth: 20, halign: 'center' },  // Saída
-              5: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },  // Total
-            },
-            tableWidth: 'wrap',
-          });
-
-        } else {
-          doc.setFontSize(11);
-          doc.text('Nenhum registro encontrado para o período selecionado.', margin, yPosition);
-        }
-
-        // Rodapé com data de geração
-        doc.setFontSize(8);
-        doc.setTextColor(128, 128, 128);
-        doc.text(
-          `Gerado em ${new Date().toLocaleString('pt-BR')} - PontoWebDesk`,
-          pageWidth / 2,
-          doc.internal.pageSize.getHeight() - 10,
-          { align: 'center' }
-        );
-
-        // Download
-        const filename = `espelho-ponto-${employeeName.replace(/\s+/g, '-')}-${periodStart}-${periodEnd}.pdf`;
-        doc.save(filename);
-
-        toast.addToast('success', 'PDF exportado com sucesso!');
+      // Gerar PDF profissional
+      await generateProfessionalTimesheetPDF({
+        company: companyData,
+        employee: employeeData,
+        periodo: {
+          inicio: periodStart,
+          fim: periodEnd,
+        },
+        records,
+        summary,
+        hashDocumento,
+        versaoSistema: '1.4.0',
+        dataGeracao: new Date().toLocaleString('pt-BR'),
+        emitidoPor: user?.nome || 'Sistema',
       });
-    }).catch((err) => {
-      console.error('Erro ao carregar jsPDF:', err);
-      toast.addToast('error', 'Erro ao gerar PDF. Tente novamente.');
-    });
+
+      toast.addToast('success', 'PDF profissional exportado com sucesso!');
+    } catch (err) {
+      console.error('Erro ao gerar PDF:', err);
+      toast.addToast('error', 'Erro ao gerar PDF profissional. Tente novamente.');
+    } finally {
+      setLoadingEspelho(false);
+    }
   };
 
   const handleCloseMonth = async () => {

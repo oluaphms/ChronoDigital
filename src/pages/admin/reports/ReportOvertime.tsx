@@ -1,12 +1,24 @@
+// ============================================================
+// Relatório de Horas Extras - Padrão Profissional
+// ============================================================
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { ArrowLeft, TrendingUp } from 'lucide-react';
+import { ArrowLeft, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
 import { useCurrentUser } from '../../../hooks/useCurrentUser';
 import PageHeader from '../../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../../services/supabaseClient';
 import { processEmployeeMonth } from '../../../engine/timeEngine';
 import { LoadingState } from '../../../../components/UI';
 import { adminReportCacheKey, queryCache, TTL } from '../../../services/queryCache';
+import {
+  KPICards,
+  FiltersBar,
+  DataTable,
+  type KPIData,
+  type FilterConfig,
+  type Column,
+} from '../../../components/reports';
 
 interface EmployeeOption {
   id: string;
@@ -22,7 +34,7 @@ interface DailyOvertimeRow {
   isHolidayOrOff: boolean;
 }
 
-interface Row {
+interface OvertimeRow {
   employeeId: string;
   employeeName: string;
   departmentId?: string;
@@ -37,25 +49,32 @@ interface Row {
 const ReportOvertime: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
-  const [filterUserId, setFilterUserId] = useState('');
-  const [filterDept, setFilterDept] = useState('');
+  const [departments, setDepartments] = useState<Map<string, string>>(new Map());
+  const [rows, setRows] = useState<OvertimeRow[]>([]);
+  const [loadingData, setLoadingData] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // Filtros
   const [month, setMonth] = useState(() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loadingData, setLoadingData] = useState(false);
-  const [expandedEmployeeId, setExpandedEmployeeId] = useState<string | null>(null);
+  const [filterUserId, setFilterUserId] = useState('');
+  const [filterDept, setFilterDept] = useState('');
+  const [minHours, setMinHours] = useState('');
 
+  // Carregar funcionários
   useEffect(() => {
     if (!user?.companyId || !isSupabaseConfigured()) return;
+    const cid = user.companyId!;
+
     (async () => {
-      const cid = user.companyId!;
       const list = (await queryCache.getOrFetch(
         `users:${cid}`,
         () => db.select('users', [{ column: 'company_id', operator: 'eq', value: cid }]) as Promise<any[]>,
         TTL.NORMAL,
       )) as any[];
+
       setEmployees(
         (list ?? []).map((u: any) => ({
           id: u.id,
@@ -63,22 +82,31 @@ const ReportOvertime: React.FC = () => {
           department_id: u.department_id || '',
         })),
       );
+
+      // Carregar departamentos
+      const depts = (await db.select('departments', [{ column: 'company_id', operator: 'eq', value: cid }])) as any[];
+      const deptMap = new Map<string, string>();
+      (depts ?? []).forEach((d: any) => deptMap.set(d.id, d.name));
+      setDepartments(deptMap);
     })();
   }, [user?.companyId]);
 
+  // Calcular horas extras
   useEffect(() => {
     if (!user?.companyId || !isSupabaseConfigured() || employees.length === 0) return;
     const cid = user.companyId!;
     const [y, m] = month.split('-').map(Number);
     let cancelled = false;
     setLoadingData(true);
+
     const cacheKey = adminReportCacheKey(cid, 'overtime', month);
+
     (async () => {
       try {
         const result = await queryCache.getOrFetch(
           cacheKey,
           async () => {
-            const out: Row[] = [];
+            const out: OvertimeRow[] = [];
             for (const emp of employees) {
               try {
                 const days = await processEmployeeMonth(emp.id, cid, y, m);
@@ -87,6 +115,7 @@ const ReportOvertime: React.FC = () => {
                 let workDays = 0;
                 let overtimeDays = 0;
                 const daily: DailyOvertimeRow[] = [];
+
                 days.forEach((d) => {
                   if ((d.daily.total_worked_minutes ?? 0) > 0) workDays += 1;
                   if (d.overtime) {
@@ -104,6 +133,7 @@ const ReportOvertime: React.FC = () => {
                     });
                   }
                 });
+
                 out.push({
                   employeeId: emp.id,
                   employeeName: emp.nome,
@@ -116,51 +146,225 @@ const ReportOvertime: React.FC = () => {
                   daily: daily.sort((a, b) => a.date.localeCompare(b.date)),
                 });
               } catch {
-                out.push({
-                  employeeId: emp.id,
-                  employeeName: emp.nome,
-                  departmentId: emp.department_id || '',
-                  overtime50: 0,
-                  overtime100: 0,
-                  total: 0,
-                  workDays: 0,
-                  overtimeDays: 0,
-                  daily: [],
-                });
+                // Ignora erros individuais
               }
             }
             return out;
           },
           TTL.STATIC,
         );
+
         if (!cancelled) setRows(result);
       } finally {
         if (!cancelled) setLoadingData(false);
       }
     })();
+
     return () => { cancelled = true; };
   }, [user?.companyId, month, employees]);
 
+  // Dados filtrados
   const filteredRows = useMemo(() => {
     return rows
       .filter((r) => (!filterUserId || r.employeeId === filterUserId))
       .filter((r) => (!filterDept || r.departmentId === filterDept))
+      .filter((r) => (!minHours || r.total >= parseFloat(minHours)))
       .sort((a, b) => b.total - a.total);
-  }, [rows, filterUserId, filterDept]);
+  }, [rows, filterUserId, filterDept, minHours]);
 
-  const summary = useMemo(() => {
+  // KPIs
+  const kpis: KPIData[] = useMemo(() => {
     const total50 = filteredRows.reduce((s, r) => s + r.overtime50, 0);
     const total100 = filteredRows.reduce((s, r) => s + r.overtime100, 0);
     const totalHours = total50 + total100;
     const employeesWithOvertime = filteredRows.filter((r) => r.total > 0).length;
     const overtimeDays = filteredRows.reduce((s, r) => s + r.overtimeDays, 0);
-    return { total50, total100, totalHours, employeesWithOvertime, overtimeDays };
+
+    return [
+      {
+        id: 'total',
+        label: 'Total Horas Extras',
+        value: totalHours.toFixed(2),
+        unit: 'h',
+        color: 'info',
+        icon: 'up',
+      },
+      {
+        id: 'he50',
+        label: 'Horas Extras 50%',
+        value: total50.toFixed(2),
+        unit: 'h',
+        color: 'warning',
+        subtitle: 'Dias úteis',
+      },
+      {
+        id: 'he100',
+        label: 'Horas Extras 100%',
+        value: total100.toFixed(2),
+        unit: 'h',
+        color: 'danger',
+        subtitle: 'Dom/Fer/Folga',
+      },
+      {
+        id: 'employees',
+        label: 'Colaboradores com HE',
+        value: employeesWithOvertime,
+        color: 'success',
+        subtitle: `${((employeesWithOvertime / filteredRows.length) * 100).toFixed(0)}% do total`,
+      },
+      {
+        id: 'days',
+        label: 'Dias com HE',
+        value: overtimeDays,
+        color: 'neutral',
+      },
+    ];
   }, [filteredRows]);
 
-  const departmentOptions = useMemo(
-    () => [...new Set(employees.map((e) => e.department_id).filter(Boolean))] as string[],
-    [employees],
-  );
+  // Filtros
+  const filterConfig: FilterConfig[] = useMemo(() => [
+    {
+      id: 'month',
+      type: 'date',
+      label: 'Mês',
+      value: month,
+      onChange: setMonth,
+    },
+    {
+      id: 'employee',
+      type: 'select',
+      label: 'Funcionário',
+      value: filterUserId,
+      onChange: setFilterUserId,
+      placeholder: 'Todos',
+      options: employees.map((e) => ({ value: e.id, label: e.nome })),
+    },
+    {
+      id: 'department',
+      type: 'select',
+      label: 'Departamento',
+      value: filterDept,
+      onChange: setFilterDept,
+      placeholder: 'Todos',
+      options: Array.from(departments.entries()).map(([id, name]) => ({
+        value: id,
+        label: name,
+      })),
+    },
+    {
+      id: 'minHours',
+      type: 'select',
+      label: 'Mínimo de Horas',
+      value: minHours,
+      onChange: setMinHours,
+      placeholder: 'Qualquer',
+      options: [
+        { value: '10', label: '≥ 10 horas' },
+        { value: '20', label: '≥ 20 horas' },
+        { value: '40', label: '≥ 40 horas' },
+      ],
+    },
+  ], [employees, departments, month, filterUserId, filterDept, minHours]);
+
+  // Toggle expansão
+  const toggleExpand = (employeeId: string) => {
+    setExpandedRows((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(employeeId)) {
+        newSet.delete(employeeId);
+      } else {
+        newSet.add(employeeId);
+      }
+      return newSet;
+    });
+  };
+
+  // Colunas da tabela
+  const columns: Column<OvertimeRow>[] = useMemo(() => [
+    {
+      key: 'expand',
+      label: '',
+      align: 'center',
+      width: '50px',
+      render: (_, row) => (
+        <button
+          onClick={() => toggleExpand(row.employeeId)}
+          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          {expandedRows.has(row.employeeId) ? (
+            <ChevronUp className="w-4 h-4" />
+          ) : (
+            <ChevronDown className="w-4 h-4" />
+          )}
+        </button>
+      ),
+    },
+    {
+      key: 'employeeName',
+      label: 'Funcionário',
+      align: 'left',
+      sortable: true,
+    },
+    {
+      key: 'departmentId',
+      label: 'Departamento',
+      align: 'left',
+      sortable: true,
+      format: (value) => departments.get(value) || '—',
+    },
+    {
+      key: 'overtime50',
+      label: 'HE 50% (h)',
+      align: 'right',
+      width: '100px',
+      sortable: true,
+      format: (value) => value.toFixed(2),
+    },
+    {
+      key: 'overtime100',
+      label: 'HE 100% (h)',
+      align: 'right',
+      width: '100px',
+      sortable: true,
+      format: (value) => value.toFixed(2),
+    },
+    {
+      key: 'total',
+      label: 'Total (h)',
+      align: 'right',
+      width: '100px',
+      sortable: true,
+      format: (value) => value.toFixed(2),
+    },
+    {
+      key: 'workDays',
+      label: 'Dias Trab.',
+      align: 'center',
+      width: '90px',
+      sortable: true,
+    },
+    {
+      key: 'overtimeDays',
+      label: 'Dias HE',
+      align: 'center',
+      width: '80px',
+      sortable: true,
+    },
+  ], [expandedRows, departments]);
+
+  const handleClearFilters = () => {
+    setFilterUserId('');
+    setFilterDept('');
+    setMinHours('');
+  };
+
+  const handleExportPDF = () => {
+    console.log('Exportar PDF');
+  };
+
+  const handleExportExcel = () => {
+    console.log('Exportar Excel');
+  };
 
   if (loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
@@ -173,152 +377,94 @@ const ReportOvertime: React.FC = () => {
       >
         <ArrowLeft className="w-4 h-4" /> Voltar aos relatórios
       </Link>
+
       <PageHeader
         title="Relatório de Horas Extras"
         subtitle="Visão consolidada e detalhada (50% / 100%) por colaborador"
         icon={<TrendingUp className="w-5 h-5" />}
       />
-      <div className="flex flex-wrap gap-4 items-end">
-        <label className="block">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Mês</span>
-          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="ml-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Funcionário</span>
-          <select
-            value={filterUserId}
-            onChange={(e) => setFilterUserId(e.target.value)}
-            className="ml-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 min-w-[180px]"
-          >
-            <option value="">Todos</option>
-            {employees.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.nome}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Departamento</span>
-          <select
-            value={filterDept}
-            onChange={(e) => setFilterDept(e.target.value)}
-            className="ml-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 min-w-[180px]"
-          >
-            <option value="">Todos</option>
-            {departmentOptions.map((deptId) => (
-              <option key={deptId} value={deptId}>
-                {deptId}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/50">
-          <p className="text-xs text-slate-500 dark:text-slate-400">HE 50% (h)</p>
-          <p className="text-xl font-semibold tabular-nums">{summary.total50.toFixed(2)}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/50">
-          <p className="text-xs text-slate-500 dark:text-slate-400">HE 100% (h)</p>
-          <p className="text-xl font-semibold tabular-nums">{summary.total100.toFixed(2)}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/50">
-          <p className="text-xs text-slate-500 dark:text-slate-400">HE Total (h)</p>
-          <p className="text-xl font-semibold tabular-nums">{summary.totalHours.toFixed(2)}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/50">
-          <p className="text-xs text-slate-500 dark:text-slate-400">Colaboradores com HE</p>
-          <p className="text-xl font-semibold tabular-nums">{summary.employeesWithOvertime}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900/50">
-          <p className="text-xs text-slate-500 dark:text-slate-400">Dias com HE</p>
-          <p className="text-xl font-semibold tabular-nums">{summary.overtimeDays}</p>
-        </div>
-      </div>
+      {/* KPIs */}
+      <KPICards kpis={kpis} columns={5} />
 
-      {loadingData ? (
-        <LoadingState message="Calculando horas extras..." />
-      ) : (
-        <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
-                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Detalhe</th>
-                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Funcionário</th>
-                <th className="text-left px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Departamento</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">HE 50% (h)</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">HE 100% (h)</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Total (h)</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Dias trabalhados</th>
-                <th className="text-right px-4 py-3 font-bold text-slate-500 dark:text-slate-400">Dias com HE</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((r) => (
-                <React.Fragment key={r.employeeId}>
-                  <tr className="border-b border-slate-100 dark:border-slate-800">
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedEmployeeId((prev) => (prev === r.employeeId ? null : r.employeeId))}
-                        className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-xs hover:bg-slate-100 dark:hover:bg-slate-800"
-                      >
-                        {expandedEmployeeId === r.employeeId ? 'Ocultar' : 'Ver'}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">{r.employeeName}</td>
-                    <td className="px-4 py-3">{r.departmentId || '—'}</td>
-                    <td className="text-right px-4 py-3 tabular-nums">{r.overtime50.toFixed(2)}</td>
-                    <td className="text-right px-4 py-3 tabular-nums">{r.overtime100.toFixed(2)}</td>
-                    <td className="text-right px-4 py-3 tabular-nums font-medium">{r.total.toFixed(2)}</td>
-                    <td className="text-right px-4 py-3 tabular-nums">{r.workDays}</td>
-                    <td className="text-right px-4 py-3 tabular-nums">{r.overtimeDays}</td>
+      {/* Filtros */}
+      <FiltersBar
+        filters={filterConfig}
+        onClear={handleClearFilters}
+        onExportPDF={handleExportPDF}
+        onExportExcel={handleExportExcel}
+        loading={loadingData}
+      />
+
+      {/* Tabela com drill-down */}
+      <DataTable
+        columns={columns}
+        data={filteredRows}
+        title="Horas Extras por Colaborador"
+        subtitle={`${filteredRows.length} colaboradores no período`}
+        loading={loadingData}
+        emptyMessage="Nenhuma hora extra encontrada para os filtros selecionados"
+      />
+
+      {/* Tabelas expandidas (detalhe diário) */}
+      {Array.from(expandedRows).map((employeeId) => {
+        const row = filteredRows.find((r) => r.employeeId === employeeId);
+        if (!row || row.daily.length === 0) return null;
+
+        return (
+          <div
+            key={employeeId}
+            className="bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-4"
+          >
+            <h4 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">
+              Detalhe diário: {row.employeeName}
+            </h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-100 dark:bg-slate-800">
+                    <th className="text-left px-3 py-2 font-medium">Data</th>
+                    <th className="text-right px-3 py-2 font-medium">HE 50% (h)</th>
+                    <th className="text-right px-3 py-2 font-medium">HE 100% (h)</th>
+                    <th className="text-right px-3 py-2 font-medium">Total (h)</th>
+                    <th className="text-left px-3 py-2 font-medium">Tipo do dia</th>
                   </tr>
-                  {expandedEmployeeId === r.employeeId && (
-                    <tr className="bg-slate-50/60 dark:bg-slate-900/40 border-b border-slate-100 dark:border-slate-800">
-                      <td colSpan={8} className="px-4 py-3">
-                        {r.daily.length === 0 ? (
-                          <p className="text-xs text-slate-500 dark:text-slate-400">Sem horas extras no período.</p>
+                </thead>
+                <tbody>
+                  {row.daily.map((d) => (
+                    <tr
+                      key={d.date}
+                      className="border-b border-slate-200 dark:border-slate-700"
+                    >
+                      <td className="px-3 py-2">{d.date}</td>
+                      <td className="text-right px-3 py-2 tabular-nums">
+                        {d.overtime50.toFixed(2)}
+                      </td>
+                      <td className="text-right px-3 py-2 tabular-nums">
+                        {d.overtime100.toFixed(2)}
+                      </td>
+                      <td className="text-right px-3 py-2 tabular-nums font-medium">
+                        {d.total.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {d.isHolidayOrOff ? (
+                          <span className="text-red-600 dark:text-red-400">
+                            Dom/Fer/Folga (100%)
+                          </span>
                         ) : (
-                          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="bg-slate-100 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
-                                  <th className="text-left px-3 py-2 font-semibold">Data</th>
-                                  <th className="text-right px-3 py-2 font-semibold">HE 50% (h)</th>
-                                  <th className="text-right px-3 py-2 font-semibold">HE 100% (h)</th>
-                                  <th className="text-right px-3 py-2 font-semibold">Total (h)</th>
-                                  <th className="text-left px-3 py-2 font-semibold">Tipo do dia</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {r.daily.map((d) => (
-                                  <tr key={`${r.employeeId}-${d.date}`} className="border-b border-slate-100 dark:border-slate-800">
-                                    <td className="px-3 py-2">{d.date}</td>
-                                    <td className="text-right px-3 py-2 tabular-nums">{d.overtime50.toFixed(2)}</td>
-                                    <td className="text-right px-3 py-2 tabular-nums">{d.overtime100.toFixed(2)}</td>
-                                    <td className="text-right px-3 py-2 tabular-nums">{d.total.toFixed(2)}</td>
-                                    <td className="px-3 py-2">{d.isHolidayOrOff ? 'Domingo/Feriado/Folga (100%)' : 'Dia útil (50%)'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                          <span className="text-amber-600 dark:text-amber-400">
+                            Dia útil (50%)
+                          </span>
                         )}
                       </td>
                     </tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-          {!loadingData && filteredRows.length === 0 && (
-            <p className="p-6 text-center text-slate-500 dark:text-slate-400">Nenhum dado de horas extras para os filtros selecionados.</p>
-          )}
-        </div>
-      )}
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };
