@@ -391,13 +391,13 @@ const AdminTimesheet: React.FC = () => {
     import('jspdf').then(({ jsPDF }) => {
       import('jspdf-autotable').then(() => {
         const doc = new jsPDF({
-          orientation: 'portrait',
+          orientation: 'landscape', // Paisagem = mais espaço horizontal
           unit: 'mm',
           format: 'a4',
         });
 
         const pageWidth = doc.internal.pageSize.getWidth();
-        const margin = 15;
+        const margin = 10;
         let yPosition = margin;
 
         // Dados do colaborador
@@ -481,8 +481,8 @@ const AdminTimesheet: React.FC = () => {
             head: [['Data', 'Entrada', 'Saída Int.', 'Volta Int.', 'Saída', 'Total']],
             body: tableData,
             styles: {
-              fontSize: 9,
-              cellPadding: 3,
+              fontSize: 8,
+              cellPadding: 2,
               overflow: 'linebreak',
               halign: 'center',
             },
@@ -496,13 +496,14 @@ const AdminTimesheet: React.FC = () => {
               fillColor: [245, 245, 245],
             },
             columnStyles: {
-              0: { cellWidth: 22, halign: 'left' },  // Data
-              1: { cellWidth: 20 },  // Entrada
-              2: { cellWidth: 22 },  // Saída Int.
-              3: { cellWidth: 22 },  // Volta Int.
-              4: { cellWidth: 20 },  // Saída
-              5: { cellWidth: 18 },  // Total
+              0: { cellWidth: 18, halign: 'left' },  // Data
+              1: { cellWidth: 15 },  // Entrada
+              2: { cellWidth: 18 },  // Saída Int.
+              3: { cellWidth: 18 },  // Volta Int.
+              4: { cellWidth: 15 },  // Saída
+              5: { cellWidth: 12 },  // Total
             },
+            tableWidth: 'auto',
           });
 
         } else {
