@@ -70,12 +70,12 @@ export const exportReportToPDF = async (report: Report, type: ReportType): Promi
         cellPadding: 3,
       },
       headStyles: {
-        fillColor: [41, 128, 185],
+        fillColor: [79, 70, 229], // indigo-600 - cor do sistema
         textColor: 255,
         fontStyle: 'bold',
       },
       alternateRowStyles: {
-        fillColor: [245, 245, 245],
+        fillColor: [250, 250, 252], // slate-50
       },
     });
 

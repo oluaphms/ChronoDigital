@@ -404,20 +404,20 @@ const AdminTimesheet: React.FC = () => {
         const employee = employees.find(e => e.id === filterUserId);
         const employeeName = employee?.nome || filterUserId;
 
-        // CABEÇALHO
-        doc.setFillColor(41, 128, 185);
-        doc.rect(0, 0, pageWidth, 25, 'F');
+        // CABEÇALHO - Cor do sistema (roxo/indigo)
+        doc.setFillColor(79, 70, 229); // indigo-600
+        doc.rect(0, 0, pageWidth, 30, 'F');
 
         doc.setTextColor(255, 255, 255);
-        doc.setFontSize(18);
+        doc.setFontSize(20);
         doc.setFont('helvetica', 'bold');
-        doc.text('PontoWebDesk', pageWidth / 2, 12, { align: 'center' });
+        doc.text('PontoWebDesk', pageWidth / 2, 15, { align: 'center' });
 
-        doc.setFontSize(10);
+        doc.setFontSize(11);
         doc.setFont('helvetica', 'normal');
-        doc.text('Sistema de Registro de Ponto', pageWidth / 2, 19, { align: 'center' });
+        doc.text('Sistema de Registro de Ponto', pageWidth / 2, 23, { align: 'center' });
 
-        yPosition = 35;
+        yPosition = 40;
 
         // Título do relatório
         doc.setTextColor(33, 37, 41);
@@ -487,23 +487,24 @@ const AdminTimesheet: React.FC = () => {
               halign: 'center',
             },
             headStyles: {
-              fillColor: [41, 128, 185],
+              fillColor: [79, 70, 229], // indigo-600 - cor do sistema
               textColor: 255,
               fontStyle: 'bold',
               halign: 'center',
+              fontSize: 9,
             },
             alternateRowStyles: {
-              fillColor: [245, 245, 245],
+              fillColor: [250, 250, 252], // slate-50
             },
             columnStyles: {
-              0: { cellWidth: 18, halign: 'left' },  // Data
-              1: { cellWidth: 15 },  // Entrada
-              2: { cellWidth: 18 },  // Saída Int.
-              3: { cellWidth: 18 },  // Volta Int.
-              4: { cellWidth: 15 },  // Saída
-              5: { cellWidth: 12 },  // Total
+              0: { cellWidth: 22, halign: 'center', fontStyle: 'bold' },  // Data
+              1: { cellWidth: 20, halign: 'center' },  // Entrada
+              2: { cellWidth: 25, halign: 'center' },  // Saída Int.
+              3: { cellWidth: 25, halign: 'center' },  // Volta Int.
+              4: { cellWidth: 20, halign: 'center' },  // Saída
+              5: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },  // Total
             },
-            tableWidth: 'auto',
+            tableWidth: 'wrap',
           });
 
         } else {
