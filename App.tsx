@@ -844,9 +844,6 @@ const AppMain: React.FC = () => {
     setCompany(null);
     setInsights(null);
     insightsAutoFetchDoneRef.current = false;
-    setLoginStep('choice');
-    setLoginRole(null);
-    setLoginData({ identifier: '', password: '' });
     setLoginError(null);
 
     // Limpa caches para não vazar dados entre sessões (memória + React Query)

@@ -43,10 +43,17 @@ const EmployeeDashboard: React.FC = () => {
       }
       if (showLoading) setLoadingData(true);
       try {
-        const rows = (await db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], {
-          columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
-          limit: 200,
-        })) as any[];
+        let rows: any[] = [];
+        try {
+          rows = (await db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], {
+            columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
+            limit: 120,
+          })) as any[];
+        } catch (error) {
+          // Não interrompe o dashboard por timeout transitório do Supabase.
+          console.warn('[EmployeeDashboard] time_records indisponível no momento:', error);
+          rows = [];
+        }
         const sortedAll = [...(rows ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
         const todayYmd = localTodayYmd();
         const todayList = sortedAll.filter(
