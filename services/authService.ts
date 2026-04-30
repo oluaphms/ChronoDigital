@@ -673,15 +673,15 @@ class AuthService {
         return { user: null, error: 'Erro ao fazer login. Tente novamente.' };
       }
 
-      try {
-        await supabase.auth.refreshSession();
-      } catch {
-        // JWT já válido após signIn; refresh é reforço para storage/RLS
-      }
+      // Não bloquear o login por refresh extra de sessão.
+      // O token já vem válido no signIn; esse refresh é apenas reforço.
+      void supabase.auth.refreshSession().catch(() => {
+        // ignora falha de refresh pós-login
+      });
 
       if (data.user) {
         // Timeout na carga do perfil: free tier / RLS podem demorar; fallback evita travar o login
-        const PROFILE_LOAD_TIMEOUT_MS = 20000;
+        const PROFILE_LOAD_TIMEOUT_MS = 6000;
         const appUser = await Promise.race([
           this.supabaseUserToAppUser(data.user),
           new Promise<User | null>((resolve) =>
