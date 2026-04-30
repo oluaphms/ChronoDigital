@@ -12,7 +12,7 @@ function isTransientDynamicImportError(error: unknown): boolean {
   );
 }
 
-function withTransientRetry(loader: RouteLoader, retries = 1, delayMs = 250): RouteLoader {
+function withTransientRetry(loader: RouteLoader, retries = 2, delayMs = 350): RouteLoader {
   return async () => {
     try {
       return await loader();
@@ -26,7 +26,7 @@ function withTransientRetry(loader: RouteLoader, retries = 1, delayMs = 250): Ro
   };
 }
 
-export const ROUTE_LOADERS: Record<string, RouteLoader> = {
+const RAW_ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/admin/dashboard': () => import('../pages/admin/Dashboard'),
   '/admin/employees': () => import('../pages/admin/Employees'),
   '/admin/import-employees': () => import('../pages/admin/ImportEmployees'),
@@ -58,7 +58,7 @@ export const ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/admin/ponto-diario': () => import('../pages/admin/PontoDiario'),
   '/admin/ponto-diario-leitura': () => import('../pages/admin/PontoDiario'),
   '/admin/arquivos-fiscais': () => import('../pages/admin/ArquivosFiscais'),
-  '/admin/rep-devices': withTransientRetry(() => import('../pages/admin/RepDevices')),
+  '/admin/rep-devices': () => import('../pages/admin/RepDevices'),
   '/admin/import-rep': () => import('../pages/admin/ImportRep'),
   '/admin/fiscalizacao': () => import('../pages/admin/Fiscalizacao'),
   '/admin/security': () => import('../pages/admin/Security'),
@@ -100,6 +100,10 @@ export const ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/reset-password': () => import('../pages/ResetPassword'),
   '/accept-invite': () => import('../pages/AcceptInvite'),
 } as const;
+
+export const ROUTE_LOADERS: Record<string, RouteLoader> = Object.fromEntries(
+  Object.entries(RAW_ROUTE_LOADERS).map(([path, loader]) => [path, withTransientRetry(loader)]),
+) as Record<string, RouteLoader>;
 
 const prefetched = new Set<string>();
 

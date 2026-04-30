@@ -719,6 +719,27 @@ const AdminRepDevices: React.FC = () => {
             imp += promoted;
             stillInQueueOnly = skipped;
             stillInQueueOtherUser = skippedOther;
+            if (skipped > 0) {
+              const fixedByRepair = await tryAutoRepairPendingMatches(consolidateCompanyId, d.id, localDay);
+              if (fixedByRepair > 0) {
+                appendSrLog(
+                  `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/nome normalizados para o cadastro e serão reconsolidadas agora.`
+                );
+                const prRetry = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id, {
+                  localWindow: localDay,
+                  onlyUserId: onlyUid,
+                });
+                if (prRetry.success) {
+                  const promotedRetry = prRetry.promoted ?? 0;
+                  imp += promotedRetry;
+                  stillInQueueOnly = prRetry.skippedNoUser ?? stillInQueueOnly;
+                  stillInQueueOtherUser = prRetry.skippedOtherUser ?? stillInQueueOtherUser;
+                  if (promotedRetry > 0) {
+                    appendSrLog(`${promotedRetry} marcação(ões) adicionais foram gravadas na folha após autoajuste.`);
+                  }
+                }
+              }
+            }
             if (promoted > 0) {
               appendSrLog(`${promoted} marcação(ões) extra(s) na folha a partir da fila (consolidadas agora).`);
             }
@@ -727,22 +748,22 @@ const AdminRepDevices: React.FC = () => {
                 `${skippedOther} batida(s) com cadastro noutro colaborador (não é o selecionado no filtro); não foram gravadas no espelho nesta consolidação.`
               );
             }
-            if (skipped > 0) {
+            if (stillInQueueOnly > 0) {
               const backlogHint =
                 receiveScope === 'today_only'
                   ? ''
-                  : skipped > received
+                  : stillInQueueOnly > received
                     ? ` Inclui batida(s) de dias/leituras anteriores — agora o relógio só enviou ${received}.`
                     : '';
               appendSrLog(
-                `${skipped} batida(s) deste relógio ainda só em rep_punch_logs (sem PIS/CPF/nº folha/nº identificador (crachá) que bata com o cadastro).${backlogHint} Corrija utilizadores e use «Consolidar» se precisar. Se o cadastro já estiver certo: confirme migrações REP no Supabase (20260420200000–20260420260000) e build recente da app — senão o servidor não normaliza PIS/CPF AFD (11 dígitos), deriva crachá nem casa folha/crachá.`
+                `${stillInQueueOnly} batida(s) deste relógio ainda só em rep_punch_logs (sem PIS/CPF/nº folha/nº identificador (crachá) que bata com o cadastro).${backlogHint} Corrija utilizadores e use «Consolidar» se precisar. Se o cadastro já estiver certo: confirme migrações REP no Supabase (20260420200000–20260420260000) e build recente da app — senão o servidor não normaliza PIS/CPF AFD (11 dígitos), deriva crachá nem casa folha/crachá.`
               );
             }
-            if (skipped > 0 || (onlyUid && skippedOther > 0)) {
+            if (stillInQueueOnly > 0 || (onlyUid && stillInQueueOtherUser > 0)) {
               await appendRepPendingQueueDiagnostics(supabase, consolidateCompanyId, d.id, appendSrLog, {
                 localWindow: localDay,
                 /** Só quando houve batidas com cadastro doutro — evita nota enganosa se o problema for só «sem match». */
-                filteredByUserOnly: Boolean(onlyUid) && skippedOther > 0,
+                filteredByUserOnly: Boolean(onlyUid) && stillInQueueOtherUser > 0,
               });
             }
           } else {
@@ -861,32 +882,52 @@ const AdminRepDevices: React.FC = () => {
       const promoted = pr.promoted ?? 0;
       const skipped = pr.skippedNoUser ?? 0;
       const skippedOther = pr.skippedOtherUser ?? 0;
+      let shouldRetryPromote = false;
+      if (skipped > 0) {
+        const fixedByRepair = await tryAutoRepairPendingMatches(consolidateCompanyId, d.id, localDay);
+        if (fixedByRepair > 0) {
+          shouldRetryPromote = true;
+          appendSrLog(
+            `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/nome normalizados para o cadastro; nova consolidação em seguida.`
+          );
+        }
+      }
+      const prAfterRepair =
+        shouldRetryPromote
+          ? await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id, {
+              localWindow: localDay,
+              onlyUserId: onlyUid,
+            })
+          : pr;
+      const promotedFinal = prAfterRepair.promoted ?? promoted;
+      const skippedFinal = prAfterRepair.skippedNoUser ?? skipped;
+      const skippedOtherFinal = prAfterRepair.skippedOtherUser ?? skippedOther;
       const partsLog: string[] = [
-        `Consolidado: ${promoted} registro(s) na folha; ${skipped} pendente(s) sem funcionário identificado`,
+        `Consolidado: ${promotedFinal} registro(s) na folha; ${skippedFinal} pendente(s) sem funcionário identificado`,
       ];
-      if (onlyUid && skippedOther > 0) {
-        partsLog.push(`${skippedOther} com cadastro noutro colaborador (filtro «só este»)`);
+      if (onlyUid && skippedOtherFinal > 0) {
+        partsLog.push(`${skippedOtherFinal} com cadastro noutro colaborador (filtro «só este»)`);
       }
       appendSrLog(`${partsLog.join('; ')}.`);
-      if (onlyUid && skippedOther > 0) {
+      if (onlyUid && skippedOtherFinal > 0) {
         appendSrLog(
           'Essas batidas não são «sem cadastro»: resolvem para outro utilizador. Limpe o filtro de colaborador para gravá-las no espelho.'
         );
       }
-      if (skipped > 0 || (onlyUid && skippedOther > 0)) {
+      if (skippedFinal > 0 || (onlyUid && skippedOtherFinal > 0)) {
         await appendRepPendingQueueDiagnostics(supabase, consolidateCompanyId, d.id, appendSrLog, {
           localWindow: localDay,
-          filteredByUserOnly: Boolean(onlyUid) && skippedOther > 0,
+          filteredByUserOnly: Boolean(onlyUid) && skippedOtherFinal > 0,
         });
       }
       setMessage({
         type: 'success',
         text: (() => {
           const bits: string[] = [];
-          if (promoted > 0) bits.push(`${promoted} marcação(ões) gravadas na folha`);
-          if (skipped > 0) bits.push(`${skipped} ignorada(s) sem cadastro`);
-          if (onlyUid && skippedOther > 0) {
-            bits.push(`${skippedOther} não gravada(s): cadastro noutro colaborador (filtro «só este»)`);
+          if (promotedFinal > 0) bits.push(`${promotedFinal} marcação(ões) gravadas na folha`);
+          if (skippedFinal > 0) bits.push(`${skippedFinal} ignorada(s) sem cadastro`);
+          if (onlyUid && skippedOtherFinal > 0) {
+            bits.push(`${skippedOtherFinal} não gravada(s): cadastro noutro colaborador (filtro «só este»)`);
           }
           if (bits.length === 0) return 'Nada a consolidar na janela/filtro escolhido(s).';
           return `${bits.join('. ')}.`;
@@ -1168,6 +1209,60 @@ const AdminRepDevices: React.FC = () => {
       if (cleanMat && (empPis === cleanMat || empIdent === cleanMat || empFolha === cleanMat)) return true;
       return false;
     }) || null;
+  };
+
+  const tryAutoRepairPendingMatches = async (
+    companyId: string,
+    deviceId: string,
+    localWindow?: { startIso: string; endIso: string }
+  ): Promise<number> => {
+    const client = getSupabaseClient();
+    if (!client) return 0;
+
+    let q = client
+      .from('rep_punch_logs')
+      .select('id, pis, cpf, matricula')
+      .eq('company_id', companyId)
+      .eq('rep_device_id', deviceId)
+      .is('time_record_id', null)
+      .or('ignored.is.false,ignored.is.null')
+      .limit(200);
+
+    if (localWindow) {
+      q = q.gte('data_hora', localWindow.startIso).lte('data_hora', localWindow.endIso);
+    }
+
+    const { data, error } = await q;
+    if (error || !data?.length) return 0;
+
+    let fixed = 0;
+    for (const row of data as Array<{ id: string; pis: string | null; cpf: string | null; matricula: string | null }>) {
+      const canon = repAfdCanonical11(row.pis || row.cpf);
+      const emp = findEmployeeByPis(canon, row.matricula);
+      if (!emp) continue;
+
+      const targetMatricula =
+        (emp.numero_identificador || '').trim() ||
+        (emp.numero_folha || '').trim() ||
+        normalizePisTo11Digits(emp.pis_pasep);
+      if (!targetMatricula) continue;
+
+      const currentMatricula = (row.matricula || '').trim();
+      if (currentMatricula === targetMatricula) continue;
+
+      const { error: upErr } = await client
+        .from('rep_punch_logs')
+        .update({
+          matricula: targetMatricula,
+          nome_funcionario: emp.nome,
+        })
+        .eq('id', row.id)
+        .is('time_record_id', null);
+
+      if (!upErr) fixed += 1;
+    }
+
+    return fixed;
   };
 
   /**
