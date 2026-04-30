@@ -4,6 +4,28 @@
  */
 type RouteLoader = () => Promise<unknown>;
 
+function isTransientDynamicImportError(error: unknown): boolean {
+  const message = String((error as { message?: string })?.message || error || '').toLowerCase();
+  return (
+    message.includes('failed to fetch dynamically imported module') ||
+    message.includes('error loading dynamically imported module')
+  );
+}
+
+function withTransientRetry(loader: RouteLoader, retries = 1, delayMs = 250): RouteLoader {
+  return async () => {
+    try {
+      return await loader();
+    } catch (error) {
+      if (!isTransientDynamicImportError(error) || retries <= 0) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return withTransientRetry(loader, retries - 1, delayMs)();
+    }
+  };
+}
+
 export const ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/admin/dashboard': () => import('../pages/admin/Dashboard'),
   '/admin/employees': () => import('../pages/admin/Employees'),
@@ -36,7 +58,7 @@ export const ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/admin/ponto-diario': () => import('../pages/admin/PontoDiario'),
   '/admin/ponto-diario-leitura': () => import('../pages/admin/PontoDiario'),
   '/admin/arquivos-fiscais': () => import('../pages/admin/ArquivosFiscais'),
-  '/admin/rep-devices': () => import('../pages/admin/RepDevices'),
+  '/admin/rep-devices': withTransientRetry(() => import('../pages/admin/RepDevices')),
   '/admin/import-rep': () => import('../pages/admin/ImportRep'),
   '/admin/fiscalizacao': () => import('../pages/admin/Fiscalizacao'),
   '/admin/security': () => import('../pages/admin/Security'),
