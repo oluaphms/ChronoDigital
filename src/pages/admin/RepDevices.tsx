@@ -379,7 +379,7 @@ const AdminRepDevices: React.FC = () => {
         numero_identificador?: string | null;
         numero_folha?: string | null;
       }[];
-      const allowed = new Set(['employee', 'hr', 'admin']);
+      const allowed = new Set(['employee', 'supervisor', 'hr', 'admin']);
       const list = (rows || [])
         .filter((r) => allowed.has(String(r.role || '').toLowerCase()))
         .map((r) => ({
