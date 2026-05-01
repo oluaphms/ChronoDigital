@@ -252,33 +252,6 @@ async function handleExchange(request: Request): Promise<Response> {
   }
 }
 
-/**
- * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
- * Estes headers estáticos são mantidos apenas para compatibilidade temporária.
- */
-const corsSyncDeprecated: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-/**
- * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
- */
-const corsPunchDeprecated: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-REP-API-Key',
-};
-
-/**
- * @deprecated Use repCorsHeaders(request) para CORS dinâmico seguro.
- */
-const corsImportDeprecated: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
 function jsonSafeForRepStatusBody(value: unknown): unknown {
   if (value === undefined) return null;
   try {
@@ -440,22 +413,24 @@ async function handlePunches(request: Request): Promise<Response> {
 }
 
 async function handleSync(request: Request): Promise<Response> {
+  const cors = repCorsHeaders(request);
+  const headersJson = { ...cors, 'Content-Type': 'application/json' };
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsSync });
+    return new Response(null, { status: 204, headers: cors });
   }
   if (request.method !== 'POST') {
-    return Response.json({ error: 'Method not allowed' }, { status: 405, headers: corsSync });
+    return Response.json({ error: 'Method not allowed' }, { status: 405, headers: cors });
   }
   const apiKey = (process.env.API_KEY || process.env.CRON_SECRET || '').trim();
   const authHeader = request.headers.get('Authorization') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   if (!apiKey || token !== apiKey) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401, headers: { ...corsSync, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'Unauthorized' }, { status: 401, headers: headersJson });
   }
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').toString().trim().replace(/\/$/, '');
   const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   if (!url || !serviceKey) {
-    return Response.json({ error: 'Supabase não configurado' }, { status: 500, headers: { ...corsSync, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'Supabase não configurado' }, { status: 500, headers: headersJson });
   }
   const supabase = createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -472,7 +447,7 @@ async function handleSync(request: Request): Promise<Response> {
       if (e instanceof PlanLimitError) {
         return Response.json(
           { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
-          { status: 403, headers: { ...corsSync, 'Content-Type': 'application/json' } }
+          { status: 403, headers: headersJson }
         );
       }
       throw e;
@@ -486,7 +461,7 @@ async function handleSync(request: Request): Promise<Response> {
       imported: result.imported,
       errors: result.errors,
     },
-    { status: 200, headers: { ...corsSync, 'Content-Type': 'application/json' } }
+    { status: 200, headers: headersJson }
   );
 }
 
@@ -502,40 +477,42 @@ interface RepPunchBody {
 }
 
 async function handlePunch(request: Request): Promise<Response> {
+  const cors = repCorsHeaders(request);
+  const headersJson = { ...cors, 'Content-Type': 'application/json' };
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsPunch });
+    return new Response(null, { status: 204, headers: cors });
   }
   if (request.method !== 'POST') {
-    return Response.json({ error: 'Method not allowed' }, { status: 405, headers: corsPunch });
+    return Response.json({ error: 'Method not allowed' }, { status: 405, headers: cors });
   }
   const apiKey = (process.env.API_KEY || process.env.REP_API_KEY || '').trim();
   const authHeader = request.headers.get('Authorization') || request.headers.get('X-REP-API-Key') || '';
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   if (!apiKey || token !== apiKey) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401, headers: { ...corsPunch, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'Unauthorized' }, { status: 401, headers: headersJson });
   }
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').toString().trim().replace(/\/$/, '');
   const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   if (!url || !serviceKey) {
-    return Response.json({ error: 'Supabase não configurado' }, { status: 500, headers: { ...corsPunch, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'Supabase não configurado' }, { status: 500, headers: headersJson });
   }
   let body: RepPunchBody;
   try {
     const raw = await request.json();
     body = (raw && typeof raw === 'object' ? raw : {}) as RepPunchBody;
   } catch {
-    return Response.json({ error: 'Body inválido' }, { status: 400, headers: { ...corsPunch, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'Body inválido' }, { status: 400, headers: headersJson });
   }
   const { company_id, data_hora, device_id, nsr, pis, cpf, matricula, tipo_marcacao } = body;
   if (!company_id || !data_hora) {
     return Response.json(
       { error: 'company_id e data_hora são obrigatórios' },
-      { status: 400, headers: { ...corsPunch, 'Content-Type': 'application/json' } }
+      { status: 400, headers: headersJson }
     );
   }
   const ts = new Date(data_hora);
   if (Number.isNaN(ts.getTime())) {
-    return Response.json({ error: 'data_hora inválido' }, { status: 400, headers: { ...corsPunch, 'Content-Type': 'application/json' } });
+    return Response.json({ error: 'data_hora inválido' }, { status: 400, headers: headersJson });
   }
   const supabase = createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -549,7 +526,7 @@ async function handlePunch(request: Request): Promise<Response> {
     if (e instanceof PlanLimitError) {
       return Response.json(
         { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
-        { status: 403, headers: { ...corsPunch, 'Content-Type': 'application/json' } }
+        { status: 403, headers: headersJson }
       );
     }
     throw e;
@@ -570,7 +547,7 @@ async function handlePunch(request: Request): Promise<Response> {
     const status = result.error.includes('já importado') ? 200 : 400;
     return Response.json(
       { success: false, error: result.error, duplicate: result.error.includes('já importado') },
-      { status, headers: { ...corsPunch, 'Content-Type': 'application/json' } }
+      { status, headers: headersJson }
     );
   }
   return Response.json(
@@ -579,7 +556,7 @@ async function handlePunch(request: Request): Promise<Response> {
       time_record_id: result.time_record_id,
       user_not_found: result.user_not_found,
     },
-    { status: 200, headers: { ...corsPunch, 'Content-Type': 'application/json' } }
+    { status: 200, headers: headersJson }
   );
 }
 
