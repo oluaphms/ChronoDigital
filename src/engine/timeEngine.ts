@@ -4,7 +4,7 @@
  * calcula jornada, horas extras, noturnas, DSR e banco de horas.
  */
 
-import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { db, getSupabaseClient, isSupabaseConfigured } from '../services/supabaseClient';
 import { appendEngineCalcAudit } from './engineCalcAudit';
 import { applyDailyBankLedger, getBankExpiredToPayroll50ForPeriod } from './bankLedger';
 import {
@@ -1339,11 +1339,21 @@ export async function recalculate_period(
     }
   }
 
+  let auditActorUserId: string | null = null;
+  const supa = getSupabaseClient();
+  if (supa && isSupabaseConfigured()) {
+    const { data } = await supa.auth.getSession();
+    auditActorUserId = data.session?.user?.id ?? null;
+  }
+
   await db.insert('audit_logs', {
-    company_id: companyId,
-    user_id: employeeId,
+    user_id: auditActorUserId,
     action: 'RECALCULATION_FIX',
-    details: {
+    entity: 'recalculate_period',
+    before: {},
+    after: {
+      employee_id: employeeId,
+      company_id: companyId,
       description: 'Correção de cálculo de jornada e extras',
       startDate,
       endDate,
