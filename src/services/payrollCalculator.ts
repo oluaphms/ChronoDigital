@@ -5,8 +5,7 @@
  */
 
 import { db, checkSupabaseConfigured, isSupabaseConfigured } from './supabaseClient';
-import { processDailyTime, getDayRecords } from './timeProcessingService';
-import { calculateNightHours, calculateOvertime, classifyDay, getCompanyRules } from '../engine/timeEngine';
+import { processEmployeeDay } from '../engine/timeEngine';
 
 // ============ TIPOS ============
 
@@ -83,63 +82,31 @@ export async function calculateDailyTimesheet(
   dateStr: string,
   expectedMinutes: number = DEFAULT_EXPECTED_MINUTES
 ): Promise<DailyTimesheet> {
-  const dailyResult = await processDailyTime(employeeId, companyId, dateStr);
-  const companyRules = await getCompanyRules(companyId);
-  const dayType = await classifyDay({ date: dateStr, company: { id: companyId } });
-
-  // Calcula minutos noturnos
-  const records = await getDayRecords(employeeId, dateStr);
-  const nightMinutes = calculateNightHours(records);
-
-  const isHoliday = dayType === 'HOLIDAY';
-  const isWorkDay = !dailyResult.scheduled_day_off && !isHoliday;
-  const expectedMin = isHoliday
-    ? 0
-    : isWorkDay
-      ? dailyResult.expected_minutes > 0
-        ? dailyResult.expected_minutes
-        : expectedMinutes
-      : 0;
-  const isAbsence = !isHoliday && isWorkDay && dailyResult.total_worked_minutes === 0;
-
-  // Calcula minutos de falta
-  let absenceMinutes = 0;
-  if (isAbsence) {
-    absenceMinutes = expectedMin;
-  } else if (!isHoliday && isWorkDay && dailyResult.total_worked_minutes < expectedMin) {
-    absenceMinutes = expectedMin - dailyResult.total_worked_minutes;
-  }
-
-  const overtimeByRule = calculateOvertime({
-    date: dateStr,
-    dayType,
-    workedMinutes: dailyResult.total_worked_minutes,
-    expectedMinutes: expectedMin,
-    companyRules,
-    schedule: null,
-  });
+  const day = await processEmployeeDay(employeeId, companyId, dateStr);
+  const expectedMin = day.daily.expected_minutes > 0 ? day.daily.expected_minutes : expectedMinutes;
+  const isAbsence = day.daily.absence_minutes > 0;
 
   return {
     employee_id: employeeId,
     company_id: companyId,
     date: dateStr,
-    worked_minutes: dailyResult.total_worked_minutes,
+    worked_minutes: day.daily.total_worked_minutes,
     expected_minutes: expectedMin,
-    overtime_minutes: overtimeByRule.overtime_50_minutes + overtimeByRule.overtime_100_minutes,
-    absence_minutes: absenceMinutes,
-    night_minutes: nightMinutes,
-    late_minutes: dailyResult.late_minutes,
+    overtime_minutes: (day.overtime?.overtime_50_minutes ?? 0) + (day.overtime?.overtime_100_minutes ?? 0),
+    absence_minutes: day.daily.absence_minutes,
+    night_minutes: day.night_minutes,
+    late_minutes: day.daily.late_minutes,
     is_absence: isAbsence,
-    is_holiday: isHoliday,
+    is_holiday: day.daily.day_type === 'HOLIDAY',
     raw_data: {
-      day_type: dayType,
-      overtime_50_minutes: overtimeByRule.overtime_50_minutes,
-      overtime_100_minutes: overtimeByRule.overtime_100_minutes,
-      entrada: dailyResult.entrada,
-      saida: dailyResult.saida,
-      inicio_intervalo: dailyResult.inicio_intervalo,
-      fim_intervalo: dailyResult.fim_intervalo,
-      records_count: records.length,
+      day_type: day.daily.day_type,
+      overtime_50_minutes: day.daily.extra_50_minutes,
+      overtime_100_minutes: day.daily.extra_100_minutes,
+      entrada: day.daily.entrada,
+      saida: day.daily.saida,
+      inicio_intervalo: day.daily.inicio_intervalo,
+      fim_intervalo: day.daily.fim_intervalo,
+      incomplete: day.daily.incomplete,
     },
   };
 }

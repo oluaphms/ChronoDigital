@@ -185,3 +185,30 @@ Go-live aprovado apenas se:
 
 Se qualquer item falhar: **NO-GO**, corrigir e revalidar.
 
+---
+
+## 7) Matriz de aderência técnica (CLT + Portaria 671)
+
+Status de referência para o checklist técnico de produção.
+
+| Requisito | Status | Evidência |
+|-----------|--------|-----------|
+| `employees`, `work_shifts`, `employee_shift_schedule`, `punches`, `time_adjustments`, `bank_hours`, `audit_logs` | **OK** | Migrações em `supabase/migrations/` (`20250308150000_*`, `20250320000000_*`, `20260417200000_*`, `20250319000000_*`, `20250321000000_*`). |
+| `timesheet_closures` com assinatura (`signed_by_employee`, `signed_at`) | **OK (novo)** | `supabase/migrations/20260501150000_clt_portaria671_foundation.sql`. |
+| Bloqueio de edição após fechamento mensal | **OK (novo)** | Trigger `tr_time_records_block_after_closure` na migração `20260501150000_*`. |
+| `time_entries` como camada interpretada | **OK (compat)** | View `public.time_entries` criada em `20260501150000_*` (derivada de `time_records`). |
+| Imutabilidade de batidas / Portaria 671 | **OK** | Trigger `prevent_update_delete_time_records` + hash/NSR em `20250321000000_rep_portaria_671.sql`. |
+| Funções `add_hours`, `consume_hours`, `expire_hours` | **OK (novo)** | Criadas em `20260501150000_*`. |
+| Auditoria com campos padronizados (`entity`, `before`, `after`, `timestamp`, `ip`) | **OK (compat)** | `audit_logs` padronizada + trigger de sync em `20260501150000_*`. |
+| Motor de interpretação por escala (`interpret_punch_by_schedule`) | **OK** | `20260417210000_*` / `20260420010000_*`. |
+| Funções nomeadas `calculate_worked_hours` / `validate_labor_rules` | **PARCIAL** | Cálculo e validações existem em `src/engine/timeEngine.ts` e `src/services/timeProcessingService.ts`, com nomes internos diferentes. |
+| Fechamento em PDF + JSON de espelho/relatórios | **OK** | Exportação em `src/services/professionalPDF.service.ts` e endpoints/serviços de relatório. |
+
+### Checklist de verificação pós-migração (obrigatório)
+
+- [ ] Executar migrações até `20260501150000_clt_portaria671_foundation.sql`.
+- [ ] Validar fechamento de mês por colaborador (admin) e tentativa de inserção pós-fechamento (deve bloquear).
+- [ ] Validar assinatura de fechamento (`signed_by_employee`, `signed_at`).
+- [ ] Validar funções `add_hours`, `consume_hours`, `expire_hours` no SQL Editor.
+- [ ] Validar inserção em `audit_logs` com campos legados e padronizados.
+

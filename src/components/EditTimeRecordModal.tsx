@@ -70,6 +70,8 @@ interface EditTimeRecordModalProps {
     origin?: string | null;
   } | null;
   onSave: () => void;
+  onUpdated?: (payload: { recordId: string; userId: string; date: string; time: string; type: string }) => void;
+  onDeleted?: (payload: { recordId: string; userId: string }) => void;
   readOnly?: boolean;
 }
 
@@ -104,6 +106,8 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
   onClose,
   record,
   onSave,
+  onUpdated,
+  onDeleted,
   readOnly = false,
 }) => {
   const [form, setForm] = useState({
@@ -250,6 +254,13 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
         manual_reason,
       });
 
+      onUpdated?.({
+        recordId: record.id,
+        userId: record.user_id,
+        date: form.date,
+        time: form.entry_mode === 'STATUS' ? '12:00' : form.time,
+        type: form.entry_mode === 'STATUS' ? form.status_type : form.type,
+      });
       onSave();
     } catch (err: any) {
       setError(err.message || 'Erro ao atualizar batida');
@@ -269,6 +280,10 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
     try {
       await deleteTimeRecord(record.id);
 
+      onDeleted?.({
+        recordId: record.id,
+        userId: record.user_id,
+      });
       onSave();
     } catch (err: any) {
       setError(err.message || 'Erro ao excluir batida');

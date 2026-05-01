@@ -5,6 +5,7 @@
 
 import { db, isSupabaseConfigured } from '../../../services/supabaseClient';
 import { interpretPunchSequence } from '../punchInterpreter';
+import { processEmployeeDay } from '../../engine/timeEngine';
 
 export interface WorkdayCalculationResult {
   employee_id: string;
@@ -19,17 +20,6 @@ export interface WorkdayCalculationResult {
   pairs: { entrada: string; saida: string }[];
 }
 
-function parseTimeToMinutes(t: string): number {
-  const [h, m] = t.split(':').map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
-}
-
-function minutesBetween(entrada: string, saida: string): number {
-  const a = new Date(entrada).getTime();
-  const b = new Date(saida).getTime();
-  return Math.max(0, Math.round((b - a) / (60 * 1000)));
-}
-
 /**
  * Calcula a jornada do dia para um funcionário: horas trabalhadas, extras, atrasos, faltas, banco.
  */
@@ -38,6 +28,7 @@ export async function calculateWorkday(
   date: string,
   companyId: string
 ): Promise<WorkdayCalculationResult> {
+  const unifiedDay = await processEmployeeDay(employeeId, companyId, date);
   const result: WorkdayCalculationResult = {
     employee_id: employeeId,
     date,
@@ -55,11 +46,10 @@ export async function calculateWorkday(
   result.interpretation_status = interpretation.status;
   result.pairs = interpretation.pairs;
 
-  let totalMinutes = 0;
-  for (const p of interpretation.pairs) {
-    totalMinutes += minutesBetween(p.entrada, p.saida);
-  }
-  result.horas_trabalhadas = Math.round(totalMinutes) / 60;
+  result.horas_trabalhadas = Math.round(unifiedDay.daily.total_worked_minutes) / 60;
+  result.horas_extras = Math.round(unifiedDay.daily.extra_minutes) / 60;
+  result.atrasos = Math.round(unifiedDay.daily.late_minutes) / 60;
+  result.faltas = Math.round(unifiedDay.daily.absence_minutes) / 60;
 
   // Escala esperada (work_shifts via user -> schedule -> shift)
   const userRows = (await db.select('users', [{ column: 'id', operator: 'eq', value: employeeId }], undefined, 1)) as { schedule_id?: string }[];
@@ -80,37 +70,6 @@ export async function calculateWorkday(
   }[];
   const shift = shiftRows?.[0];
   if (!shift) return result;
-
-  const startMin = shift.start_time ? parseTimeToMinutes(shift.start_time.slice(0, 5)) : 8 * 60;
-  const endMin = shift.end_time ? parseTimeToMinutes(shift.end_time.slice(0, 5)) : 17 * 60;
-  const breakMin = shift.break_minutes ?? 60;
-  const expectedMinutes = endMin - startMin - breakMin;
-  const tolerance = shift.tolerancia_entrada ?? 10;
-  const limitHours = shift.limite_horas_dia ?? 10;
-
-  if (interpretation.pairs.length > 0) {
-    const firstEntrada = interpretation.pairs[0].entrada;
-    const firstMin = new Date(firstEntrada).getHours() * 60 + new Date(firstEntrada).getMinutes();
-    if (firstMin > startMin + tolerance) {
-      result.atrasos = (firstMin - startMin - tolerance) / 60;
-    }
-    const workedMinutes = totalMinutes;
-    if (workedMinutes > expectedMinutes) {
-      result.horas_extras = (workedMinutes - expectedMinutes) / 60;
-      if (limitHours && result.horas_trabalhadas > limitHours) {
-        result.horas_extras = Math.min(result.horas_extras, result.horas_trabalhadas - limitHours);
-      }
-    }
-    if (workedMinutes < expectedMinutes && interpretation.pairs.length > 0) {
-      const missing = (expectedMinutes - workedMinutes) / 60;
-      if (missing >= 0.5) result.faltas = Math.round(missing / 8); // simplificado: falta se faltou ≥ 0.5h
-    }
-  } else {
-    const dayOfWeek = new Date(date).getDay();
-    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-      result.faltas = 1;
-    }
-  }
 
   // Saldo banco de horas (último registro da tabela bank_hours para o funcionário até a data)
   if (shift.banco_horas && isSupabaseConfigured()) {

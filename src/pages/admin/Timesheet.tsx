@@ -42,6 +42,8 @@ import {
   type CompanyData,
   type EmployeeData,
 } from '../../services/professionalPDF.service';
+import { LoggingService } from '../../../services/loggingService';
+import { LogSeverity } from '../../../types';
 
 /** Filtros do espelho por utilizador — sobrevivem a novo login na mesma aba/navegador. */
 function adminTimesheetFiltersKey(userId: string) {
@@ -342,6 +344,20 @@ const AdminTimesheet: React.FC = () => {
       const mergeRow = buildMergeRow(mergeId, mergeCreated);
 
       toast.addToast('success', 'Batida adicionada com sucesso.');
+      await LoggingService.log({
+        severity: LogSeverity.SECURITY,
+        action: 'ADMIN_ADD_TIME_RECORD',
+        userId: user?.id,
+        userName: user?.nome,
+        companyId: cid,
+        details: {
+          employeeId: data.user_id,
+          recordId: mergeId,
+          type: data.type,
+          created_at: data.created_at,
+          source: 'admin_timesheet',
+        },
+      });
       setShowAddModal(false);
       await loadEspelho();
       if (mergeRow && mergeId) {
@@ -467,13 +483,25 @@ const AdminTimesheet: React.FC = () => {
     if (!y || !m) return;
     setClosingLoading(true);
     try {
-      const already = await isTimesheetClosed(companyId, m, y);
+      const already = await isTimesheetClosed(companyId, m, y, filterUserId);
       if (already) {
         toast.addToast('info', 'Este mês já consta como fechado.');
         return;
       }
-      await closeTimesheet(companyId, m, y, filterUserId);
+      await closeTimesheet(companyId, m, y, filterUserId, user?.id);
       invalidateAfterTimesheetMonthClose(companyId);
+      await LoggingService.log({
+        severity: LogSeverity.SECURITY,
+        action: 'ADMIN_CLOSE_TIMESHEET_MONTH',
+        userId: user?.id,
+        userName: user?.nome,
+        companyId,
+        details: {
+          employeeId: filterUserId,
+          month: m,
+          year: y,
+        },
+      });
       toast.addToast('success', 'Folha fechada com sucesso.');
       await loadEspelho();
     } catch (e) {
@@ -1096,6 +1124,37 @@ const AdminTimesheet: React.FC = () => {
           setShowEditModal(false);
           setRecordToEdit(null);
           void loadEspelho();
+        }}
+        onUpdated={({ recordId, userId, date, time, type }) => {
+          void LoggingService.log({
+            severity: LogSeverity.SECURITY,
+            action: 'ADMIN_UPDATE_TIME_RECORD',
+            userId: user?.id,
+            userName: user?.nome,
+            companyId: companyId || '',
+            details: {
+              recordId,
+              employeeId: userId,
+              date,
+              time,
+              type,
+              source: 'admin_timesheet',
+            },
+          });
+        }}
+        onDeleted={({ recordId, userId }) => {
+          void LoggingService.log({
+            severity: LogSeverity.WARN,
+            action: 'ADMIN_DELETE_TIME_RECORD',
+            userId: user?.id,
+            userName: user?.nome,
+            companyId: companyId || '',
+            details: {
+              recordId,
+              employeeId: userId,
+              source: 'admin_timesheet',
+            },
+          });
         }}
       />
       {issuesModal && (

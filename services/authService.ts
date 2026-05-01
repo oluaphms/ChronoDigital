@@ -17,8 +17,10 @@ import {
 import { clearLocalAuthSession } from './supabase';
 import { withTimeout } from '../src/utils/withTimeout';
 import { User } from '../types';
+import { LogSeverity } from '../types';
 import { logTenantLoginSuccess } from '../src/services/tenantAudit';
 import { resolveTenantId } from '../src/services/tenantScope';
+import { LoggingService } from './loggingService';
 
 export interface AuthResult {
   user: User | null;
@@ -695,12 +697,32 @@ class AuthService {
         ]);
         if (appUser) {
           persistCurrentUserToProfileStore(appUser);
+          if (appUser.companyId) {
+            void LoggingService.log({
+              severity: LogSeverity.INFO,
+              action: 'LOGIN_SUCCESS',
+              userId: appUser.id,
+              userName: appUser.nome,
+              companyId: appUser.companyId,
+              details: { role: appUser.role, email: appUser.email },
+            });
+          }
           this.enqueuePostLoginSideEffects(appUser, data.user);
           return { user: appUser, error: null };
         }
         // Fallback: perfil não carregou a tempo (timeout) — mesmo fluxo que onAuthStateChanged (não deslogar)
         const minimalUser = await this.buildMinimalAppUserFromAuthUser(data.user);
         persistCurrentUserToProfileStore(minimalUser);
+        if (minimalUser.companyId) {
+          void LoggingService.log({
+            severity: LogSeverity.INFO,
+            action: 'LOGIN_SUCCESS',
+            userId: minimalUser.id,
+            userName: minimalUser.nome,
+            companyId: minimalUser.companyId,
+            details: { role: minimalUser.role, email: minimalUser.email, mode: 'fallback_minimal_profile' },
+          });
+        }
         this.enqueuePostLoginSideEffects(minimalUser, data.user);
         return { user: minimalUser, error: null };
       }

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { RawTimeRecord } from '../services/timeProcessingService';
 import {
   applyNightRules,
+  calculateDSRExtraImpactMinutes,
   calculateDSR,
   calculateOvertime,
   classifyDay,
   isNationalHoliday,
+  splitNightMinutesNormalVsExtraForDate,
   type CompanyRules,
 } from './timeEngine';
 
@@ -31,7 +34,7 @@ describe('timeEngine consolidated rules', () => {
     expect(out.overtime_100_minutes).toBe(0);
   });
 
-  it('sábado trabalhado vs não trabalhado respeita regra da empresa', () => {
+  it('sábado sempre classifica extra como 50%', () => {
     const saturdayNotWorkday = calculateOvertime({
       date: '2026-04-18',
       dayType: 'SATURDAY',
@@ -48,7 +51,7 @@ describe('timeEngine consolidated rules', () => {
       companyRules: { ...baseRules, work_on_saturday: true, saturday_overtime_type: '100' },
       schedule: null,
     });
-    expect(saturdayNotWorkday.overtime_100_minutes).toBe(60);
+    expect(saturdayNotWorkday.overtime_50_minutes).toBe(60);
     expect(saturdayWorkday.overtime_50_minutes).toBe(60);
   });
 
@@ -100,8 +103,36 @@ describe('timeEngine consolidated rules', () => {
     const withoutAbsence = calculateDSR([
       { date: '2026-04-20', hasUnjustifiedAbsence: false, overtimeMinutes: 60 },
       { date: '2026-04-21', hasUnjustifiedAbsence: false, overtimeMinutes: 30 },
+      { date: '2026-04-22', hasUnjustifiedAbsence: false, overtimeMinutes: 0 },
+      { date: '2026-04-23', hasUnjustifiedAbsence: false, overtimeMinutes: 0 },
+      { date: '2026-04-24', hasUnjustifiedAbsence: false, overtimeMinutes: 0 },
+      { date: '2026-04-25', hasUnjustifiedAbsence: false, overtimeMinutes: 0 },
+      { date: '2026-04-26', hasUnjustifiedAbsence: false, overtimeMinutes: 0 },
     ]);
     expect(withAbsence).toBe(0);
-    expect(withoutAbsence).toBe(45);
+    /** 90 min em 5 dias úteis (seg–sex) × 1 domingo no recorte sintético ≈ 18 min. */
+    expect(withoutAbsence).toBe(18);
+  });
+
+  it('DSR exemplo blueprint: 600 min / 5 dias × 1 domingo = 120 min', () => {
+    expect(
+      calculateDSRExtraImpactMinutes({
+        totalExtraMinutes: 600,
+        mondayFridayUtilityDaysCount: 5,
+        restDaysCount: 1,
+      }),
+    ).toBe(120);
+  });
+
+  it('noturno proporcional: 60 min noturnas, 60 min trabalhadas, teto 40 → 40/20', () => {
+    const day = '2026-05-04';
+    const records: RawTimeRecord[] = [
+      { id: '1', created_at: `${day}T22:30:00`, timestamp: `${day}T22:30:00`, type: 'entrada' },
+      { id: '2', created_at: `${day}T23:30:00`, timestamp: `${day}T23:30:00`, type: 'saida' },
+    ];
+    const split = splitNightMinutesNormalVsExtraForDate(records, day, 40);
+    expect(split.nightNormal + split.nightExtra).toBe(60);
+    expect(split.nightNormal).toBe(40);
+    expect(split.nightExtra).toBe(20);
   });
 });

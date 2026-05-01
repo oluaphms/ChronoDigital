@@ -703,7 +703,8 @@ export async function closeTimesheet(
   companyId: string,
   month: number,
   year: number,
-  userId?: string
+  employeeId?: string,
+  closedBy?: string
 ) {
   const client = supabase as SupabaseClient | null;
   if (!client) throw new Error('Supabase não inicializado');
@@ -712,9 +713,11 @@ export async function closeTimesheet(
     .from('timesheet_closures')
     .insert({
       company_id: companyId,
+      employee_id: employeeId,
       month,
       year,
-      user_id: userId,
+      user_id: employeeId, // compat legado
+      closed_by: closedBy ?? null,
       closed_at: new Date().toISOString(),
     })
     .select()
@@ -727,18 +730,24 @@ export async function closeTimesheet(
 export async function isTimesheetClosed(
   companyId: string,
   month: number,
-  year: number
+  year: number,
+  employeeId?: string,
 ): Promise<boolean> {
   const client = supabase as SupabaseClient | null;
   if (!client) return false;
 
-  const { data, error } = await client
+  let query = client
     .from('timesheet_closures')
     .select('id')
     .eq('company_id', companyId)
     .eq('month', month)
-    .eq('year', year)
-    .maybeSingle();
+    .eq('year', year);
+
+  if (employeeId) {
+    query = query.eq('employee_id', employeeId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) throw error;
   return !!data;

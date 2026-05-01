@@ -6,6 +6,9 @@
  */
 
 import { isSupabaseConfigured } from '../services/supabaseClient';
+import { db } from '../services/supabaseClient';
+import { getDayRecords } from '../services/timeProcessingService';
+import { parseTimeRecords } from '../engine/timeEngine';
 import {
   processEmployeeDay,
   saveInconsistencies,
@@ -46,16 +49,21 @@ export async function runDailyTimeProcessor(dateStr?: string): Promise<DailyProc
 
       const companyRules = await getCompanyRules(emp.company_id);
       const bankEnabled = companyRules.time_bank_enabled;
-      const overtimeHours = Number(summary.bank_hours_delta || 0) / 60;
-      const missingHours = summary.daily.missing_minutes / 60;
-      await calculateBankHours(emp.id, emp.company_id, date, overtimeHours, missingHours, bankEnabled);
+      /** Com BH ligado o motor já grava em `bank_entries` (ledger); não duplica em `bank_hours` legacy. */
+      if (!bankEnabled) {
+        const overtimeHours = Number(summary.bank_hours_delta || 0) / 60;
+        const missingHours = summary.daily.missing_minutes / 60;
+        await calculateBankHours(emp.id, emp.company_id, date, overtimeHours, missingHours, false);
+      }
 
+      const dayRecords = await getDayRecords(emp.id, date);
+      const parsed = parseTimeRecords(dayRecords);
       const alerts = detectFraudAlerts(
         emp.id,
         date,
-        summary.daily.records,
+        dayRecords,
         summary.daily.total_worked_minutes,
-        summary.daily.break_minutes
+        parsed.breakMinutes
       );
       await saveTimeAlerts(emp.id, emp.company_id, date, alerts);
 

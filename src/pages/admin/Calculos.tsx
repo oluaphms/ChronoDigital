@@ -18,19 +18,13 @@ import { LoadingState } from '../../../components/UI';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import { buscarColaboradores } from '../../../services/api';
 import {
-  calculateNightHours,
-  calculateOvertime,
-  detectInconsistencies,
-  isNationalHoliday,
-  parseTimeRecords,
+  recalculate_period,
+  processEmployeeDay,
   type OvertimeResult,
   type TimeInconsistency,
 } from '../../engine/timeEngine';
 import {
-  getDayRecords,
   getEmployeeSchedule,
-  processDailyTime,
-  resolveEmployeeScheduleForDate,
   type DailyProcessResult,
   type WorkScheduleInfo,
 } from '../../services/timeProcessingService';
@@ -77,7 +71,7 @@ function addDays(ymd: string, days: number): string {
 
 interface CalcDayRow {
   date: string;
-  daily: DailyProcessResult & { missing_minutes: number };
+  daily: DailyProcessResult & { missing_minutes: number; absence_minutes: number };
   overtime: OvertimeResult | null;
   inconsistencies: TimeInconsistency[];
   night_minutes: number;
@@ -88,7 +82,7 @@ interface CalcDayRow {
 interface CalcGroupRow {
   key: string;
   label: string;
-  daily: DailyProcessResult & { missing_minutes: number };
+  daily: DailyProcessResult & { missing_minutes: number; absence_minutes: number };
   overtime: OvertimeResult | null;
   night_minutes: number;
   inconsistencies: TimeInconsistency[];
@@ -205,157 +199,47 @@ const AdminCalculos: React.FC = () => {
     setCalcRows(null);
   };
 
-  const defaultSchedule: WorkScheduleInfo = {
-    start_time: '08:00',
-    end_time: '17:00',
-    break_start: '12:00',
-    break_end: '13:00',
-    tolerance_minutes: 10,
-    daily_hours: 8,
-    work_days: [1, 2, 3, 4, 5],
-  };
-
-  const buildSchedule = useCallback(
-    async (employeeId: string, companyId: string): Promise<WorkScheduleInfo> => {
-      const base = calcOptions.useEmployeeSchedule
-        ? await getEmployeeSchedule(employeeId, companyId)
-        : null;
-      const schedule = { ...(base || defaultSchedule) };
-      schedule.tolerance_minutes = calcOptions.useTolerance ? calcOptions.toleranceMinutes : 0;
-      return schedule;
-    },
-    [calcOptions.useEmployeeSchedule, calcOptions.useTolerance, calcOptions.toleranceMinutes],
-  );
-
   const computeDayRow = useCallback(
     async (employeeId: string, companyId: string, dateStr: string): Promise<CalcDayRow> => {
-      const schedule = await buildSchedule(employeeId, companyId);
-      const records = await getDayRecords(employeeId, dateStr);
-      const tol = calcOptions.useTolerance ? calcOptions.toleranceMinutes : 0;
-      const dailyBase = await processDailyTime(
-        employeeId,
-        companyId,
-        dateStr,
-        calcOptions.useEmployeeSchedule
-          ? { toleranceOverride: tol }
-          : { fixedSchedule: schedule, toleranceOverride: tol },
-      );
-      const parsed = parseTimeRecords(records);
+      const day = await processEmployeeDay(employeeId, companyId, dateStr);
+      const excludedDay = !calcOptions.includeHolidaysAndDaysOff && day.daily.scheduled_day_off;
+      const workedMinutes = roundMinutes(day.daily.total_worked_minutes, calcOptions.roundingMinutes);
+      const expected = roundMinutes(excludedDay ? 0 : day.daily.expected_minutes, calcOptions.roundingMinutes);
+      const lateMinutes = roundMinutes(day.daily.late_minutes, calcOptions.roundingMinutes);
+      const missingMinutes = roundMinutes(excludedDay ? 0 : day.daily.negative_minutes, calcOptions.roundingMinutes);
+      const overtimeMinutes = roundMinutes(excludedDay ? 0 : day.daily.extra_minutes, calcOptions.roundingMinutes);
+      const nightMinutes = roundMinutes(calcOptions.includeNight ? day.night_minutes : 0, calcOptions.roundingMinutes);
+      const overtime: OvertimeResult = {
+        date: dateStr,
+        overtime_50_minutes: day.daily.extra_50_minutes,
+        overtime_100_minutes: day.daily.extra_100_minutes,
+        is_holiday_or_off: day.daily.day_type === 'HOLIDAY' || day.daily.day_type === 'SUNDAY',
+      };
 
-      const isHoliday = holidayDates.has(dateStr) || isNationalHoliday(dateStr);
-      const isDayOff = dailyBase.scheduled_day_off || isHoliday;
-
-      let workedMinutes = dailyBase.total_worked_minutes;
-      const expectedMinutes = dailyBase.expected_minutes;
-      const breakMinutes = parsed.breakMinutes;
-
-      if (calcOptions.enforceMinBreak) {
-        const threshold = Math.max(0, calcOptions.minBreakAfterHours) * 60;
-        if (workedMinutes > threshold && breakMinutes < calcOptions.minBreakMinutes) {
-          const diff = calcOptions.minBreakMinutes - breakMinutes;
-          workedMinutes = Math.max(0, workedMinutes - diff);
-        }
-      }
-
-      let expected = expectedMinutes;
-      let lateMinutes = dailyBase.late_minutes;
-      const excludedDay = !calcOptions.includeHolidaysAndDaysOff && (isHoliday || isDayOff);
-
-      if (isHoliday || isDayOff) {
-        expected = 0;
-        lateMinutes = 0;
-      }
-
-      if (excludedDay) {
-        expected = 0;
-        lateMinutes = 0;
-      }
-
-      let delta = workedMinutes - expected;
-      let overtimeMinutes = delta > 0 ? delta : 0;
-      let missingMinutes = delta < 0 ? -delta : 0;
-
-      if (calcOptions.useTolerance && calcOptions.toleranceMinutes > 0 && Math.abs(delta) <= calcOptions.toleranceMinutes) {
-        overtimeMinutes = 0;
-        missingMinutes = 0;
-      }
-
-      if (!calcOptions.calcOvertime || excludedDay) {
-        overtimeMinutes = 0;
-      }
-
-      if (excludedDay) {
-        missingMinutes = 0;
-      }
-
-      let nightMinutes = calcOptions.includeNight ? calculateNightHours(records) : 0;
-
-      const dayScheduleForDetect = calcOptions.useEmployeeSchedule
-        ? (await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr)).schedule
-        : schedule;
-      const inconsistencies = detectInconsistencies(
-        employeeId,
-        dateStr,
-        records,
-        dayScheduleForDetect,
-        calcOptions.useEmployeeSchedule ? !dailyBase.scheduled_day_off : undefined,
-      );
-      if (calcOptions.enforceMinBreak) {
-        const threshold = Math.max(0, calcOptions.minBreakAfterHours) * 60;
-        const hasMissingBreak = breakMinutes < calcOptions.minBreakMinutes && workedMinutes > threshold;
-        if (hasMissingBreak && !inconsistencies.some((i) => i.type === 'missing_break')) {
-          inconsistencies.push({
-            employee_id: employeeId,
-            date: dateStr,
-            type: 'missing_break',
-            description: `Intervalo inferior a ${calcOptions.minBreakMinutes} min`,
-          });
-        }
-      }
-
-      workedMinutes = roundMinutes(workedMinutes, calcOptions.roundingMinutes);
-      expected = roundMinutes(expected, calcOptions.roundingMinutes);
-      overtimeMinutes = roundMinutes(overtimeMinutes, calcOptions.roundingMinutes);
-      missingMinutes = roundMinutes(missingMinutes, calcOptions.roundingMinutes);
-      nightMinutes = roundMinutes(nightMinutes, calcOptions.roundingMinutes);
-      lateMinutes = roundMinutes(lateMinutes, calcOptions.roundingMinutes);
-
-      const overtime = calcOptions.calcOvertime && !excludedDay
-        ? calculateOvertime(dateStr, workedMinutes, expected, isHoliday || isDayOff)
-        : ({ date: dateStr, overtime_50_minutes: 0, overtime_100_minutes: 0, is_holiday_or_off: isHoliday || isDayOff } as OvertimeResult);
-
-      const daily: DailyProcessResult & { missing_minutes: number } = {
-        ...dailyBase,
+      const daily: DailyProcessResult & { missing_minutes: number; absence_minutes: number } = {
+        ...day.daily,
         total_worked_minutes: workedMinutes,
         expected_minutes: expected,
         overtime_minutes: overtimeMinutes,
         late_minutes: lateMinutes,
         missing_minutes: missingMinutes,
+        absence_minutes: day.daily.absence_minutes,
       };
 
       return {
         date: dateStr,
         daily,
-        overtime,
-        inconsistencies,
+        overtime: excludedDay ? { ...overtime, overtime_50_minutes: 0, overtime_100_minutes: 0 } : overtime,
+        inconsistencies: day.inconsistencies,
         night_minutes: nightMinutes,
-        isHoliday,
-        isDayOff,
+        isHoliday: day.daily.day_type === 'HOLIDAY',
+        isDayOff: day.daily.scheduled_day_off,
       };
     },
     [
-      buildSchedule,
-      calcOptions.calcOvertime,
-      calcOptions.enforceMinBreak,
       calcOptions.includeHolidaysAndDaysOff,
       calcOptions.includeNight,
-      calcOptions.minBreakAfterHours,
-      calcOptions.minBreakMinutes,
       calcOptions.roundingMinutes,
-      calcOptions.toleranceMinutes,
-      calcOptions.useTolerance,
-      calcOptions.useEmployeeSchedule,
-      holidayDates,
     ],
   );
 
@@ -376,10 +260,59 @@ const AdminCalculos: React.FC = () => {
     setLoadingCalc(true);
     setCalcRows(null);
     try {
-      const rows: CalcDayRow[] = [];
-      for (const d of dias) {
-        rows.push(await computeDayRow(filterUserId, user.companyId, d));
-      }
+      await recalculate_period(filterUserId, user.companyId, periodStart, periodEnd);
+      const persisted = (await db.select(
+        'timesheets_daily',
+        [
+          { column: 'employee_id', operator: 'eq', value: filterUserId },
+          { column: 'company_id', operator: 'eq', value: user.companyId },
+          { column: 'date', operator: 'gte', value: periodStart },
+          { column: 'date', operator: 'lte', value: periodEnd },
+        ],
+        { column: 'date', ascending: true },
+        500
+      )) as Array<{
+        date: string;
+        worked_minutes: number;
+        expected_minutes: number;
+        overtime_minutes: number;
+        absence_minutes: number;
+        night_minutes: number;
+        late_minutes: number;
+        raw_data?: Record<string, unknown>;
+      }>;
+      const byDate = new Map((persisted || []).map((r) => [r.date, r]));
+      const rows: CalcDayRow[] = dias.map((d) => {
+        const p = byDate.get(d);
+        const extra50 = Number((p?.raw_data as any)?.extra_50_minutes ?? 0);
+        const extra100 = Number((p?.raw_data as any)?.extra_100_minutes ?? 0);
+        return {
+          date: d,
+          daily: {
+            total_worked_minutes: Number(p?.worked_minutes ?? 0),
+            expected_minutes: Number(p?.expected_minutes ?? 0),
+            overtime_minutes: Number(p?.overtime_minutes ?? 0),
+            late_minutes: Number(p?.late_minutes ?? 0),
+            missing_minutes: Number((p?.raw_data as any)?.negative_minutes ?? 0),
+            absence_minutes: Number(p?.absence_minutes ?? 0),
+            entrada: null,
+            saida: null,
+            inicio_intervalo: null,
+            fim_intervalo: null,
+            scheduled_day_off: false,
+          },
+          overtime: {
+            date: d,
+            overtime_50_minutes: extra50,
+            overtime_100_minutes: extra100,
+            is_holiday_or_off: false,
+          },
+          inconsistencies: [],
+          night_minutes: Number(p?.night_minutes ?? 0),
+          isHoliday: false,
+          isDayOff: false,
+        };
+      });
       setCalcRows(rows);
     } catch (e: any) {
       console.error(e);
@@ -417,6 +350,7 @@ const AdminCalculos: React.FC = () => {
           overtime_minutes: 0,
           late_minutes: 0,
           missing_minutes: 0,
+          absence_minutes: 0,
           entrada: null,
           saida: null,
           inicio_intervalo: null,
@@ -446,6 +380,7 @@ const AdminCalculos: React.FC = () => {
         group.daily.overtime_minutes += row.daily.overtime_minutes;
         group.daily.late_minutes += row.daily.late_minutes;
         group.daily.missing_minutes += row.daily.missing_minutes;
+        group.daily.absence_minutes += row.daily.absence_minutes;
         group.night_minutes += row.night_minutes;
         group.overtime!.overtime_50_minutes += row.overtime?.overtime_50_minutes ?? 0;
         group.overtime!.overtime_100_minutes += row.overtime?.overtime_100_minutes ?? 0;
@@ -460,6 +395,7 @@ const AdminCalculos: React.FC = () => {
         group.daily.overtime_minutes += row.daily.overtime_minutes;
         group.daily.late_minutes += row.daily.late_minutes;
         group.daily.missing_minutes += row.daily.missing_minutes;
+        group.daily.absence_minutes += row.daily.absence_minutes;
         group.night_minutes += row.night_minutes;
         group.overtime!.overtime_50_minutes += row.overtime?.overtime_50_minutes ?? 0;
         group.overtime!.overtime_100_minutes += row.overtime?.overtime_100_minutes ?? 0;
@@ -477,7 +413,6 @@ const AdminCalculos: React.FC = () => {
       { key: 'entrada', label: 'Entrada', visible: calcOptions.groupBy === 'day' },
       { key: 'saida', label: 'Saída', visible: calcOptions.groupBy === 'day' },
       { key: 'worked', label: 'Trabalhadas' },
-      { key: 'positive', label: 'Positivas' },
       { key: 'negative', label: 'Negativas' },
       { key: 'late', label: 'Atraso', visible: calcOptions.exportColumns.late },
       { key: 'missing', label: 'Falta', visible: calcOptions.exportColumns.missing },
@@ -500,16 +435,15 @@ const AdminCalculos: React.FC = () => {
       (acc, r) => {
         const row = r as CalcDayRow & CalcGroupRow;
         acc.worked += row.daily.total_worked_minutes;
-        acc.positive += row.daily.overtime_minutes;
         acc.negative += row.daily.missing_minutes;
         acc.late += row.daily.late_minutes;
-        acc.missing += row.daily.missing_minutes;
+        acc.missing += row.daily.absence_minutes;
         acc.extra50 += row.overtime?.overtime_50_minutes ?? 0;
         acc.extra100 += row.overtime?.overtime_100_minutes ?? 0;
         acc.night += row.night_minutes;
         return acc;
       },
-      { worked: 0, positive: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
+      { worked: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
     );
   }, [rowsToRender]);
 
@@ -527,16 +461,15 @@ const AdminCalculos: React.FC = () => {
       (acc, r) => {
         const row = r as CalcDayRow & CalcGroupRow;
         acc.worked += row.daily.total_worked_minutes;
-        acc.positive += row.daily.overtime_minutes;
         acc.negative += row.daily.missing_minutes;
         acc.late += row.daily.late_minutes;
-        acc.missing += row.daily.missing_minutes;
+        acc.missing += row.daily.absence_minutes;
         acc.extra50 += row.overtime?.overtime_50_minutes ?? 0;
         acc.extra100 += row.overtime?.overtime_100_minutes ?? 0;
         acc.night += row.night_minutes;
         return acc;
       },
-      { worked: 0, positive: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
+      { worked: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
     );
     for (const r of list) {
       const row = r as CalcDayRow & CalcGroupRow;
@@ -546,10 +479,9 @@ const AdminCalculos: React.FC = () => {
         entrada: grouped ? '—' : row.daily.entrada ?? '—',
         saida: grouped ? '—' : row.daily.saida ?? '—',
         worked: fmtMinutos(row.daily.total_worked_minutes),
-        positive: fmtMinutos(row.daily.overtime_minutes),
         negative: fmtMinutos(row.daily.missing_minutes),
         late: fmtMinutos(row.daily.late_minutes),
-        missing: fmtMinutos(row.daily.missing_minutes),
+        missing: fmtMinutos(row.daily.absence_minutes),
         extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
         extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
         night: fmtMinutos(row.night_minutes),
@@ -559,7 +491,6 @@ const AdminCalculos: React.FC = () => {
     const totalsLine = columns.map((c) => {
       if (c.key === 'date') return 'Totais';
       if (c.key === 'worked') return fmtMinutos(totals.worked);
-      if (c.key === 'positive') return fmtMinutos(totals.positive);
       if (c.key === 'negative') return fmtMinutos(totals.negative);
       if (c.key === 'late') return fmtMinutos(totals.late);
       if (c.key === 'missing') return fmtMinutos(totals.missing);
@@ -612,16 +543,15 @@ const AdminCalculos: React.FC = () => {
         (acc, r) => {
           const row = r as CalcDayRow & CalcGroupRow;
           acc.worked += row.daily.total_worked_minutes;
-          acc.positive += row.daily.overtime_minutes;
           acc.negative += row.daily.missing_minutes;
           acc.late += row.daily.late_minutes;
-          acc.missing += row.daily.missing_minutes;
+          acc.missing += row.daily.absence_minutes;
           acc.extra50 += row.overtime?.overtime_50_minutes ?? 0;
           acc.extra100 += row.overtime?.overtime_100_minutes ?? 0;
           acc.night += row.night_minutes;
           return acc;
         },
-        { worked: 0, positive: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
+        { worked: 0, negative: 0, late: 0, missing: 0, extra50: 0, extra100: 0, night: 0 },
       );
       const body = list.map((r) => {
         const row = r as CalcDayRow & CalcGroupRow;
@@ -631,10 +561,9 @@ const AdminCalculos: React.FC = () => {
           entrada: grouped ? '—' : row.daily.entrada ?? '—',
           saida: grouped ? '—' : row.daily.saida ?? '—',
           worked: fmtMinutos(row.daily.total_worked_minutes),
-          positive: fmtMinutos(row.daily.overtime_minutes),
           negative: fmtMinutos(row.daily.missing_minutes),
           late: fmtMinutos(row.daily.late_minutes),
-          missing: fmtMinutos(row.daily.missing_minutes),
+          missing: fmtMinutos(row.daily.absence_minutes),
           extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
           extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
           night: fmtMinutos(row.night_minutes),
@@ -646,7 +575,6 @@ const AdminCalculos: React.FC = () => {
         columns.map((c) => {
           if (c.key === 'date') return 'Totais';
           if (c.key === 'worked') return fmtMinutos(totals.worked);
-          if (c.key === 'positive') return fmtMinutos(totals.positive);
           if (c.key === 'negative') return fmtMinutos(totals.negative);
           if (c.key === 'late') return fmtMinutos(totals.late);
           if (c.key === 'missing') return fmtMinutos(totals.missing);
@@ -1064,10 +992,9 @@ const AdminCalculos: React.FC = () => {
                       entrada: grouped ? '—' : row.daily.entrada ?? '—',
                       saida: grouped ? '—' : row.daily.saida ?? '—',
                       worked: fmtMinutos(row.daily.total_worked_minutes),
-                        positive: fmtMinutos(row.daily.overtime_minutes),
-                        negative: fmtMinutos(row.daily.missing_minutes),
+                      negative: fmtMinutos(row.daily.missing_minutes),
                       late: fmtMinutos(row.daily.late_minutes),
-                      missing: fmtMinutos(row.daily.missing_minutes),
+                      missing: fmtMinutos(row.daily.absence_minutes),
                       extra50: fmtMinutos(row.overtime?.overtime_50_minutes ?? 0),
                       extra100: fmtMinutos(row.overtime?.overtime_100_minutes ?? 0),
                       night: fmtMinutos(row.night_minutes),
@@ -1092,9 +1019,7 @@ const AdminCalculos: React.FC = () => {
                             ? 'Totais'
                             : col.key === 'worked'
                               ? fmtMinutos(totalsToRender.worked)
-                              : col.key === 'positive'
-                                ? fmtMinutos(totalsToRender.positive)
-                                : col.key === 'negative'
+                              : col.key === 'negative'
                                   ? fmtMinutos(totalsToRender.negative)
                                   : col.key === 'late'
                                     ? fmtMinutos(totalsToRender.late)

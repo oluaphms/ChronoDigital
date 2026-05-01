@@ -5,6 +5,7 @@
  */
 
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { applyDailyBankLedger, getBankBalanceFifoApprox } from './bankLedger';
 import {
   getDayRecords,
   processDailyTime,
@@ -125,10 +126,24 @@ const DEFAULT_COMPANY_RULES: CompanyRules = {
 
 export interface DaySummary {
   date: string;
-  daily: DailyProcessResult;
+  daily: DailyProcessResult & {
+    missing_minutes: number;
+    negative_minutes: number;
+    extra_minutes: number;
+    extra_50_minutes: number;
+    extra_100_minutes: number;
+    absence_minutes: number;
+    incomplete: boolean;
+    day_type: DayType;
+    /** Gap após abatimento do BH (valor que segue como desconto em folha). */
+    payroll_negative_after_bank_minutes?: number;
+    bank_compensated_minutes?: number;
+  };
   inconsistencies: TimeInconsistency[];
   overtime: OvertimeResult | null;
   night_minutes: number;
+  night_normal_reduced_minutes?: number;
+  night_extra_reduced_minutes?: number;
   dsr_minutes?: number;
   bank_hours_delta?: number;
 }
@@ -528,9 +543,70 @@ export function calculateNightHours(records: RawTimeRecord[]): number {
   const parsed = parseTimeRecords(records);
   let total = 0;
   for (const seq of parsed.sequences) {
-    if (seq.saida) total += nightMinutesBetween(seq.entrada, seq.saida);
+    if (!seq.saida) continue;
+    if (seq.inicioIntervalo && seq.fimIntervalo) {
+      total += nightMinutesBetween(seq.entrada, seq.inicioIntervalo);
+      total += nightMinutesBetween(seq.fimIntervalo, seq.saida);
+      continue;
+    }
+    if (seq.inicioIntervalo && !seq.fimIntervalo) {
+      total += nightMinutesBetween(seq.entrada, seq.inicioIntervalo);
+      continue;
+    }
+    total += nightMinutesBetween(seq.entrada, seq.saida);
   }
   return total;
+}
+
+function isWithinWorkDateWindow(iso: string, workDate: string): boolean {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const start = new Date(`${workDate}T00:00:00`);
+  const end = new Date(`${workDate}T23:59:59.999`);
+  return d >= start && d <= end;
+}
+
+/** Calcula noturno usando instantes saneados para a data civil processada. */
+export function calculateNightHoursForDate(records: RawTimeRecord[], workDate: string): number {
+  const sanitized: RawTimeRecord[] = records.map((r) => {
+    const createdAt = r.created_at;
+    const ts = r.timestamp ?? null;
+    const useCreatedAt = !ts || !isWithinWorkDateWindow(ts, workDate);
+    return {
+      ...r,
+      timestamp: useCreatedAt ? createdAt : ts,
+    };
+  });
+  const total = calculateNightHours(sanitized);
+  // Trava defensiva para impedir propagação de valores absurdos.
+  return Math.min(total, 12 * 60);
+}
+
+/**
+ * Noturno 22–05 já contabilizado pelo motor; distribui proporcionalmente entre “parte até o teto esperado” e excedente.
+ */
+export function splitNightMinutesNormalVsExtraForDate(
+  records: RawTimeRecord[],
+  workDate: string,
+  expectedWorkedCapMinutes: number
+): { nightNormal: number; nightExtra: number } {
+  const sanitized: RawTimeRecord[] = records.map((r) => {
+    const createdAt = r.created_at;
+    const ts = r.timestamp ?? null;
+    const useCreatedAt = !ts || !isWithinWorkDateWindow(ts, workDate);
+    return {
+      ...r,
+      timestamp: useCreatedAt ? createdAt : ts,
+    };
+  });
+  const parsed = parseTimeRecords(sanitized);
+  const nightTotal = Math.min(calculateNightHours(sanitized), 12 * 60);
+  const worked = Math.max(0, parsed.totalWorkedMinutes);
+  const cap = Math.max(0, Math.round(Number(expectedWorkedCapMinutes) || 0));
+  if (worked === 0) return { nightNormal: nightTotal ? nightTotal : 0, nightExtra: 0 };
+  const share = Math.min(worked, cap) / worked;
+  const nightNormal = Math.round(nightTotal * share);
+  return { nightNormal, nightExtra: Math.max(0, nightTotal - nightNormal) };
 }
 
 export function applyNightRules(nightMinutes: number, companyRules: CompanyRules): NightRuleResult {
@@ -577,9 +653,7 @@ export function calculateOvertime(
   if (dayType === 'HOLIDAY' || dayType === 'SUNDAY') {
     overtime100 = overtime;
   } else if (dayType === 'SATURDAY') {
-    if (companyRules.work_on_saturday) overtime50 = overtime;
-    else if (companyRules.saturday_overtime_type === '50') overtime50 = overtime;
-    else overtime100 = overtime;
+    overtime50 = overtime;
   } else {
     overtime50 = overtime;
   }
@@ -591,9 +665,530 @@ export function calculateOvertime(
   };
 }
 
+function hhmmToMinutes(hhmm: string | null | undefined): number | null {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+  const [h, m] = hhmm.split(':').map((v) => Number(v));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
+
+function isDayIncomplete(daily: DailyProcessResult): boolean {
+  const present = [daily.entrada, daily.inicio_intervalo, daily.fim_intervalo, daily.saida].filter(Boolean).length;
+  if (present === 0) return false;
+  return !(daily.entrada && daily.saida);
+}
+
+export async function get_day_type(
+  dateStr: string,
+  companyId?: string
+): Promise<DayType> {
+  return classifyDay({ date: dateStr, company: { id: companyId } });
+}
+
+export async function get_expected_hours(
+  employeeId: string,
+  companyId: string,
+  dateStr: string,
+  dayType?: DayType
+): Promise<number> {
+  const resolvedType = dayType ?? (await get_day_type(dateStr, companyId));
+  const resolved = await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr);
+  const schedule = resolved.schedule;
+  if (!schedule) return 0;
+  if (resolvedType === 'HOLIDAY') return 0;
+  if (resolvedType === 'SUNDAY') return 0;
+  if (resolvedType === 'SATURDAY') {
+    const start = hhmmToMinutes(schedule.start_time);
+    const end = hhmmToMinutes(schedule.end_time);
+    const breakStart = hhmmToMinutes(schedule.break_start);
+    const breakEnd = hhmmToMinutes(schedule.break_end);
+    if (start != null && end != null && end > start) {
+      const breakMinutes = breakStart != null && breakEnd != null && breakEnd > breakStart ? breakEnd - breakStart : 0;
+      return Math.max(0, end - start - breakMinutes);
+    }
+    return Math.round((Number(schedule.daily_hours || 4) || 4) * 60);
+  }
+  const start = hhmmToMinutes(schedule.start_time);
+  const end = hhmmToMinutes(schedule.end_time);
+  const breakStart = hhmmToMinutes(schedule.break_start);
+  const breakEnd = hhmmToMinutes(schedule.break_end);
+  if (start != null && end != null && end > start) {
+    const breakMinutes = breakStart != null && breakEnd != null && breakEnd > breakStart ? breakEnd - breakStart : 0;
+    return Math.max(0, end - start - breakMinutes);
+  }
+  return Math.round((Number(schedule.daily_hours || 8) || 8) * 60);
+}
+
+export async function calculate_day(
+  employeeId: string,
+  companyId: string,
+  dateStr: string
+): Promise<DaySummary['daily']> {
+  const companyRules = await getCompanyRules(companyId);
+  const dayType = await get_day_type(dateStr, companyId);
+  const records = await getDayRecords(employeeId, dateStr);
+  const base = await processDailyTime(employeeId, companyId, dateStr, {
+    toleranceOverride: companyRules.tolerance_minutes,
+  });
+  let expected = await get_expected_hours(employeeId, companyId, dateStr, dayType);
+  const worked = base.total_worked_minutes;
+  if ((dayType !== 'SUNDAY' && dayType !== 'HOLIDAY') && (!Number.isFinite(expected) || expected <= 0)) {
+    const fallbackExpected = dayType === 'SATURDAY' ? 4 * 60 : 8 * 60;
+    console.warn('[CALC] Expected inválido, aplicando fallback', {
+      date: dateStr,
+      dayType,
+      expected_original: expected,
+      expected_fallback: fallbackExpected,
+    });
+    expected = fallbackExpected;
+  }
+  if (!Number.isFinite(expected) || expected < 0) {
+    throw new Error(`Expected hours inválido para ${dateStr}`);
+  }
+  const noPunches = records.length === 0;
+  if (noPunches) {
+    console.log('[CALC]', {
+      date: dateStr,
+      expected,
+      worked: 0,
+      extra_hours: 0,
+      negative_hours: 0,
+      falta: expected,
+    });
+    return {
+      ...base,
+      total_worked_minutes: 0,
+      expected_minutes: expected,
+      overtime_minutes: 0,
+      late_minutes: 0,
+      missing_minutes: 0,
+      negative_minutes: 0,
+      extra_minutes: 0,
+      extra_50_minutes: 0,
+      extra_100_minutes: 0,
+      absence_minutes: expected,
+      incomplete: false,
+      day_type: dayType,
+    };
+  }
+  // Fórmula central obrigatória (expected vs worked).
+  let extraMinutes = Math.max(0, worked - expected);
+  let negativeMinutes = Math.max(0, expected - worked);
+  if (worked < expected) {
+    extraMinutes = 0;
+  }
+  const incomplete = isDayIncomplete(base);
+  const absenceMinutes = 0;
+  const entrySchedule = (await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr)).schedule?.start_time ?? null;
+  const entryExpectedMin = hhmmToMinutes(entrySchedule);
+  const entryActualMin = hhmmToMinutes(base.entrada);
+  const lateMinutes =
+    entryExpectedMin != null && entryActualMin != null && entryActualMin > entryExpectedMin + companyRules.tolerance_minutes
+      ? entryActualMin - entryExpectedMin - companyRules.tolerance_minutes
+      : 0;
+  let extra50 = 0;
+  let extra100 = 0;
+  if (dayType === 'WEEKDAY') extra50 = extraMinutes;
+  else if (dayType === 'SUNDAY' || dayType === 'HOLIDAY') extra100 = extraMinutes;
+  else if (dayType === 'SATURDAY') {
+    extra50 = extraMinutes;
+  }
+  const consistencyLeft = worked;
+  const consistencyExpected = noPunches ? worked : expected;
+  const consistencyRight = consistencyExpected - negativeMinutes + extraMinutes;
+  if (worked <= expected && extraMinutes > 0) {
+    throw new Error(`Extra inválida: jornada não excedida (${dateStr})`);
+  }
+  if (worked >= expected && negativeMinutes > 0) {
+    throw new Error(`Negativa inválida: jornada não deficitária (${dateStr})`);
+  }
+  if (absenceMinutes > 0 && negativeMinutes > 0) {
+    throw new Error(`Regra violada: falta e negativa simultâneas (${dateStr})`);
+  }
+  if (worked === expected && extraMinutes !== 0) {
+    throw new Error(`Extra inválida em jornada normal (${dateStr})`);
+  }
+  if (extraMinutes > worked) {
+    throw new Error(`Extra inválida em ${dateStr}: extra=${extraMinutes} worked=${worked}`);
+  }
+  if (worked < expected && extraMinutes > 0) {
+    throw new Error(`Extra indevida em ${dateStr}: worked<expected e extra>0`);
+  }
+  if (consistencyLeft !== consistencyRight) {
+    throw new Error(`Inconsistência diária em ${dateStr}: worked=${consistencyLeft} esperado=${consistencyRight}`);
+  }
+  console.log('[CALC]', {
+    date: dateStr,
+    expected,
+    worked,
+    extra_hours: extraMinutes,
+    negative_hours: negativeMinutes,
+  });
+  return {
+    ...base,
+    expected_minutes: expected,
+    overtime_minutes: extraMinutes,
+    late_minutes: lateMinutes,
+    missing_minutes: negativeMinutes,
+    negative_minutes: negativeMinutes,
+    extra_minutes: extraMinutes,
+    extra_50_minutes: extra50,
+    extra_100_minutes: extra100,
+    absence_minutes: absenceMinutes,
+    incomplete,
+    day_type: dayType,
+  };
+}
+
+export interface MonthlySummary {
+  worked_total: number;
+  extra_50: number;
+  extra_100: number;
+  negative_total: number;
+  falta_total: number;
+  noturno_total: number;
+  bank_balance_approx: number;
+  /** Soma dos reflexos de DSR (por semanas que interceptam o período). */
+  dsr_extra_total: number;
+}
+
+function emptyMonthlySummary(): MonthlySummary {
+  return {
+    worked_total: 0,
+    extra_50: 0,
+    extra_100: 0,
+    negative_total: 0,
+    falta_total: 0,
+    noturno_total: 0,
+    bank_balance_approx: 0,
+    dsr_extra_total: 0,
+  };
+}
+
+/** Segunda-feira (YYYY-MM-DD) da semana ISO do dia informado no fuso interpretado pelo `Date` local. */
+export function weekMondayKey(dateStr: string): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  const dow = d.getDay();
+  const delta = dow === 0 ? -6 : 1 - dow;
+  const m = new Date(d);
+  m.setDate(m.getDate() + delta);
+  return m.toISOString().slice(0, 10);
+}
+
+async function applyBankNightAndExtras(
+  employeeId: string,
+  companyId: string,
+  dateStr: string,
+  companyRules: CompanyRules,
+  records: RawTimeRecord[],
+  dailyBase: DaySummary['daily']
+): Promise<{
+  daily: DaySummary['daily'];
+  overtime: OvertimeResult;
+  bank_hours_delta: number;
+  nightPayableTotal: number;
+  nightNormalReduced: number;
+  nightExtraReduced: number;
+}> {
+  const split = splitNightMinutesNormalVsExtraForDate(records, dateStr, dailyBase.expected_minutes);
+  const rn = applyNightRules(split.nightNormal, companyRules);
+  const rx = applyNightRules(split.nightExtra, companyRules);
+  let daily: DaySummary['daily'] = {
+    ...dailyBase,
+    payroll_negative_after_bank_minutes: dailyBase.negative_minutes,
+    bank_compensated_minutes: 0,
+  };
+  let overtime: OvertimeResult = {
+    date: dateStr,
+    overtime_50_minutes: dailyBase.extra_50_minutes,
+    overtime_100_minutes: dailyBase.extra_100_minutes,
+    is_holiday_or_off: dailyBase.day_type === 'HOLIDAY' || dailyBase.day_type === 'SUNDAY',
+  };
+  let bank_hours_delta =
+    overtime.overtime_50_minutes + overtime.overtime_100_minutes;
+  if (companyRules.time_bank_enabled) {
+    const bh = await applyDailyBankLedger({
+      employeeId,
+      companyId,
+      dateStr,
+      extraDay: dailyBase.extra_minutes,
+      negativeDay: dailyBase.negative_minutes,
+    });
+    daily = {
+      ...daily,
+      payroll_negative_after_bank_minutes: bh.payrollNegativeMinutes,
+      bank_compensated_minutes: bh.compensatedFromBank,
+    };
+    overtime = { ...overtime, overtime_50_minutes: 0, overtime_100_minutes: 0 };
+    bank_hours_delta = bh.creditedExtra - bh.compensatedFromBank;
+  } else {
+    bank_hours_delta = 0;
+  }
+  return {
+    daily,
+    overtime,
+    bank_hours_delta,
+    nightPayableTotal: rn.payableNightMinutes + rx.payableNightMinutes,
+    nightNormalReduced: rn.reducedNightMinutes,
+    nightExtraReduced: rx.reducedNightMinutes,
+  };
+}
+
+function weekDsrExtraMinutesFromGroup(group: DaySummary[]): number {
+  if (
+    group.some((r) => r.daily.expected_minutes > 0 && (r.daily.absence_minutes || 0) > 0)
+  )
+    return 0;
+  const totalExtraMotor = group.reduce((a, r) => a + (r.daily.extra_minutes || 0), 0);
+  const monFriDays = group.filter((r) => {
+    const dow = new Date(`${r.date}T12:00:00`).getDay();
+    return dow >= 1 && dow <= 5 && r.daily.day_type === 'WEEKDAY';
+  }).length;
+  const restDays = group.filter(
+    (r) => r.daily.day_type === 'SUNDAY' || r.daily.day_type === 'HOLIDAY',
+  ).length;
+  return calculateDSRExtraImpactMinutes({
+    totalExtraMinutes: totalExtraMotor,
+    mondayFridayUtilityDaysCount: monFriDays || 1,
+    restDaysCount: restDays,
+  });
+}
+
+function aggregateMonthlyDsr(groups: Map<string, DaySummary[]>): number {
+  let sum = 0;
+  for (const group of groups.values()) {
+    sum += weekDsrExtraMinutesFromGroup(group);
+  }
+  return sum;
+}
+
+async function persistRecalculatedDay(params: {
+  employeeId: string;
+  companyId: string;
+  date: string;
+  daily: DaySummary['daily'];
+  nightMinutes: number;
+  nightNormalReduced: number;
+  nightExtraReduced: number;
+  bank_hours_delta?: number;
+}): Promise<void> {
+  const { employeeId, companyId, date, daily, nightMinutes, nightNormalReduced, nightExtraReduced, bank_hours_delta } =
+    params;
+  const payload = {
+    employee_id: employeeId,
+    company_id: companyId,
+    date,
+    worked_minutes: daily.total_worked_minutes,
+    expected_minutes: daily.expected_minutes,
+    overtime_minutes: daily.extra_minutes,
+    absence_minutes: daily.absence_minutes,
+    night_minutes: nightMinutes,
+    late_minutes: daily.late_minutes,
+    is_absence: daily.absence_minutes > 0,
+    is_holiday: daily.day_type === 'HOLIDAY',
+    raw_data: {
+      day_type: daily.day_type,
+      extra_50_minutes: daily.extra_50_minutes,
+      extra_100_minutes: daily.extra_100_minutes,
+      negative_minutes: daily.negative_minutes,
+      incomplete: daily.incomplete,
+      night_normal_reduced_minutes: nightNormalReduced,
+      night_extra_reduced_minutes: nightExtraReduced,
+      bank_hours_delta: bank_hours_delta ?? null,
+      payroll_negative_after_bank_minutes: daily.payroll_negative_after_bank_minutes ?? null,
+      bank_compensated_minutes: daily.bank_compensated_minutes ?? null,
+    },
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    const existing = (await db.select(
+      'timesheets_daily',
+      [
+        { column: 'employee_id', operator: 'eq', value: employeeId },
+        { column: 'company_id', operator: 'eq', value: companyId },
+        { column: 'date', operator: 'eq', value: date },
+      ],
+      undefined,
+      1
+    )) as Array<{ id?: string }>;
+    if (existing?.[0]?.id) {
+      await db.update('timesheets_daily', existing[0].id, payload);
+      return;
+    }
+    await db.insert('timesheets_daily', {
+      ...payload,
+      created_at: new Date().toISOString(),
+    });
+  } catch {
+    // Em ambientes sem tabela de pré-folha, não interrompe o recálculo.
+  }
+}
+
+export async function recalculate_period(
+  employeeId: string,
+  companyId: string,
+  startDate: string,
+  endDate: string
+): Promise<{
+  total_days: number;
+  inconsistent_days: number;
+  violations: Array<{ date: string; reason: string }>;
+  case_checks: Array<{ date: string; worked: number; expected: number; extra: number; negative: number }>;
+  monthly_summary: MonthlySummary;
+}> {
+  const days: string[] = [];
+  const d = new Date(`${startDate}T12:00:00`);
+  const end = new Date(`${endDate}T12:00:00`);
+  while (d <= end) {
+    days.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+
+  const companyRules = await getCompanyRules(companyId);
+  const monthly_summary = emptyMonthlySummary();
+  const byWeek = new Map<string, DaySummary[]>();
+
+  const violations: Array<{ date: string; reason: string }> = [];
+  const case_checks: Array<{ date: string; worked: number; expected: number; extra: number; negative: number }> = [];
+  const trackedDates = new Set([
+    '2026-04-01',
+    '2026-04-06',
+    '2026-04-13',
+    '2026-04-17',
+    '2026-04-20',
+    '2026-04-27',
+  ]);
+  for (const date of days) {
+    const dailyBase = await calculate_day(employeeId, companyId, date);
+    const dayRecords = await getDayRecords(employeeId, date);
+    const nightRaw = calculateNightHoursForDate(dayRecords, date);
+    const core = await applyBankNightAndExtras(
+      employeeId,
+      companyId,
+      date,
+      companyRules,
+      dayRecords,
+      dailyBase
+    );
+    const daily = core.daily;
+    await persistRecalculatedDay({
+      employeeId,
+      companyId,
+      date,
+      daily,
+      nightMinutes: core.nightPayableTotal,
+      nightNormalReduced: core.nightNormalReduced,
+      nightExtraReduced: core.nightExtraReduced,
+      bank_hours_delta: core.bank_hours_delta,
+    });
+    monthly_summary.worked_total += daily.total_worked_minutes;
+    monthly_summary.extra_50 += core.overtime.overtime_50_minutes;
+    monthly_summary.extra_100 += core.overtime.overtime_100_minutes;
+    monthly_summary.negative_total +=
+      daily.payroll_negative_after_bank_minutes ?? daily.negative_minutes;
+    monthly_summary.falta_total += daily.absence_minutes;
+    monthly_summary.noturno_total += core.nightPayableTotal;
+    const wk = weekMondayKey(date);
+    if (!byWeek.has(wk)) byWeek.set(wk, []);
+    byWeek.get(wk)!.push({
+      date,
+      daily,
+      inconsistencies: [],
+      overtime: core.overtime,
+      night_minutes: core.nightPayableTotal,
+      bank_hours_delta: core.bank_hours_delta,
+    });
+    const dayType = daily.day_type;
+    if (daily.extra_minutes > daily.total_worked_minutes) {
+      violations.push({ date, reason: 'extra_gt_worked' });
+    }
+    if (daily.total_worked_minutes < daily.expected_minutes && daily.extra_minutes > 0) {
+      violations.push({ date, reason: 'extra_with_worked_lt_expected' });
+    }
+    if (
+      (daily.day_type === 'WEEKDAY' || daily.day_type === 'SATURDAY') &&
+      daily.extra_minutes === daily.total_worked_minutes &&
+      daily.expected_minutes > 0
+    ) {
+      violations.push({ date, reason: 'extra_equal_worked_on_non_holiday' });
+    }
+    if ((dayType === 'WEEKDAY' || dayType === 'SATURDAY') && daily.extra_100_minutes > 0) {
+      violations.push({ date, reason: 'extra_100_in_non_100_day' });
+    }
+    if (daily.absence_minutes > 0 && daily.negative_minutes > 0) {
+      violations.push({ date, reason: 'absence_and_negative_together' });
+    }
+    if (nightRaw > 12 * 60) {
+      violations.push({ date, reason: 'night_gt_12h' });
+    }
+    if (trackedDates.has(date)) {
+      case_checks.push({
+        date,
+        worked: daily.total_worked_minutes,
+        expected: daily.expected_minutes,
+        extra: daily.extra_minutes,
+        negative: daily.negative_minutes,
+      });
+    }
+  }
+
+  await db.insert('audit_logs', {
+    company_id: companyId,
+    user_id: employeeId,
+    action: 'RECALCULATION_FIX',
+    details: {
+      description: 'Correção de cálculo de jornada e extras',
+      startDate,
+      endDate,
+      total_days: days.length,
+      violations: violations.length,
+    },
+    created_at: new Date().toISOString(),
+  }).catch(() => undefined);
+
+  monthly_summary.dsr_extra_total = aggregateMonthlyDsr(byWeek);
+  monthly_summary.bank_balance_approx = await getBankBalanceFifoApprox(employeeId, companyId);
+
+  return {
+    total_days: days.length,
+    inconsistent_days: violations.length,
+    violations,
+    case_checks,
+    monthly_summary,
+  };
+}
+
+/** Fecha o mês civil: reaplica o motor dia a dia e devolve o mesmo payload de `recalculate_period` + `monthly_summary` consolidado. */
+export async function recalculate_month(
+  employeeId: string,
+  companyId: string,
+  year: number,
+  month: number
+): Promise<Awaited<ReturnType<typeof recalculate_period>>> {
+  const lastDay = new Date(year, month, 0).getDate();
+  const sm = String(month).padStart(2, '0');
+  const startDate = `${year}-${sm}-01`;
+  const endDate = `${year}-${sm}-${String(lastDay).padStart(2, '0')}`;
+  return recalculate_period(employeeId, companyId, startDate, endDate);
+}
+
 /**
- * DSR: média das horas extras da semana aplicada ao descanso.
- * Formula simplificada: (soma horas extras da semana / dias úteis) * domingos/feriados no mês (ou 1 por semana).
+ * Reflexo de DSR prático sobre extras semanais (minutos trabalhados além da jornada esperada como base):
+ * `(totalExtras / diasUteis) * diasDescansoNaFatiadeSemana)`
+ */
+export function calculateDSRExtraImpactMinutes(params: {
+  totalExtraMinutes: number;
+  mondayFridayUtilityDaysCount: number;
+  restDaysCount: number;
+}): number {
+  const denom = Math.max(1, params.mondayFridayUtilityDaysCount);
+  const multiplier = Math.max(0, params.restDaysCount);
+  return Math.round((Math.max(0, params.totalExtraMinutes) / denom) * multiplier);
+}
+
+/**
+ * DSR conforme blueprint: média ponderada pela semana (seg–sex como útil) aplicada aos dias de descanso dentro do recorte informado).
+ * Fallback numérico: `totalExtras / diasUteis` quando não é lista.
  */
 export function calculateDSR(
   weekDataOrOvertime: Array<{ date: string; hasUnjustifiedAbsence: boolean; overtimeMinutes: number }> | number,
@@ -602,12 +1197,19 @@ export function calculateDSR(
   if (Array.isArray(weekDataOrOvertime)) {
     if (weekDataOrOvertime.some((d) => d.hasUnjustifiedAbsence)) return 0;
     const totalOvertime = weekDataOrOvertime.reduce((acc, d) => acc + (d.overtimeMinutes || 0), 0);
-    const workingDays = weekDataOrOvertime.filter((d) => {
+    const mondayFridayUtilityDaysCount = weekDataOrOvertime.filter((d) => {
       const dow = new Date(`${d.date}T12:00:00`).getDay();
-      return dow >= 1 && dow <= 6;
+      return dow >= 1 && dow <= 5;
     }).length;
-    if (workingDays <= 0) return 0;
-    return totalOvertime / workingDays;
+    const restDaysCount = weekDataOrOvertime.filter((d) => {
+      const dow = new Date(`${d.date}T12:00:00`).getDay();
+      return dow === 0;
+    }).length;
+    return calculateDSRExtraImpactMinutes({
+      totalExtraMinutes: totalOvertime,
+      mondayFridayUtilityDaysCount: mondayFridayUtilityDaysCount || 1,
+      restDaysCount,
+    });
   }
   const weekOvertimeMinutes = weekDataOrOvertime;
   const workingDaysInWeek = workingDaysInWeekArg || 0;
@@ -624,19 +1226,11 @@ export async function processEmployeeDay(
   dateStr: string
 ): Promise<DaySummary> {
   const companyRules = await getCompanyRules(companyId);
-  const dayType = await classifyDay({ date: dateStr, company: { id: companyId } });
+  const dayType = await get_day_type(dateStr, companyId);
   const resolved = await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr);
   const records = await getDayRecords(employeeId, dateStr);
-  const dailyBase = await processDailyTime(employeeId, companyId, dateStr);
+  const dailyBase = await calculate_day(employeeId, companyId, dateStr);
   const isHolidayDay = dayType === 'HOLIDAY';
-  const daily = isHolidayDay
-    ? {
-        ...dailyBase,
-        expected_minutes: 0,
-        overtime_minutes: dailyBase.total_worked_minutes,
-        late_minutes: 0,
-      }
-    : dailyBase;
   const explicitIsWorkDay = isHolidayDay ? false : resolved.schedule ? undefined : false;
   const inconsistencies = detectInconsistencies(
     employeeId,
@@ -645,28 +1239,27 @@ export async function processEmployeeDay(
     resolved.schedule,
     explicitIsWorkDay
   );
-  const night_minutes = calculateNightHours(records);
-  let overtime = calculateOvertime({
-    date: dateStr,
-    dayType,
-    workedMinutes: daily.total_worked_minutes,
-    expectedMinutes: isHolidayDay ? 0 : daily.expected_minutes,
-    companyRules,
-    schedule: resolved.schedule,
-  });
-  let bank_hours_delta = 0;
-  if (companyRules.time_bank_enabled) {
-    bank_hours_delta = overtime.overtime_50_minutes + overtime.overtime_100_minutes;
-    overtime = { ...overtime, overtime_50_minutes: 0, overtime_100_minutes: 0 };
+  const nightRaw = calculateNightHoursForDate(records, dateStr);
+  if (nightRaw > 12 * 60) {
+    throw new Error(`Noturno inválido em ${dateStr}: ${nightRaw} min`);
   }
-  const nightRules = applyNightRules(night_minutes, companyRules);
+  const core = await applyBankNightAndExtras(
+    employeeId,
+    companyId,
+    dateStr,
+    companyRules,
+    records,
+    dailyBase
+  );
   return {
     date: dateStr,
-    daily,
+    daily: core.daily,
     inconsistencies,
-    overtime,
-    night_minutes: nightRules.payableNightMinutes,
-    bank_hours_delta,
+    overtime: core.overtime,
+    night_minutes: core.nightPayableTotal,
+    night_normal_reduced_minutes: core.nightNormalReduced,
+    night_extra_reduced_minutes: core.nightExtraReduced,
+    bank_hours_delta: core.bank_hours_delta,
   };
 }
 
@@ -688,12 +1281,7 @@ export async function processEmployeeWeek(
     results.push(await processEmployeeDay(employeeId, companyId, dateStr));
   }
   if (companyRules.dsr_enabled) {
-    const weekData = results.map((r) => ({
-      date: r.date,
-      hasUnjustifiedAbsence: r.daily.expected_minutes > 0 && r.daily.total_worked_minutes === 0,
-      overtimeMinutes: (r.overtime?.overtime_50_minutes || 0) + (r.overtime?.overtime_100_minutes || 0),
-    }));
-    const dsr = calculateDSR(weekData);
+    const dsr = weekDsrExtraMinutesFromGroup(results);
     for (const r of results) r.dsr_minutes = dsr;
   }
   return results;
@@ -718,21 +1306,12 @@ export async function processEmployeeMonth(
   if (companyRules.dsr_enabled) {
     const byWeek = new Map<string, DaySummary[]>();
     for (const r of results) {
-      const dt = new Date(`${r.date}T12:00:00`);
-      const yearStart = new Date(dt.getFullYear(), 0, 1);
-      const week = Math.ceil((((dt.getTime() - yearStart.getTime()) / 86400000) + yearStart.getDay() + 1) / 7);
-      const key = `${dt.getFullYear()}-${week}`;
+      const key = weekMondayKey(r.date);
       if (!byWeek.has(key)) byWeek.set(key, []);
       byWeek.get(key)!.push(r);
     }
     for (const group of byWeek.values()) {
-      const dsr = calculateDSR(
-        group.map((r) => ({
-          date: r.date,
-          hasUnjustifiedAbsence: r.daily.expected_minutes > 0 && r.daily.total_worked_minutes === 0,
-          overtimeMinutes: (r.overtime?.overtime_50_minutes || 0) + (r.overtime?.overtime_100_minutes || 0),
-        }))
-      );
+      const dsr = weekDsrExtraMinutesFromGroup(group);
       for (const r of group) r.dsr_minutes = dsr;
     }
   }
