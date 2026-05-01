@@ -7,6 +7,7 @@ import { useSettings } from '../../contexts/SettingsContext';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { i18n } from '../../../lib/i18n';
 import { LoadingState } from '../../../components/UI';
+import { db, isSupabaseConfigured } from '../../services/supabaseClient';
 import {
   MapPin,
   Camera,
@@ -16,7 +17,17 @@ import {
   Shield,
   CalendarClock,
   Keyboard,
+  Scale,
 } from 'lucide-react';
+
+type ExtraPayrollPolicyUI = 'bank' | 'payroll' | 'mixed';
+
+function parseExtraPayrollPolicy(v: unknown): ExtraPayrollPolicyUI {
+  const s = String(v ?? 'bank').toLowerCase();
+  if (s === 'payroll' || s === 'folha') return 'payroll';
+  if (s === 'mixed' || s === 'misto') return 'mixed';
+  return 'bank';
+}
 
 const TIMEZONES = [
   { value: 'America/Sao_Paulo', label: 'Brasília (GMT-3)' },
@@ -53,6 +64,17 @@ const AdminSettings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [settingsId, setSettingsId] = useState<string | null>(null);
+  const [motorForm, setMotorForm] = useState<{
+    extra_payroll_policy: ExtraPayrollPolicyUI;
+    mixed_extra_bank_cap_minutes: number;
+    allow_auto_compensation: boolean;
+    bank_hours_expiry_months: number;
+  }>({
+    extra_payroll_policy: 'bank',
+    mixed_extra_bank_cap_minutes: 120,
+    allow_auto_compensation: true,
+    bank_hours_expiry_months: 6,
+  });
 
   useEffect(() => {
     (async () => {
@@ -81,13 +103,43 @@ const AdminSettings: React.FC = () => {
             allow_time_bank: data.allow_time_bank,
           });
         }
+        if (isSupabaseConfigured() && user?.companyId) {
+          try {
+            const cr = (await db.select(
+              'company_rules',
+              [{ column: 'company_id', operator: 'eq', value: user.companyId }],
+              undefined,
+              1,
+            )) as Record<string, unknown>[];
+            const row = cr?.[0];
+            if (row) {
+              const exp = Number(row.bank_hours_expiry_months);
+              const expiry =
+                Number.isFinite(exp) ? Math.min(60, Math.max(1, Math.round(exp))) : 6;
+              setMotorForm({
+                extra_payroll_policy: parseExtraPayrollPolicy(row.extra_payroll_policy),
+                mixed_extra_bank_cap_minutes: Math.max(
+                  0,
+                  Number(row.mixed_extra_bank_cap_minutes) || 120,
+                ),
+                allow_auto_compensation:
+                  typeof row.allow_auto_compensation === 'boolean'
+                    ? row.allow_auto_compensation
+                    : true,
+                bank_hours_expiry_months: expiry,
+              });
+            }
+          } catch (err) {
+            console.warn('[Settings] company_rules:', err);
+          }
+        }
       } catch (e) {
         console.error(e);
       } finally {
         setLoadingData(false);
       }
     })();
-  }, [globalSettings?.id]);
+  }, [globalSettings?.id, user?.companyId]);
 
   const handleSave = async () => {
     if (!settingsId) {
@@ -118,6 +170,45 @@ const AdminSettings: React.FC = () => {
       });
       if (error) throw error;
       await refreshSettings();
+
+      if (isSupabaseConfigured() && user?.companyId) {
+        const cap = Math.max(0, Math.round(motorForm.mixed_extra_bank_cap_minutes));
+        const expiry = Math.min(
+          60,
+          Math.max(1, Math.round(Number(motorForm.bank_hours_expiry_months) || 6)),
+        );
+        const patch = {
+          extra_payroll_policy: motorForm.extra_payroll_policy,
+          mixed_extra_bank_cap_minutes: cap,
+          allow_auto_compensation: motorForm.allow_auto_compensation,
+          bank_hours_expiry_months: expiry,
+          time_bank_enabled: form.allow_time_bank,
+          tolerance_minutes: form.late_tolerance_minutes,
+          updated_at: new Date().toISOString(),
+        };
+        const rows = (await db.select(
+          'company_rules',
+          [{ column: 'company_id', operator: 'eq', value: user.companyId }],
+          undefined,
+          1,
+        )) as Array<{ id?: string }>;
+        if (rows?.[0]?.id) {
+          await db.update('company_rules', rows[0].id!, patch);
+        } else {
+          await db.insert('company_rules', {
+            company_id: user.companyId,
+            work_on_saturday: false,
+            saturday_overtime_type: '100',
+            time_bank_enabled: form.allow_time_bank,
+            tolerance_minutes: form.late_tolerance_minutes,
+            night_additional_percent: 20,
+            dsr_enabled: true,
+            weekday_extra_above_120: '50',
+            ...patch,
+          });
+        }
+      }
+
       setAppLanguage((form.language === 'en-US' || form.language === 'pt-BR') ? form.language : 'pt-BR');
       setMessage({ type: 'success', text: i18n.t('settings.savedSuccess') });
     } catch (e: any) {
@@ -366,6 +457,96 @@ const AdminSettings: React.FC = () => {
                 <input type="checkbox" checked={form.allow_time_bank} onChange={(e) => setForm({ ...form, allow_time_bank: e.target.checked })} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
                 <span className="text-slate-900 dark:text-white font-medium">{i18n.t('settings.allowTimeBank')}</span>
               </label>
+
+              <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                    <Scale className="w-5 h-5 text-amber-700 dark:text-amber-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white">{i18n.t('settings.motorPontoTitle')}</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{i18n.t('settings.motorPontoDesc')}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{i18n.t('settings.extraPayrollPolicy')}</label>
+                  <select
+                    className={inputClass}
+                    value={motorForm.extra_payroll_policy}
+                    onChange={(e) =>
+                      setMotorForm((m) => ({
+                        ...m,
+                        extra_payroll_policy: e.target.value as ExtraPayrollPolicyUI,
+                      }))
+                    }
+                    disabled={!user?.companyId || !isSupabaseConfigured()}
+                  >
+                    <option value="bank">{i18n.t('settings.extraPayrollPolicyBank')}</option>
+                    <option value="payroll">{i18n.t('settings.extraPayrollPolicyPayroll')}</option>
+                    <option value="mixed">{i18n.t('settings.extraPayrollPolicyMixed')}</option>
+                  </select>
+                </div>
+                {motorForm.extra_payroll_policy === 'mixed' && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{i18n.t('settings.mixedBankCapLabel')}</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      className={inputClass}
+                      value={motorForm.mixed_extra_bank_cap_minutes}
+                      onChange={(e) =>
+                        setMotorForm((m) => ({
+                          ...m,
+                          mixed_extra_bank_cap_minutes: Math.max(0, Number(e.target.value) || 0),
+                        }))
+                      }
+                      disabled={!user?.companyId || !isSupabaseConfigured()}
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{i18n.t('settings.mixedBankCapHint')}</p>
+                  </div>
+                )}
+                <label
+                  className={`flex items-start gap-3 ${!form.allow_time_bank ? 'opacity-60' : 'cursor-pointer'}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    checked={motorForm.allow_auto_compensation}
+                    onChange={(e) =>
+                      setMotorForm((m) => ({ ...m, allow_auto_compensation: e.target.checked }))
+                    }
+                    disabled={!user?.companyId || !isSupabaseConfigured() || !form.allow_time_bank}
+                  />
+                  <span>
+                    <span className="block text-slate-900 dark:text-white font-medium">{i18n.t('settings.allowAutoCompensation')}</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">{i18n.t('settings.allowAutoCompensationHelp')}</span>
+                  </span>
+                </label>
+                <div className={!form.allow_time_bank ? 'opacity-60' : ''}>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{i18n.t('settings.bankHoursExpiryMonths')}</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    step={1}
+                    className={inputClass}
+                    value={motorForm.bank_hours_expiry_months}
+                    onChange={(e) =>
+                      setMotorForm((m) => ({
+                        ...m,
+                        bank_hours_expiry_months: Math.min(
+                          60,
+                          Math.max(1, Math.round(Number(e.target.value) || 6)),
+                        ),
+                      }))
+                    }
+                    disabled={!user?.companyId || !isSupabaseConfigured() || !form.allow_time_bank}
+                  />
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{i18n.t('settings.bankHoursExpiryMonthsHelp')}</p>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{i18n.t('settings.motorPontoNoteBankOff')}</p>
+              </div>
             </div>
           </section>
 

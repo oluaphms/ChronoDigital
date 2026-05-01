@@ -158,6 +158,24 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.defaultEntryTime': 'Horário padrão de entrada',
     'settings.defaultExitTime': 'Horário padrão de saída',
     'settings.allowTimeBank': 'Permitir banco de horas',
+    'settings.motorPontoTitle': 'Motor de cálculo (horas extras)',
+    'settings.motorPontoDesc':
+      'Define se as HE vão para o banco de horas, para a folha de pagamento ou divididas (misto). Usado pelo motor de produção.',
+    'settings.extraPayrollPolicy': 'Destino das horas extras',
+    'settings.extraPayrollPolicyBank': 'Banco de horas',
+    'settings.extraPayrollPolicyPayroll': 'Folha de pagamento',
+    'settings.extraPayrollPolicyMixed': 'Misto (teto no BH, restante na folha)',
+    'settings.mixedBankCapLabel': 'Teto diário no banco (minutos)',
+    'settings.mixedBankCapHint':
+      'No modo misto, até estes minutos de extra por dia viram crédito no BH; o que passar segue para HE na folha.',
+    'settings.motorPontoNoteBankOff':
+      'Com «Permitir banco de horas» desligado, o motor envia toda hora extra para a folha (política mista só afeta quando o BH está ativo).',
+    'settings.allowAutoCompensation': 'Abater negativas com saldo do banco (FIFO)',
+    'settings.allowAutoCompensationHelp':
+      'Se desligado, horas faltantes não consomem créditos do BH e seguem inteiras como desconto na folha.',
+    'settings.bankHoursExpiryMonths': 'Validade dos créditos de BH (meses)',
+    'settings.bankHoursExpiryMonthsHelp':
+      'Prazo até o vencimento de cada crédito lançado no banco (padrão 6 meses; entre 1 e 60).',
     'settings.saveAll': 'Salvar todas as configurações',
     'settings.saving': 'Salvando...',
     // Login / App (telas iniciais)
@@ -447,6 +465,24 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.defaultEntryTime': 'Default clock-in time',
     'settings.defaultExitTime': 'Default clock-out time',
     'settings.allowTimeBank': 'Allow time bank',
+    'settings.motorPontoTitle': 'Calculation engine (overtime)',
+    'settings.motorPontoDesc':
+      'Whether overtime goes to the time bank, payroll, or split (mixed). Used by the production engine.',
+    'settings.extraPayrollPolicy': 'Overtime destination',
+    'settings.extraPayrollPolicyBank': 'Time bank',
+    'settings.extraPayrollPolicyPayroll': 'Payroll',
+    'settings.extraPayrollPolicyMixed': 'Mixed (daily cap to bank, remainder to payroll)',
+    'settings.mixedBankCapLabel': 'Daily cap to time bank (minutes)',
+    'settings.mixedBankCapHint':
+      'In mixed mode, up to this many overtime minutes per day become bank credit; the rest goes to payroll overtime.',
+    'settings.motorPontoNoteBankOff':
+      'When «Allow time bank» is off, all overtime goes to payroll (mixed policy only applies when the bank is active).',
+    'settings.allowAutoCompensation': 'Offset negative hours with bank balance (FIFO)',
+    'settings.allowAutoCompensationHelp':
+      'When off, missing hours do not consume bank credits and go entirely as payroll deduction.',
+    'settings.bankHoursExpiryMonths': 'Bank credit expiry (months)',
+    'settings.bankHoursExpiryMonthsHelp':
+      'Months until each bank credit expires (default 6; range 1–60).',
     'settings.saveAll': 'Save all settings',
     'settings.saving': 'Saving...',
     'login.slogan': 'Next-Gen Time Tracking',

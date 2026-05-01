@@ -83,7 +83,10 @@ export async function calculateDailyTimesheet(
   expectedMinutes: number = DEFAULT_EXPECTED_MINUTES
 ): Promise<DailyTimesheet> {
   const day = await processEmployeeDay(employeeId, companyId, dateStr);
-  const expectedMin = day.daily.expected_minutes > 0 ? day.daily.expected_minutes : expectedMinutes;
+  const expectedMin =
+    typeof day.daily.expected_minutes === 'number' && Number.isFinite(day.daily.expected_minutes)
+      ? day.daily.expected_minutes
+      : expectedMinutes;
   const isAbsence = day.daily.absence_minutes > 0;
 
   return {

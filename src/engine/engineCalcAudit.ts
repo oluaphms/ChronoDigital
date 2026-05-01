@@ -12,6 +12,9 @@ export interface EngineCalcAuditPayload {
   extra_noturna_payable?: number;
   banco_creditado: number;
   banco_utilizado: number;
+  extra_banco?: number;
+  extra_folha_50?: number;
+  extra_folha_100?: number;
   origem: 'calc_engine';
   timestamp: string;
 }

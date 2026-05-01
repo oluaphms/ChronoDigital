@@ -49,7 +49,7 @@ export async function runDailyTimeProcessor(dateStr?: string): Promise<DailyProc
 
       const companyRules = await getCompanyRules(emp.company_id);
       const bankEnabled = companyRules.time_bank_enabled;
-      /** Com BH ligado o motor já grava em `bank_entries` (ledger); não duplica em `bank_hours` legacy. */
+      /** Com BH ligado o motor grava em `bank_hours_ledger` (FIFO real); não duplica em `bank_hours` legacy. */
       if (!bankEnabled) {
         const overtimeHours = Number(summary.bank_hours_delta || 0) / 60;
         const missingHours = summary.daily.missing_minutes / 60;

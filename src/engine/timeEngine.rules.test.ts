@@ -23,6 +23,8 @@ const baseRules: CompanyRules = {
   allow_auto_compensation: true,
   weekday_extra_above_120: '50',
   bank_hours_expiry_months: 6,
+  extra_payroll_policy: 'bank',
+  mixed_extra_bank_cap_minutes: 120,
 };
 
 describe('timeEngine consolidated rules', () => {
