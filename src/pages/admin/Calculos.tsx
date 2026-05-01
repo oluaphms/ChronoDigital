@@ -15,10 +15,9 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState } from '../../../components/UI';
-import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { db, isSupabaseConfigured, auth } from '../../services/supabaseClient';
 import { buscarColaboradores } from '../../../services/api';
 import {
-  recalculate_period,
   processEmployeeDay,
   type OvertimeResult,
   type TimeInconsistency,
@@ -260,7 +259,67 @@ const AdminCalculos: React.FC = () => {
     setLoadingCalc(true);
     setCalcRows(null);
     try {
-      await recalculate_period(filterUserId, user.companyId, periodStart, periodEnd);
+      const base =
+        (import.meta.env.VITE_APP_URL as string) ||
+        (typeof window !== 'undefined' ? window.location.origin : '');
+      const { data: { session } } = await auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        toast.addToast('error', 'Sessão expirada. Faça login novamente.');
+        return;
+      }
+
+      const enqueueRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/calc-period`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          employee_id: filterUserId,
+          start_date: periodStart,
+          end_date: periodEnd,
+        }),
+      });
+      const enqueueJson = (await enqueueRes.json().catch(() => ({}))) as {
+        error?: string;
+        job_id?: string;
+      };
+      if (!enqueueRes.ok) {
+        throw new Error(enqueueJson?.error || 'Falha ao enfileirar cálculo.');
+      }
+      const jobId = enqueueJson.job_id;
+      if (!jobId) throw new Error('Resposta sem job_id.');
+
+      void fetch(`${base.replace(/\/$/, '')}/api/jobs/process`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const deadline = Date.now() + 15 * 60 * 1000;
+      let lastStatus = 'pending';
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const stRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/${jobId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const job = (await stRes.json().catch(() => ({}))) as {
+          status?: string;
+          result?: { error?: string };
+        };
+        lastStatus = String(job?.status ?? '');
+        if (lastStatus === 'done') break;
+        if (lastStatus === 'failed') {
+          const msg = job?.result?.error || 'Job falhou.';
+          throw new Error(msg);
+        }
+      }
+
+      if (lastStatus !== 'done') {
+        toast.addToast(
+          'error',
+          'O cálculo ainda está na fila ou o worker não respondeu. Configure POST /api/jobs/process (cron) ou tente Atualizar novamente em instantes.',
+        );
+        return;
+      }
+
       const persisted = (await db.select(
         'timesheets_daily',
         [

@@ -6,6 +6,14 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+/** Cliente service role injetado pelo worker/API server — não usar no browser. */
+let serviceRoleOverride: SupabaseClient | null = null;
+
+/** Injeta cliente Supabase (ex.: service role) para `db`/`timeEngine` em ambiente sem sessão do utilizador. Limpar no `finally`. */
+export function setSupabaseServiceRoleOverride(client: SupabaseClient | null): void {
+  serviceRoleOverride = client;
+}
 import type { LockFunc } from '@supabase/auth-js';
 import { isDnsError, markSupabaseAsDown } from '../services/supabaseCircuitBreaker';
 import { getSupabaseInfraFatal } from './supabaseInfraGuard';
@@ -42,6 +50,7 @@ function createInProcessAuthLock(): LockFunc {
  * Falhas de rede não impedem a criação nem o uso do cliente.
  */
 export function getSupabaseClient(): SupabaseClient | null {
+  if (serviceRoleOverride) return serviceRoleOverride;
   if (typeof window !== 'undefined' && (window as any).__ENV_FATAL_ERROR) {
     return null;
   }

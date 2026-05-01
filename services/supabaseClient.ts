@@ -23,6 +23,7 @@ export {
   testSupabaseConnection,
   withSupabaseTimeout,
   resetSession,
+  setSupabaseServiceRoleOverride,
 } from '../src/lib/supabaseClient';
 
 // Criar aliases para db e storage (compatibilidade com código antigo)
