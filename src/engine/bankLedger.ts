@@ -1,16 +1,19 @@
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import type { BankLotRow } from './bankLedgerFifo';
+import {
+  bankFifoBalanceAtStartOfDay,
+  simulateBankFifoWithExpiryForPeriod,
+} from './bankLedgerFifo';
 
 /** Créditos e débitos usados apenas pelo motor do dia (permite reaplicar período sem duplicar). */
 export const DAILY_AUTO_META_SCOPE = 'timeEngine.bank_daily.v1';
 
 export type BankEntryOrigin = 'extra' | 'negative' | 'compensation' | 'manual';
 
-export interface BankLedgerRow {
-  minutes: number;
-  date: string;
+export interface BankLedgerRow extends BankLotRow {
   origin: BankEntryOrigin;
-  created_at: string;
   meta?: Record<string, unknown>;
+  id?: string;
 }
 
 /** Soma algebraic simples dos lançamentos. */
@@ -64,7 +67,7 @@ async function fetchLedgerRows(employeeId: string, companyId: string): Promise<B
       { column: 'company_id', operator: 'eq', value: companyId },
     ],
     {
-      columns: 'minutes, date, origin, created_at, meta',
+      columns: 'minutes, date, origin, created_at, meta, expires_at, id',
       orderBy: { column: 'created_at', ascending: true },
       limit: 10000,
     },
@@ -75,8 +78,26 @@ async function fetchLedgerRows(employeeId: string, companyId: string): Promise<B
     date: String((row as { date?: unknown }).date || ''),
     origin: (row as { origin?: unknown }).origin as BankEntryOrigin,
     created_at: String((row as { created_at?: unknown }).created_at || ''),
+    expires_at:
+      (row as { expires_at?: unknown }).expires_at !== undefined &&
+      (row as { expires_at?: unknown }).expires_at !== null
+        ? String((row as { expires_at?: unknown }).expires_at)
+        : null,
+    id: (row as { id?: unknown }).id ? String((row as { id?: unknown }).id) : undefined,
     meta: ((row as { meta?: Record<string, unknown> }).meta as Record<string, unknown>) ?? {},
   }));
+}
+
+function sortLedgerFifo(rows: BankLedgerRow[]): BankLotRow[] {
+  return [...rows]
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .map(({ minutes, date, created_at, expires_at }) => ({ minutes, date, created_at, expires_at: expires_at ?? null }));
+}
+
+function addMonthsToBookingDateUtc(dateStr: string, months: number): string {
+  const d = new Date(`${dateStr}T12:00:00.000Z`);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString();
 }
 
 /** Remove lançamentos automáticos do dia civil antes de relançar (idempotência de recálculo). */
@@ -133,47 +154,58 @@ export async function applyDailyBankLedger(params: {
   extraDay: number;
   negativeDay: number;
   maxAbsBalanceMinutes?: number;
+  /** default true — se false, negativa não abate BH (vai inteira para folha). */
+  allowAutoCompensation?: boolean;
+  bankHoursExpiryMonths?: number;
 }): Promise<ApplyDailyBankLedgerResult> {
   const { employeeId, companyId, dateStr, extraDay, negativeDay } = params;
   const cap = params.maxAbsBalanceMinutes ?? 40 * 60;
+  const allowComp = params.allowAutoCompensation !== false;
+  const expiryMonths =
+    typeof params.bankHoursExpiryMonths === 'number' && params.bankHoursExpiryMonths > 0
+      ? params.bankHoursExpiryMonths
+      : 6;
 
   if (!isSupabaseConfigured() || !companyId) {
-    const available = Math.max(0, extraDay);
-    const compensated = Math.min(Math.max(0, negativeDay), available);
+    const credited0 = Math.max(0, extraDay);
+    const compensated0 =
+      allowComp ? Math.min(Math.max(0, negativeDay), Math.max(0, credited0)) : 0;
     return {
-      creditedExtra: Math.max(0, extraDay),
-      compensatedFromBank: compensated,
-      payrollNegativeMinutes: Math.max(0, negativeDay - compensated),
-      balanceAfterApprox: Math.max(-cap, Math.min(cap, extraDay - compensated)),
+      creditedExtra: credited0,
+      compensatedFromBank: compensated0,
+      payrollNegativeMinutes: Math.max(0, negativeDay - compensated0),
+      balanceAfterApprox: Math.max(-cap, Math.min(cap, credited0 - compensated0)),
     };
   }
 
   await deleteDailyAutoEntries(employeeId, companyId, dateStr);
 
-  const ledgerSortedBase = [...(await fetchLedgerRows(employeeId, companyId))].sort((a, b) => {
-    const c = String(a.date).localeCompare(String(b.date));
-    if (c !== 0) return c;
-    return String(a.created_at).localeCompare(String(b.created_at));
-  });
-
-  let fifoResidual = simulateFifoResidualMinutes(ledgerSortedBase);
+  const fetched = await fetchLedgerRows(employeeId, companyId);
+  const fifoSorted = sortLedgerFifo(fetched);
+  const balanceStart = bankFifoBalanceAtStartOfDay(fifoSorted, dateStr);
 
   let credited = Math.max(0, Math.round(extraDay));
   if (credited > 0 && cap > 0) {
-    credited = Math.min(credited, Math.max(0, cap - fifoResidual));
+    credited = Math.min(credited, Math.max(0, cap - balanceStart));
   }
 
-  const { compensated, remaining_negative } = compensateNegativeWithBankBalance(
-    Math.max(0, Math.round(negativeDay)),
-    fifoResidual,
-    credited,
-  );
+  let compensated = 0;
+  let remaining_negative = Math.max(0, Math.round(negativeDay));
+  if (allowComp) {
+    const r = compensateNegativeWithBankBalance(remaining_negative, balanceStart, credited);
+    compensated = r.compensated;
+    remaining_negative = r.remaining_negative;
+  }
 
-  const inserts: Array<{ minutes: number; origin: BankEntryOrigin }> = [];
+  const inserts: Array<{ minutes: number; origin: BankEntryOrigin; expires_at?: string | null }> = [];
   if (credited > 0)
-    inserts.push({ minutes: credited, origin: 'extra' });
+    inserts.push({
+      minutes: credited,
+      origin: 'extra',
+      expires_at: addMonthsToBookingDateUtc(dateStr, expiryMonths),
+    });
   if (compensated > 0)
-    inserts.push({ minutes: -compensated, origin: 'compensation' });
+    inserts.push({ minutes: -compensated, origin: 'compensation', expires_at: null });
 
   const metaPayload = {
     scope: DAILY_AUTO_META_SCOPE,
@@ -188,35 +220,49 @@ export async function applyDailyBankLedger(params: {
         date: dateStr,
         minutes: chunk.minutes,
         origin: chunk.origin,
+        expires_at: chunk.expires_at ?? null,
         meta: metaPayload,
       })
       .catch(() => undefined);
   }
 
-  fifoResidual += credited - compensated;
+  const fifoResidualApprox = balanceStart + credited - compensated;
 
   console.log('[CALC] BH ledger', {
     date: dateStr,
     creditedExtra: credited,
     compensatedFromBank: compensated,
     payrollNegativeRemainder: remaining_negative,
-    fifoApproxAfter: fifoResidual,
+    fifoApproxAfter: fifoResidualApprox,
+    allow_auto_compensation: allowComp,
   });
 
   return {
     creditedExtra: credited,
     compensatedFromBank: compensated,
     payrollNegativeMinutes: remaining_negative,
-    balanceAfterApprox: Math.round(Math.max(-cap, Math.min(cap, fifoResidual))),
+    balanceAfterApprox: Math.round(Math.max(-cap, Math.min(cap, fifoResidualApprox))),
   };
 }
 
 export async function getBankBalanceFifoApprox(employeeId: string, companyId: string): Promise<number> {
   const fetched = await fetchLedgerRows(employeeId, companyId);
-  const rows = [...fetched].sort((a, b) => {
-    const c = String(a.date).localeCompare(String(b.date));
-    if (c !== 0) return c;
-    return String(a.created_at).localeCompare(String(b.created_at));
-  });
-  return Math.round(simulateFifoResidualMinutes(rows));
+  const rows = sortLedgerFifo(fetched);
+  const periodEnd = new Date().toISOString().slice(0, 10);
+  const { residualMinutes } = simulateBankFifoWithExpiryForPeriod(rows, periodEnd);
+  return Math.round(residualMinutes);
+}
+
+/** Minutos de crédito BH expirados no período → conversão conceptual em HE 50% para folha. */
+export async function getBankExpiredToPayroll50ForPeriod(
+  employeeId: string,
+  companyId: string,
+  periodEndDate: string,
+): Promise<{ residualMinutes: number; payrollExtra50FromExpiredMinutes: number }> {
+  if (!companyId || !isSupabaseConfigured()) {
+    return { residualMinutes: 0, payrollExtra50FromExpiredMinutes: 0 };
+  }
+  const fetched = await fetchLedgerRows(employeeId, companyId);
+  const rows = sortLedgerFifo(fetched);
+  return simulateBankFifoWithExpiryForPeriod(rows, periodEndDate.slice(0, 10));
 }

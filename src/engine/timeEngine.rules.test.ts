@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { RawTimeRecord } from '../services/timeProcessingService';
 import {
   applyNightRules,
+  assertDailyMathematicalConsistency,
   calculateDSRExtraImpactMinutes,
   calculateDSR,
   calculateOvertime,
   classifyDay,
   isNationalHoliday,
   splitNightMinutesNormalVsExtraForDate,
+  splitOvertimeForProduction,
   type CompanyRules,
 } from './timeEngine';
 
@@ -18,6 +20,9 @@ const baseRules: CompanyRules = {
   tolerance_minutes: 10,
   night_additional_percent: 20,
   dsr_enabled: true,
+  allow_auto_compensation: true,
+  weekday_extra_above_120: '50',
+  bank_hours_expiry_months: 6,
 };
 
 describe('timeEngine consolidated rules', () => {
@@ -122,6 +127,60 @@ describe('timeEngine consolidated rules', () => {
         restDaysCount: 1,
       }),
     ).toBe(120);
+  });
+
+  it('equação matemática diária válida antes de gravar', () => {
+    expect(() =>
+      assertDailyMathematicalConsistency({
+        worked: 420,
+        expected: 480,
+        extra: 0,
+        negative: 60,
+        falta: 0,
+        dateStr: '2026-05-05',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertDailyMathematicalConsistency({
+        worked: 500,
+        expected: 480,
+        extra: 20,
+        negative: 0,
+        falta: 0,
+        dateStr: '2026-05-05',
+      }),
+    ).not.toThrow();
+  });
+
+  it('HE útil: 2h primeira faixa em 50% e excesso segundo percentual configurado', () => {
+    const exTotal = 180;
+    const a = splitOvertimeForProduction(
+      'WEEKDAY',
+      480 + exTotal,
+      480,
+      exTotal,
+      { saturday_overtime_type: '100', weekday_extra_above_120: '100' },
+    );
+    expect(a.extra50).toBe(120);
+    expect(a.extra100).toBe(60);
+    const b = splitOvertimeForProduction(
+      'WEEKDAY',
+      480 + exTotal,
+      480,
+      exTotal,
+      { saturday_overtime_type: '100', weekday_extra_above_120: '50' },
+    );
+    expect(b.extra50).toBe(180);
+    expect(b.extra100).toBe(0);
+  });
+
+  it('domingo com jornada 0 → toda marcação como extra 100%', () => {
+    const s = splitOvertimeForProduction('SUNDAY', 300, 0, 300, {
+      saturday_overtime_type: '50',
+      weekday_extra_above_120: '50',
+    });
+    expect(s.extra100).toBe(300);
+    expect(s.extra50).toBe(0);
   });
 
   it('noturno proporcional: 60 min noturnas, 60 min trabalhadas, teto 40 → 40/20', () => {

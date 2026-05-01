@@ -5,7 +5,8 @@
  */
 
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
-import { applyDailyBankLedger, getBankBalanceFifoApprox } from './bankLedger';
+import { appendEngineCalcAudit } from './engineCalcAudit';
+import { applyDailyBankLedger, getBankExpiredToPayroll50ForPeriod } from './bankLedger';
 import {
   getDayRecords,
   processDailyTime,
@@ -65,6 +66,11 @@ export interface CompanyRules {
   tolerance_minutes: number;
   night_additional_percent: number;
   dsr_enabled: boolean;
+  /** Se false, negativa não usa saldo BH (vai inteira como desconto). */
+  allow_auto_compensation: boolean;
+  /** Excedente além das primeiras 2h úteis: 50% ou 100% conforme política. */
+  weekday_extra_above_120: '50' | '100';
+  bank_hours_expiry_months: number;
 }
 
 export interface DayClassificationInput {
@@ -122,6 +128,9 @@ const DEFAULT_COMPANY_RULES: CompanyRules = {
   tolerance_minutes: 10,
   night_additional_percent: 20,
   dsr_enabled: true,
+  allow_auto_compensation: true,
+  weekday_extra_above_120: '50',
+  bank_hours_expiry_months: 6,
 };
 
 export interface DaySummary {
@@ -138,6 +147,10 @@ export interface DaySummary {
     /** Gap após abatimento do BH (valor que segue como desconto em folha). */
     payroll_negative_after_bank_minutes?: number;
     bank_compensated_minutes?: number;
+    /** Adicional noturno (52m30s) associado ao trecho extraordinário do dia (minutos pagáveis). */
+    extra_noturna_payable_minutes?: number;
+    /** Crédito lançado no BH neste dia (min). */
+    bank_credited_minutes?: number;
   };
   inconsistencies: TimeInconsistency[];
   overtime: OvertimeResult | null;
@@ -145,6 +158,8 @@ export interface DaySummary {
   night_normal_reduced_minutes?: number;
   night_extra_reduced_minutes?: number;
   dsr_minutes?: number;
+  dsr_extra_50_minutes?: number;
+  dsr_extra_100_minutes?: number;
   bank_hours_delta?: number;
 }
 
@@ -347,7 +362,90 @@ export async function getCompanyRules(companyId: string): Promise<CompanyRules> 
         DEFAULT_COMPANY_RULES.night_additional_percent
     ),
     dsr_enabled: Boolean(fromCompanyRules?.dsr_enabled ?? overtimeRules?.dsr_enabled ?? true),
+    allow_auto_compensation:
+      typeof fromCompanyRules?.allow_auto_compensation === 'boolean'
+        ? fromCompanyRules.allow_auto_compensation
+        : typeof overtimeRules?.allow_auto_compensation === 'boolean'
+          ? overtimeRules.allow_auto_compensation
+          : true,
+    weekday_extra_above_120: (
+      String(
+        fromCompanyRules?.weekday_extra_above_120 ?? overtimeRules?.weekday_extra_above_120 ?? '50',
+      ).includes('100')
+        ? '100'
+        : '50'
+    ) as '50' | '100',
+    bank_hours_expiry_months: Math.min(
+      60,
+      Math.max(
+        1,
+        Number(fromCompanyRules?.bank_hours_expiry_months ?? overtimeRules?.bank_hours_expiry_months ?? 6) || 6,
+      ),
+    ),
   };
+}
+
+/**
+ * Corta HE em 50% nas primeiras 2h sobre o excedente e aplica política da empresa no restante.
+ * Domingos/feriados com jornada 0: 100% sobre everything worked (equivale a excesso total).
+ */
+export function splitOvertimeForProduction(
+  dayType: DayType,
+  workedMinutes: number,
+  expectedMinutes: number,
+  extraTotal: number,
+  rules: Pick<CompanyRules, 'saturday_overtime_type' | 'weekday_extra_above_120'>
+): { extra50: number; extra100: number } {
+  const ex = Math.max(0, Math.round(extraTotal));
+  if (dayType === 'SUNDAY' || dayType === 'HOLIDAY') {
+    if (Math.round(expectedMinutes) === 0) {
+      return { extra50: 0, extra100: Math.max(0, Math.round(workedMinutes)) };
+    }
+    return { extra50: 0, extra100: ex };
+  }
+  if (ex === 0) return { extra50: 0, extra100: 0 };
+  const band50 = Math.min(ex, 120);
+  const rest = Math.max(0, ex - 120);
+  if (dayType === 'SATURDAY') {
+    const pol = rules.saturday_overtime_type;
+    return {
+      extra50: band50 + (pol === '50' ? rest : 0),
+      extra100: pol === '100' ? rest : 0,
+    };
+  }
+  const pol = rules.weekday_extra_above_120;
+  return {
+    extra50: band50 + (pol === '50' ? rest : 0),
+    extra100: pol === '100' ? rest : 0,
+  };
+}
+
+/** Validação matemática pós‑cálculo (folha auditável). */
+export function assertDailyMathematicalConsistency(params: {
+  worked: number;
+  expected: number;
+  extra: number;
+  negative: number;
+  falta: number;
+  dateStr: string;
+}): void {
+  const { worked, expected, extra, negative, falta, dateStr } = params;
+  const w = Math.round(worked);
+  const e = Math.round(expected);
+  const x = Math.round(extra);
+  const n = Math.round(negative);
+  const f = Math.round(falta);
+  if (f > 0 && n > 0) {
+    throw new Error(`ENGINE_INCONSISTENT_STATE: falta e negativa juntas em ${dateStr}`);
+  }
+  if (f > 0 && w !== 0) {
+    throw new Error(`ENGINE_INCONSISTENT_STATE: falta registrada com worked≠0 (${dateStr})`);
+  }
+  if (worked !== 0 && w + n !== e + x) {
+    throw new Error(
+      `ENGINE_INCONSISTENT_STATE: inconsistência matemática em ${dateStr} (worked+neg≠expected+extra | ${w}+${n}≠${e}+${x})`
+    );
+  }
 }
 
 function normalizeType(type: string): string {
@@ -730,35 +828,35 @@ export async function calculate_day(
   const base = await processDailyTime(employeeId, companyId, dateStr, {
     toleranceOverride: companyRules.tolerance_minutes,
   });
+  const resolved = await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr);
   let expected = await get_expected_hours(employeeId, companyId, dateStr, dayType);
+
+  if (dayType === 'WEEKDAY' || dayType === 'SATURDAY') {
+    if (!resolved.schedule || !Number.isFinite(expected) || expected <= 0) {
+      console.error('[CRITICAL] SCHEDULE INVALID', {
+        scope: 'timeEngine.calculate_day',
+        date: dateStr,
+        employeeId,
+        companyId,
+        dayType,
+        expected_original: expected,
+        has_schedule_row: Boolean(resolved.schedule),
+      });
+      expected = dayType === 'SATURDAY' ? 240 : 480;
+    }
+  } else if (!Number.isFinite(expected) || expected < 0) {
+    throw new Error(`ENGINE_INCONSISTENT_STATE: expected não numérico (${dateStr})`);
+  }
+
   const worked = base.total_worked_minutes;
-  if ((dayType !== 'SUNDAY' && dayType !== 'HOLIDAY') && (!Number.isFinite(expected) || expected <= 0)) {
-    const fallbackExpected = dayType === 'SATURDAY' ? 4 * 60 : 8 * 60;
-    console.warn('[CALC] Expected inválido, aplicando fallback', {
-      date: dateStr,
-      dayType,
-      expected_original: expected,
-      expected_fallback: fallbackExpected,
-    });
-    expected = fallbackExpected;
-  }
-  if (!Number.isFinite(expected) || expected < 0) {
-    throw new Error(`Expected hours inválido para ${dateStr}`);
-  }
-  const noPunches = records.length === 0;
-  if (noPunches) {
-    console.log('[CALC]', {
-      date: dateStr,
-      expected,
-      worked: 0,
-      extra_hours: 0,
-      negative_hours: 0,
-      falta: expected,
-    });
-    return {
+
+  /** Falta CLT: worked===0 e jornada prevista positiva → falta esperada inteira (nunca negativa). */
+  if (worked === 0 && expected > 0) {
+    const faltaEarly = Math.round(expected);
+    const absenceRow = {
       ...base,
       total_worked_minutes: 0,
-      expected_minutes: expected,
+      expected_minutes: faltaEarly,
       overtime_minutes: 0,
       late_minutes: 0,
       missing_minutes: 0,
@@ -766,11 +864,30 @@ export async function calculate_day(
       extra_minutes: 0,
       extra_50_minutes: 0,
       extra_100_minutes: 0,
-      absence_minutes: expected,
-      incomplete: false,
+      absence_minutes: faltaEarly,
+      incomplete: records.length > 0,
       day_type: dayType,
     };
+    assertDailyMathematicalConsistency({
+      worked: 0,
+      expected: faltaEarly,
+      extra: 0,
+      negative: 0,
+      falta: faltaEarly,
+      dateStr,
+    });
+    console.log('[CALC]', {
+      date: dateStr,
+      expected: faltaEarly,
+      worked: 0,
+      extra_hours: 0,
+      negative_hours: 0,
+      falta: faltaEarly,
+      modo: 'absence_clt',
+    });
+    return absenceRow;
   }
+
   // Fórmula central obrigatória (expected vs worked).
   let extraMinutes = Math.max(0, worked - expected);
   let negativeMinutes = Math.max(0, expected - worked);
@@ -779,22 +896,22 @@ export async function calculate_day(
   }
   const incomplete = isDayIncomplete(base);
   const absenceMinutes = 0;
-  const entrySchedule = (await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr)).schedule?.start_time ?? null;
+  const entrySchedule = resolved.schedule?.start_time ?? null;
   const entryExpectedMin = hhmmToMinutes(entrySchedule);
   const entryActualMin = hhmmToMinutes(base.entrada);
   const lateMinutes =
     entryExpectedMin != null && entryActualMin != null && entryActualMin > entryExpectedMin + companyRules.tolerance_minutes
       ? entryActualMin - entryExpectedMin - companyRules.tolerance_minutes
       : 0;
-  let extra50 = 0;
-  let extra100 = 0;
-  if (dayType === 'WEEKDAY') extra50 = extraMinutes;
-  else if (dayType === 'SUNDAY' || dayType === 'HOLIDAY') extra100 = extraMinutes;
-  else if (dayType === 'SATURDAY') {
-    extra50 = extraMinutes;
-  }
+  const { extra50, extra100 } = splitOvertimeForProduction(
+    dayType,
+    worked,
+    expected,
+    extraMinutes,
+    companyRules,
+  );
   const consistencyLeft = worked;
-  const consistencyExpected = noPunches ? worked : expected;
+  const consistencyExpected = expected;
   const consistencyRight = consistencyExpected - negativeMinutes + extraMinutes;
   if (worked <= expected && extraMinutes > 0) {
     throw new Error(`Extra inválida: jornada não excedida (${dateStr})`);
@@ -817,6 +934,14 @@ export async function calculate_day(
   if (consistencyLeft !== consistencyRight) {
     throw new Error(`Inconsistência diária em ${dateStr}: worked=${consistencyLeft} esperado=${consistencyRight}`);
   }
+  assertDailyMathematicalConsistency({
+    worked,
+    expected,
+    extra: extraMinutes,
+    negative: negativeMinutes,
+    falta: absenceMinutes,
+    dateStr,
+  });
   console.log('[CALC]', {
     date: dateStr,
     expected,
@@ -846,10 +971,17 @@ export interface MonthlySummary {
   extra_100: number;
   negative_total: number;
   falta_total: number;
-  noturno_total: number;
+  /** Atraso (entrada após tolerância), minutos acumulados no período. */
+  total_atrasos_minutes: number;
+  /** Noturno efetivo pagável (hora reduzida + adicional quando aplicável). */
+  total_noturno: number;
   bank_balance_approx: number;
-  /** Soma dos reflexos de DSR (por semanas que interceptam o período). */
+  /** BH expirado no período → conversão em HE 50% para folha (min). */
+  bank_expired_to_extra50_minutes: number;
+  /** Reflexo DSR (total e decomposição proporcional às HE 50 / 100 da semana). */
   dsr_extra_total: number;
+  dsr_extra_50: number;
+  dsr_extra_100: number;
 }
 
 function emptyMonthlySummary(): MonthlySummary {
@@ -859,9 +991,13 @@ function emptyMonthlySummary(): MonthlySummary {
     extra_100: 0,
     negative_total: 0,
     falta_total: 0,
-    noturno_total: 0,
+    total_atrasos_minutes: 0,
+    total_noturno: 0,
     bank_balance_approx: 0,
+    bank_expired_to_extra50_minutes: 0,
     dsr_extra_total: 0,
+    dsr_extra_50: 0,
+    dsr_extra_100: 0,
   };
 }
 
@@ -897,6 +1033,8 @@ async function applyBankNightAndExtras(
     ...dailyBase,
     payroll_negative_after_bank_minutes: dailyBase.negative_minutes,
     bank_compensated_minutes: 0,
+    bank_credited_minutes: 0,
+    extra_noturna_payable_minutes: rx.payableNightMinutes,
   };
   let overtime: OvertimeResult = {
     date: dateStr,
@@ -904,8 +1042,7 @@ async function applyBankNightAndExtras(
     overtime_100_minutes: dailyBase.extra_100_minutes,
     is_holiday_or_off: dailyBase.day_type === 'HOLIDAY' || dailyBase.day_type === 'SUNDAY',
   };
-  let bank_hours_delta =
-    overtime.overtime_50_minutes + overtime.overtime_100_minutes;
+  let bank_hours_delta = 0;
   if (companyRules.time_bank_enabled) {
     const bh = await applyDailyBankLedger({
       employeeId,
@@ -913,16 +1050,18 @@ async function applyBankNightAndExtras(
       dateStr,
       extraDay: dailyBase.extra_minutes,
       negativeDay: dailyBase.negative_minutes,
+      allowAutoCompensation: companyRules.allow_auto_compensation,
+      bankHoursExpiryMonths: companyRules.bank_hours_expiry_months,
     });
     daily = {
       ...daily,
       payroll_negative_after_bank_minutes: bh.payrollNegativeMinutes,
       bank_compensated_minutes: bh.compensatedFromBank,
+      bank_credited_minutes: bh.creditedExtra,
+      extra_noturna_payable_minutes: rx.payableNightMinutes,
     };
     overtime = { ...overtime, overtime_50_minutes: 0, overtime_100_minutes: 0 };
     bank_hours_delta = bh.creditedExtra - bh.compensatedFromBank;
-  } else {
-    bank_hours_delta = 0;
   }
   return {
     daily,
@@ -954,12 +1093,38 @@ function weekDsrExtraMinutesFromGroup(group: DaySummary[]): number {
   });
 }
 
-function aggregateMonthlyDsr(groups: Map<string, DaySummary[]>): number {
-  let sum = 0;
+function weekDsrSplitFromGroup(group: DaySummary[]): { total: number; dsr50: number; dsr100: number } {
+  const total = weekDsrExtraMinutesFromGroup(group);
+  const s50 = group.reduce((a, r) => a + (r.daily.extra_50_minutes || 0), 0);
+  const s100 = group.reduce((a, r) => a + (r.daily.extra_100_minutes || 0), 0);
+  const den = s50 + s100;
+  if (total <= 0 || den <= 0) return { total: 0, dsr50: 0, dsr100: 0 };
+  const d50 = Math.round((total * s50) / den);
+  return { total, dsr50: d50, dsr100: total - d50 };
+}
+
+function aggregateMonthlyDsrSplit(groups: Map<string, DaySummary[]>): {
+  total: number;
+  dsr50: number;
+  dsr100: number;
+} {
+  let total = 0,
+    dsr50 = 0,
+    dsr100 = 0;
   for (const group of groups.values()) {
-    sum += weekDsrExtraMinutesFromGroup(group);
+    const w = weekDsrSplitFromGroup(group);
+    total += w.total;
+    dsr50 += w.dsr50;
+    dsr100 += w.dsr100;
   }
-  return sum;
+  return { total, dsr50, dsr100 };
+}
+
+function generateRecalcRunId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `run-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 async function persistRecalculatedDay(params: {
@@ -971,9 +1136,12 @@ async function persistRecalculatedDay(params: {
   nightNormalReduced: number;
   nightExtraReduced: number;
   bank_hours_delta?: number;
+  /** Agrupa todas as linhas geradas pela mesma execução de `recalculate_period`. */
+  recalcRunId?: string;
 }): Promise<void> {
   const { employeeId, companyId, date, daily, nightMinutes, nightNormalReduced, nightExtraReduced, bank_hours_delta } =
     params;
+  const recalc_run_id = params.recalcRunId ?? generateRecalcRunId();
   const payload = {
     employee_id: employeeId,
     company_id: companyId,
@@ -997,9 +1165,26 @@ async function persistRecalculatedDay(params: {
       bank_hours_delta: bank_hours_delta ?? null,
       payroll_negative_after_bank_minutes: daily.payroll_negative_after_bank_minutes ?? null,
       bank_compensated_minutes: daily.bank_compensated_minutes ?? null,
+      bank_credited_minutes: daily.bank_credited_minutes ?? null,
+      extra_noturna_payable_minutes: daily.extra_noturna_payable_minutes ?? null,
     },
     updated_at: new Date().toISOString(),
   };
+  try {
+    await db.insert('timesheets_daily_snapshots', {
+      employee_id: employeeId,
+      company_id: companyId,
+      date,
+      recalc_run_id,
+      snapshot: {
+        ...payload,
+        snapshot_recorded_at: new Date().toISOString(),
+        engine: 'timeEngine.persistRecalculatedDay',
+      },
+    });
+  } catch {
+    // Tabela opcional até migração aplicada ou RLS.
+  }
   try {
     const existing = (await db.select(
       'timesheets_daily',
@@ -1047,6 +1232,7 @@ export async function recalculate_period(
   const companyRules = await getCompanyRules(companyId);
   const monthly_summary = emptyMonthlySummary();
   const byWeek = new Map<string, DaySummary[]>();
+  const recalcRunId = generateRecalcRunId();
 
   const violations: Array<{ date: string; reason: string }> = [];
   const case_checks: Array<{ date: string; worked: number; expected: number; extra: number; negative: number }> = [];
@@ -1080,6 +1266,26 @@ export async function recalculate_period(
       nightNormalReduced: core.nightNormalReduced,
       nightExtraReduced: core.nightExtraReduced,
       bank_hours_delta: core.bank_hours_delta,
+      recalcRunId,
+    });
+    await appendEngineCalcAudit({
+      employeeId,
+      companyId,
+      payload: {
+        date,
+        expected: daily.expected_minutes,
+        worked: daily.total_worked_minutes,
+        extra: daily.extra_minutes,
+        negative: daily.negative_minutes,
+        falta: daily.absence_minutes,
+        extra_50: daily.extra_50_minutes,
+        extra_100: daily.extra_100_minutes,
+        extra_noturna_payable: daily.extra_noturna_payable_minutes ?? 0,
+        banco_creditado: daily.bank_credited_minutes ?? 0,
+        banco_utilizado: daily.bank_compensated_minutes ?? 0,
+        origem: 'calc_engine',
+        timestamp: new Date().toISOString(),
+      },
     });
     monthly_summary.worked_total += daily.total_worked_minutes;
     monthly_summary.extra_50 += core.overtime.overtime_50_minutes;
@@ -1087,7 +1293,8 @@ export async function recalculate_period(
     monthly_summary.negative_total +=
       daily.payroll_negative_after_bank_minutes ?? daily.negative_minutes;
     monthly_summary.falta_total += daily.absence_minutes;
-    monthly_summary.noturno_total += core.nightPayableTotal;
+    monthly_summary.total_atrasos_minutes += daily.late_minutes;
+    monthly_summary.total_noturno += core.nightPayableTotal;
     const wk = weekMondayKey(date);
     if (!byWeek.has(wk)) byWeek.set(wk, []);
     byWeek.get(wk)!.push({
@@ -1142,12 +1349,18 @@ export async function recalculate_period(
       endDate,
       total_days: days.length,
       violations: violations.length,
+      timesheets_daily_snapshot_run_id: recalcRunId,
     },
     created_at: new Date().toISOString(),
   }).catch(() => undefined);
 
-  monthly_summary.dsr_extra_total = aggregateMonthlyDsr(byWeek);
-  monthly_summary.bank_balance_approx = await getBankBalanceFifoApprox(employeeId, companyId);
+  const dsrBlock = aggregateMonthlyDsrSplit(byWeek);
+  monthly_summary.dsr_extra_total = dsrBlock.total;
+  monthly_summary.dsr_extra_50 = dsrBlock.dsr50;
+  monthly_summary.dsr_extra_100 = dsrBlock.dsr100;
+  const bankSim = await getBankExpiredToPayroll50ForPeriod(employeeId, companyId, endDate.slice(0, 10));
+  monthly_summary.bank_balance_approx = Math.round(bankSim.residualMinutes);
+  monthly_summary.bank_expired_to_extra50_minutes = bankSim.payrollExtra50FromExpiredMinutes;
 
   return {
     total_days: days.length,
@@ -1281,8 +1494,12 @@ export async function processEmployeeWeek(
     results.push(await processEmployeeDay(employeeId, companyId, dateStr));
   }
   if (companyRules.dsr_enabled) {
-    const dsr = weekDsrExtraMinutesFromGroup(results);
-    for (const r of results) r.dsr_minutes = dsr;
+    const dsr = weekDsrSplitFromGroup(results);
+    for (const r of results) {
+      r.dsr_minutes = dsr.total;
+      r.dsr_extra_50_minutes = dsr.dsr50;
+      r.dsr_extra_100_minutes = dsr.dsr100;
+    }
   }
   return results;
 }
@@ -1311,8 +1528,12 @@ export async function processEmployeeMonth(
       byWeek.get(key)!.push(r);
     }
     for (const group of byWeek.values()) {
-      const dsr = weekDsrExtraMinutesFromGroup(group);
-      for (const r of group) r.dsr_minutes = dsr;
+      const dsr = weekDsrSplitFromGroup(group);
+      for (const r of group) {
+        r.dsr_minutes = dsr.total;
+        r.dsr_extra_50_minutes = dsr.dsr50;
+        r.dsr_extra_100_minutes = dsr.dsr100;
+      }
     }
   }
   return results;
