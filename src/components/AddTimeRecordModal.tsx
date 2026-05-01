@@ -32,6 +32,8 @@ interface AdjustmentRequestOption {
 }
 
 const MIN_MANUAL_REASON_NO_GPS = 12;
+const JUSTIFICATIVAS_TIMEOUT_MS = 7000;
+const justificativasCacheByCompany = new Map<string, JustificativaOption[]>();
 
 function geolocationErrorMessage(err: GeolocationPositionError): string {
   switch (err.code) {
@@ -93,6 +95,7 @@ export const AddTimeRecordModal: React.FC<AddTimeRecordModalProps> = ({
     justificativa_id: '',
   });
   const [justificativas, setJustificativas] = useState<JustificativaOption[]>([]);
+  const [justificativasWarning, setJustificativasWarning] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [location, setLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -103,22 +106,51 @@ export const AddTimeRecordModal: React.FC<AddTimeRecordModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !companyId || !isSupabaseConfigured()) return;
+    setJustificativasWarning(null);
+    const cached = justificativasCacheByCompany.get(companyId);
+    if (cached) {
+      setJustificativas(cached);
+      return;
+    }
+
     const loadJustificativas = async () => {
       try {
-        const rows = await db.select('justificativas', [
-          { column: 'company_id', operator: 'eq', value: companyId }
-        ]) as any[];
-        setJustificativas(
+        const rowsPromise = db.select(
+          'justificativas',
+          [{ column: 'company_id', operator: 'eq', value: companyId }],
+          {
+            columns: 'id, codigo, descricao, bloquear_uso_web',
+            orderBy: { column: 'codigo', ascending: true },
+            limit: 200,
+          },
+        ) as Promise<any[]>;
+        const rows = (await Promise.race([
+          rowsPromise,
+          new Promise<any[]>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`Tempo esgotado (${JUSTIFICATIVAS_TIMEOUT_MS / 1000}s) em justificativas`)),
+              JUSTIFICATIVAS_TIMEOUT_MS,
+            ),
+          ),
+        ])) as any[];
+        const normalized =
           (rows ?? [])
             .filter((r: any) => !r.bloquear_uso_web)
             .map((r: any) => ({
               id: r.id,
               codigo: r.codigo || '',
               descricao: r.descricao || '',
-            })),
-        );
+            }));
+        justificativasCacheByCompany.set(companyId, normalized);
+        setJustificativas(normalized);
       } catch (e) {
-        console.error('Erro ao carregar justificativas:', e);
+        setJustificativas([]);
+        setJustificativasWarning(
+          'Não foi possível carregar justificativas agora. Você pode seguir preenchendo o motivo manualmente.',
+        );
+        if (import.meta.env?.DEV && typeof console !== 'undefined') {
+          console.warn('Justificativas indisponíveis no momento:', e);
+        }
       }
     };
     loadJustificativas();
@@ -453,6 +485,12 @@ export const AddTimeRecordModal: React.FC<AddTimeRecordModalProps> = ({
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {justificativasWarning && (
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                <p className="text-xs text-amber-700 dark:text-amber-300">{justificativasWarning}</p>
               </div>
             )}
 

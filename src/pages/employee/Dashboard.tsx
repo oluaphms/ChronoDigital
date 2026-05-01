@@ -4,6 +4,7 @@ import { Clock, CalendarDays, Activity, Scale, ClipboardList, LogIn, LogOut, Fil
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, checkSupabaseConfigured, supabase, getSupabaseClient } from '../../services/supabaseClient';
+import { getTimeRecordsForEmployeeDashboard } from '../../../services/timeRecords.service';
 import { Button, LoadingState } from '../../../components/UI';
 import { calculateWorkedHours } from '../../utils/timeCalculations';
 import { calcularHorasHojeMs, formatarTempoLegivel, localTodayYmd } from '../../utils/workedHoursToday';
@@ -45,10 +46,7 @@ const EmployeeDashboard: React.FC = () => {
       try {
         let rows: any[] = [];
         try {
-          rows = (await db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], {
-            columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
-            limit: 120,
-          })) as any[];
+          rows = (await getTimeRecordsForEmployeeDashboard(user.id)) as any[];
         } catch (error) {
           // Não interrompe o dashboard por timeout transitório do Supabase.
           console.warn('[EmployeeDashboard] time_records indisponível no momento:', error);

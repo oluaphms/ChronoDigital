@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../../components/UI';
-import { supabase, isSupabaseConfigured, db } from '../services/supabaseClient';
+import { isSupabaseConfigured, db } from '../services/supabaseClient';
+import { deleteTimeRecord, updateTimeRecord } from '../../services/timeRecords.service';
 import { TIPOS_BATIDA, mapPunchTypeToDb, mapDbToPunchType } from '../constants/punchTypes';
 import { localDateAndTimeToIsoUtc } from '../utils/localDateTimeToIso';
 
@@ -25,6 +26,32 @@ function getReadableManualReason(raw: string | null | undefined): string {
   const txt = String(raw || '').trim();
   if (!txt) return '';
   return stripStatusTag(txt);
+}
+
+function toLocalDateYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function toLocalTimeHm(d: Date): string {
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+function normalizePunchTypeForMatch(raw: string | null | undefined): string {
+  const s = String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+  if (s === 'entrada' || s === 'e' || s === 'intervalo_volta' || s === 'intervalo_entrada') return 'entrada';
+  if (s === 'saida' || s === 's') return 'saida';
+  if (s === 'pausa' || s === 'intervalo_saida' || s === 'p') return 'intervalo_saida';
+  return s;
 }
 
 interface EditTimeRecordModalProps {
@@ -176,6 +203,25 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
     };
   }, [isOpen, record?.user_id]);
 
+  const matchingAdjustmentRequests = useMemo(() => {
+    if (!record || adjustmentRequests.length === 0) return [];
+    const instant = record.timestamp && String(record.timestamp).trim() ? record.timestamp : record.created_at;
+    const d = new Date(instant);
+    if (Number.isNaN(d.getTime())) return [];
+
+    const recordDate = toLocalDateYmd(d);
+    const recordTime = toLocalTimeHm(d);
+    const recordType = normalizePunchTypeForMatch(mapDbToPunchType(record.type) || record.type);
+
+    return adjustmentRequests.filter((req) => {
+      const reqDate = String(req.adjustment_date || '').trim();
+      const reqTime = String(req.adjustment_time || '').slice(0, 5);
+      const reqType = normalizePunchTypeForMatch(req.punch_type);
+
+      return reqDate === recordDate && reqTime === recordTime && reqType === recordType;
+    });
+  }, [adjustmentRequests, record]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (readOnly || !record || !isSupabaseConfigured()) return;
@@ -196,18 +242,13 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
           ? [statusTag, baseReason || 'Lançamento de status'].filter(Boolean).join(' ').trim()
           : baseReason || null;
 
-      const { error: updateError } = await supabase
-        .from('time_records')
-        .update({
-          created_at,
-          timestamp: created_at,
-          updated_at: new Date().toISOString(),
-          type: mapPunchTypeToDb(form.entry_mode === 'STATUS' ? 'ENTRADA' : form.type),
-          manual_reason,
-        })
-        .eq('id', record.id);
-
-      if (updateError) throw updateError;
+      await updateTimeRecord(record.id, {
+        created_at,
+        timestamp: created_at,
+        updated_at: new Date().toISOString(),
+        type: mapPunchTypeToDb(form.entry_mode === 'STATUS' ? 'ENTRADA' : form.type),
+        manual_reason,
+      });
 
       onSave();
     } catch (err: any) {
@@ -226,12 +267,7 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
     setError(null);
 
     try {
-      const { error: deleteError } = await supabase
-        .from('time_records')
-        .delete()
-        .eq('id', record.id);
-
-      if (deleteError) throw deleteError;
+      await deleteTimeRecord(record.id);
 
       onSave();
     } catch (err: any) {
@@ -319,13 +355,13 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
                 </p>
               </div>
 
-              {adjustmentRequests.length > 0 && (
+              {matchingAdjustmentRequests.length > 0 && (
                 <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800">
                   <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300 uppercase mb-2">
-                    Solicitações de ajuste de ponto (colaborador)
+                    Solicitação de ajuste vinculada a esta batida
                   </p>
                   <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                    {adjustmentRequests.map((req) => (
+                    {matchingAdjustmentRequests.map((req) => (
                       <div
                         key={req.id}
                         className="rounded-md border border-indigo-100 dark:border-indigo-900/40 bg-white/80 dark:bg-slate-800/70 p-2"
@@ -467,13 +503,13 @@ export const EditTimeRecordModal: React.FC<EditTimeRecordModalProps> = ({
               />
             </div>
 
-            {adjustmentRequests.length > 0 && (
+            {matchingAdjustmentRequests.length > 0 && (
               <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800">
                 <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300 uppercase mb-2">
-                  Solicitações de ajuste de ponto (colaborador)
+                  Solicitação de ajuste vinculada a esta batida
                 </p>
                 <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                  {adjustmentRequests.map((req) => (
+                  {matchingAdjustmentRequests.map((req) => (
                     <div
                       key={req.id}
                       className="rounded-md border border-indigo-100 dark:border-indigo-900/40 bg-white/80 dark:bg-slate-800/70 p-2"

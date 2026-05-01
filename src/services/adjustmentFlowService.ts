@@ -9,6 +9,7 @@
 
 import { supabase, isSupabaseConfigured } from '../../services/supabase';
 import { db } from '../../services/supabaseClient';
+import { updateTimeRecordPunchInstant } from '../../services/timeRecords.service';
 import { NotificationService } from '../../services/notificationService';
 import { LoggingService } from '../../services/loggingService';
 import { LogSeverity } from '../../types';
@@ -104,14 +105,11 @@ export const AdjustmentFlowService = {
 
     // 3) Aplicar o ajuste no time_record original (se existir)
     if (request.time_record_id && originalCreatedAt) {
-      const { error: recError } = await supabase
-        .from('time_records')
-        .update({ created_at: newTimestamp, updated_at: now })
-        .eq('id', request.time_record_id);
-
-      if (recError) {
-        // Logar mas não reverter — o ajuste já foi aprovado; admin pode corrigir manualmente
-        console.error('[AdjustmentFlow] Falha ao atualizar time_record:', recError.message);
+      try {
+        await updateTimeRecordPunchInstant(request.time_record_id, newTimestamp, now);
+      } catch (recErr: unknown) {
+        const msg = recErr instanceof Error ? recErr.message : String(recErr);
+        console.error('[AdjustmentFlow] Falha ao atualizar time_record:', msg);
       }
     }
 

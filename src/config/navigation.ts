@@ -21,6 +21,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   Upload,
+  CreditCard,
+  TrendingUp,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -51,6 +53,8 @@ export const adminNavigation: NavItem[] = [
   { name: 'Importar AFD', nameKey: 'menu.importRep', path: '/admin/import-rep', icon: Upload },
   { name: 'Fiscalização REP-P', nameKey: 'menu.fiscalizacao', path: '/admin/fiscalizacao', icon: ShieldCheck },
   { name: 'Segurança e Antifraude', nameKey: 'menu.securityAntifraud', path: '/admin/security', icon: ShieldAlert },
+  { name: 'Plano e upgrade', nameKey: 'menu.plan', path: '/admin/plan', icon: CreditCard },
+  { name: 'Métricas do produto', nameKey: 'menu.productMetrics', path: '/admin/metricas-produto', icon: TrendingUp },
   { name: 'Empresa', nameKey: 'menu.empresa', path: '/admin/company', icon: Building },
   { name: 'Configurações', nameKey: 'menu.settings', path: '/admin/settings', icon: Settings },
 ];

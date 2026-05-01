@@ -1,8 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { useTenantPlan } from '../../hooks/useTenantPlan';
+import { isPlanFeatureEnabled } from '../../../services/tenantPlan.service';
+import { PlanUpgradePanel } from '../../components/plan/PlanUpgradePanel';
 import PageHeader from '../../components/PageHeader';
 import { db, supabase, isSupabaseConfigured, getSupabaseClient } from '../../services/supabaseClient';
+import {
+  createTimeRecord,
+  findTimeRecordIdByCompanySourceNsr,
+} from '../../../services/timeRecords.service';
 import { LoadingState, Button } from '../../../components/UI';
 import {
   Activity,
@@ -71,6 +78,8 @@ type EmployeeForRep = {
   invisivel: boolean;
   demissao: string | null;
   pis_pasep?: string | null;
+  pis?: string | null;
+  cpf?: string | null;
   numero_identificador?: string | null;
   numero_folha?: string | null;
 };
@@ -267,6 +276,7 @@ async function appendRepPendingQueueDiagnostics(
 
 const AdminRepDevices: React.FC = () => {
   const { user, loading } = useCurrentUser();
+  const tenantPlan = useTenantPlan(user?.companyId);
   const [devices, setDevices] = useState<RepDeviceRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -300,7 +310,7 @@ const AdminRepDevices: React.FC = () => {
   /** Opcional: consolidar só para um colaborador (outros NIS ficam na fila). */
   const [srConsolidateOnlyUserId, setSrConsolidateOnlyUserId] = useState('');
   /** Botão «Consolidar»: só pendentes no dia civil deste computador (recebimento «só hoje» já usa a mesma janela automaticamente). */
-  const [srManualConsolidateLocalToday, setSrManualConsolidateLocalToday] = useState(false);
+  const [srManualConsolidateLocalToday, setSrManualConsolidateLocalToday] = useState(true);
   /** Diagnóstico de PIS pendentes na fila */
   const [pendingPisModal, setPendingPisModal] = useState<{ open: boolean; rows: PendingPunchDiag[] }>({ open: false, rows: [] });
   /** Debug info para Paulo Henrique */
@@ -361,37 +371,80 @@ const AdminRepDevices: React.FC = () => {
   };
 
   useEffect(() => {
-    if (user?.companyId) loadDevices();
-  }, [user?.companyId]);
+    if (!user?.companyId) return;
+    if (tenantPlan.loading) return;
+    if (!isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices')) return;
+    void loadDevices();
+  }, [user?.companyId, tenantPlan.loading, tenantPlan.plan]);
 
   const loadEmployeesForRep = async () => {
     if (!user?.companyId || !isSupabaseConfigured()) return;
     try {
-      const rows = (await db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }])) as {
+      const [userRows, employeeRows] = await Promise.all([
+        db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]),
+        db.select('employees', [{ column: 'company_id', operator: 'eq', value: user.companyId }]).catch(() => []),
+      ]);
+
+      const rows = (userRows || []) as {
         id: string;
         nome: string | null;
         email: string | null;
-        role: string | null;
         status?: string | null;
         invisivel?: boolean | null;
         demissao?: string | null;
         pis_pasep?: string | null;
+        pis?: string | null;
+        cpf?: string | null;
         numero_identificador?: string | null;
         numero_folha?: string | null;
       }[];
-      const allowed = new Set(['employee', 'supervisor', 'hr', 'admin']);
-      const list = (rows || [])
-        .filter((r) => allowed.has(String(r.role || '').toLowerCase()))
-        .map((r) => ({
-          id: r.id,
-          nome: (r.nome || r.email || r.id).trim(),
-          status: (r.status || 'active').trim(),
-          invisivel: r.invisivel === true,
-          demissao: r.demissao || null,
-          pis_pasep: r.pis_pasep || null,
-          numero_identificador: r.numero_identificador || null,
-          numero_folha: r.numero_folha || null,
-        }))
+      const legacyRows = (employeeRows || []) as {
+        id: string;
+        nome?: string | null;
+        email?: string | null;
+        status?: string | null;
+        pis_pasep?: string | null;
+        pis?: string | null;
+        cpf?: string | null;
+        numero_identificador?: string | null;
+        numero_folha?: string | null;
+      }[];
+
+      const merged = new Map<string, EmployeeForRep>();
+      const upsert = (row: {
+        id: string;
+        nome?: string | null;
+        email?: string | null;
+        status?: string | null;
+        invisivel?: boolean | null;
+        demissao?: string | null;
+        pis_pasep?: string | null;
+        pis?: string | null;
+        cpf?: string | null;
+        numero_identificador?: string | null;
+        numero_folha?: string | null;
+      }) => {
+        if (!row.id) return;
+        const prev = merged.get(row.id);
+        merged.set(row.id, {
+          id: row.id,
+          nome: (row.nome || row.email || row.id || prev?.nome || '').trim(),
+          status: (row.status || prev?.status || 'active').trim(),
+          invisivel: row.invisivel === true || prev?.invisivel === true,
+          demissao: row.demissao || prev?.demissao || null,
+          pis_pasep: row.pis_pasep || prev?.pis_pasep || null,
+          pis: row.pis || prev?.pis || null,
+          cpf: row.cpf || prev?.cpf || null,
+          numero_identificador: row.numero_identificador || prev?.numero_identificador || null,
+          numero_folha: row.numero_folha || prev?.numero_folha || null,
+        });
+      };
+
+      rows.forEach(upsert);
+      legacyRows.forEach(upsert);
+
+      const list = Array.from(merged.values())
+        .filter((r) => !!r.id)
         .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
       setEmployees(list);
     } catch {
@@ -400,8 +453,11 @@ const AdminRepDevices: React.FC = () => {
   };
 
   useEffect(() => {
-    if (user?.companyId) loadEmployeesForRep();
-  }, [user?.companyId]);
+    if (!user?.companyId) return;
+    if (tenantPlan.loading) return;
+    if (!isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices')) return;
+    void loadEmployeesForRep();
+  }, [user?.companyId, tenantPlan.loading, tenantPlan.plan]);
 
   useEffect(() => {
     setRepDeploymentNote(typeof window !== 'undefined' && window.isSecureContext);
@@ -740,6 +796,27 @@ const AdminRepDevices: React.FC = () => {
                 }
               }
             }
+            if (stillInQueueOnly > 0) {
+              const promotedByFallback = await tryFallbackPromotePendingByLocalMatch(
+                consolidateCompanyId,
+                d.id,
+                localDay
+              );
+              if (promotedByFallback > 0) {
+                imp += promotedByFallback;
+                appendSrLog(
+                  `${promotedByFallback} marcação(ões) pendente(s) foram promovidas por fallback local de cadastro.`
+                );
+                const prFinal = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id, {
+                  localWindow: localDay,
+                  onlyUserId: onlyUid,
+                });
+                if (prFinal.success) {
+                  stillInQueueOnly = prFinal.skippedNoUser ?? stillInQueueOnly;
+                  stillInQueueOtherUser = prFinal.skippedOtherUser ?? stillInQueueOtherUser;
+                }
+              }
+            }
             if (promoted > 0) {
               appendSrLog(`${promoted} marcação(ões) extra(s) na folha a partir da fila (consolidadas agora).`);
             }
@@ -899,9 +976,30 @@ const AdminRepDevices: React.FC = () => {
               onlyUserId: onlyUid,
             })
           : pr;
-      const promotedFinal = prAfterRepair.promoted ?? promoted;
-      const skippedFinal = prAfterRepair.skippedNoUser ?? skipped;
-      const skippedOtherFinal = prAfterRepair.skippedOtherUser ?? skippedOther;
+      let promotedFinal = prAfterRepair.promoted ?? promoted;
+      let skippedFinal = prAfterRepair.skippedNoUser ?? skipped;
+      let skippedOtherFinal = prAfterRepair.skippedOtherUser ?? skippedOther;
+      if (skippedFinal > 0) {
+        const promotedByFallback = await tryFallbackPromotePendingByLocalMatch(
+          consolidateCompanyId,
+          d.id,
+          localDay
+        );
+        if (promotedByFallback > 0) {
+          promotedFinal += promotedByFallback;
+          appendSrLog(
+            `${promotedByFallback} marcação(ões) pendente(s) foram promovidas por fallback local de cadastro.`
+          );
+          const prFinal = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id, {
+            localWindow: localDay,
+            onlyUserId: onlyUid,
+          });
+          if (prFinal.success) {
+            skippedFinal = prFinal.skippedNoUser ?? skippedFinal;
+            skippedOtherFinal = prFinal.skippedOtherUser ?? skippedOtherFinal;
+          }
+        }
+      }
       const partsLog: string[] = [
         `Consolidado: ${promotedFinal} registro(s) na folha; ${skippedFinal} pendente(s) sem funcionário identificado`,
       ];
@@ -1192,6 +1290,14 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
+  const getEmployeePisCandidates = (e: EmployeeForRep): string[] => {
+    const values = [e.pis_pasep, e.pis, e.cpf];
+    const normalized = values
+      .map((v) => normalizePisTo11Digits(v))
+      .filter((v): v is string => !!v);
+    return Array.from(new Set(normalized));
+  };
+
   const findEmployeeByPis = (pisCanon: string | null, matricula: string | null) => {
     if (!pisCanon && !matricula) return null;
 
@@ -1200,13 +1306,12 @@ const AdminRepDevices: React.FC = () => {
     const cleanMat = (matricula || '').replace(/\D/g, '');
 
     return employees.find((e) => {
-      // Normaliza o PIS do cadastro também para 11 dígitos antes de comparar
-      const empPis = normalizePisTo11Digits(e.pis_pasep);
+      const empPisCandidates = getEmployeePisCandidates(e);
       const empIdent = (e.numero_identificador || '').replace(/\D/g, '');
       const empFolha = (e.numero_folha || '').replace(/\D/g, '');
 
-      if (cleanPis && (empPis === cleanPis || empIdent === cleanPis || empFolha === cleanPis)) return true;
-      if (cleanMat && (empPis === cleanMat || empIdent === cleanMat || empFolha === cleanMat)) return true;
+      if (cleanPis && (empPisCandidates.includes(cleanPis) || empIdent === cleanPis || empFolha === cleanPis)) return true;
+      if (cleanMat && (empPisCandidates.includes(cleanMat) || empIdent === cleanMat || empFolha === cleanMat)) return true;
       return false;
     }) || null;
   };
@@ -1244,7 +1349,8 @@ const AdminRepDevices: React.FC = () => {
       const targetMatricula =
         (emp.numero_identificador || '').trim() ||
         (emp.numero_folha || '').trim() ||
-        normalizePisTo11Digits(emp.pis_pasep);
+        getEmployeePisCandidates(emp)[0] ||
+        '';
       if (!targetMatricula) continue;
 
       const currentMatricula = (row.matricula || '').trim();
@@ -1263,6 +1369,102 @@ const AdminRepDevices: React.FC = () => {
     }
 
     return fixed;
+  };
+
+  const tryFallbackPromotePendingByLocalMatch = async (
+    companyId: string,
+    deviceId: string,
+    localWindow?: { startIso: string; endIso: string }
+  ): Promise<number> => {
+    const client = getSupabaseClient();
+    if (!client) return 0;
+
+    let q = client
+      .from('rep_punch_logs')
+      .select('id, pis, cpf, matricula, data_hora, tipo_marcacao, nsr, time_record_id')
+      .eq('company_id', companyId)
+      .eq('rep_device_id', deviceId)
+      .is('time_record_id', null)
+      .or('ignored.is.false,ignored.is.null')
+      .order('data_hora', { ascending: true })
+      .limit(200);
+
+    if (localWindow) {
+      q = q.gte('data_hora', localWindow.startIso).lte('data_hora', localWindow.endIso);
+    }
+
+    const { data, error } = await q;
+    if (error || !data?.length) return 0;
+
+    let promoted = 0;
+    for (const row of data as Array<{
+      id: string;
+      pis: string | null;
+      cpf: string | null;
+      matricula: string | null;
+      data_hora: string;
+      tipo_marcacao: string | null;
+      nsr: number | null;
+      time_record_id: string | null;
+    }>) {
+      const canon = repAfdCanonical11(row.pis || row.cpf);
+      const emp = findEmployeeByPis(canon, row.matricula);
+      if (!emp || !row.data_hora) continue;
+
+      const targetMatricula =
+        (emp.numero_identificador || '').trim() ||
+        (emp.numero_folha || '').trim() ||
+        getEmployeePisCandidates(emp)[0] ||
+        '';
+
+      const tipo = String(row.tipo_marcacao || '').toUpperCase().slice(0, 1);
+      const mappedType = tipo === 'S' ? 'saída' : tipo === 'P' ? 'pausa' : 'entrada';
+
+      let targetTimeRecordId: string | null = null;
+      if (row.nsr != null) {
+        try {
+          const existingId = await findTimeRecordIdByCompanySourceNsr(companyId, row.nsr);
+          if (existingId) targetTimeRecordId = existingId;
+        } catch {
+          /* ignora e tenta insert */
+        }
+      }
+
+      if (!targetTimeRecordId) {
+        const newId = crypto.randomUUID();
+        try {
+          await createTimeRecord({
+            id: newId,
+            user_id: emp.id,
+            company_id: companyId,
+            type: mappedType,
+            method: 'rep',
+            timestamp: row.data_hora,
+            source: 'rep',
+            nsr: row.nsr,
+            fraud_score: 0,
+            is_late: false,
+          });
+          targetTimeRecordId = newId;
+        } catch {
+          continue;
+        }
+      }
+
+      const { error: upErr } = await client
+        .from('rep_punch_logs')
+        .update({
+          time_record_id: targetTimeRecordId,
+          matricula: targetMatricula || row.matricula,
+          nome_funcionario: emp.nome,
+        })
+        .eq('id', row.id)
+        .is('time_record_id', null);
+
+      if (!upErr) promoted += 1;
+    }
+
+    return promoted;
   };
 
   /**
@@ -1735,8 +1937,10 @@ const AdminRepDevices: React.FC = () => {
     return id.length > 12 ? `${id.slice(0, 8)}…` : id;
   };
 
-  if (loading) return <LoadingState message="Carregando..." />;
+  if (loading || tenantPlan.loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
+
+  const repDevicesOk = isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices');
 
   return (
     <div className="p-4 md:p-6 lg:p-10 max-w-7xl mx-auto w-full">
@@ -1745,19 +1949,29 @@ const AdminRepDevices: React.FC = () => {
         subtitle="Cadastro de registradores, comunicação em rede (Control iD iDClass) e importação de marcações."
         icon={<Clock size={24} />}
         actions={
-          <div className="flex flex-wrap gap-2 justify-end">
-            <Button type="button" variant="outline" onClick={openSendReceiveModal}>
-              <ArrowLeftRight size={18} className="mr-2" />
-              Enviar e Receber
-            </Button>
-            <Button onClick={openCreate} variant="primary">
-              <Plus size={18} className="mr-2" />
-              Cadastrar relógio
-            </Button>
-          </div>
+          repDevicesOk ? (
+            <div className="flex flex-wrap gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={openSendReceiveModal}>
+                <ArrowLeftRight size={18} className="mr-2" />
+                Enviar e Receber
+              </Button>
+              <Button onClick={openCreate} variant="primary">
+                <Plus size={18} className="mr-2" />
+                Cadastrar relógio
+              </Button>
+            </div>
+          ) : undefined
         }
       />
 
+      {!repDevicesOk ? (
+        <PlanUpgradePanel
+          plan={tenantPlan.plan}
+          title="Recurso disponível no Pro e Enterprise"
+          message="O cadastro e sincronização de relógios REP em rede não estão incluídos no plano Free. Faça upgrade para conectar registradores e importar marcações automaticamente."
+        />
+      ) : (
+      <>
       {message && (
         <div
           className={`mb-4 px-4 py-3 rounded-xl ${message.type === 'success' ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'}`}
@@ -3280,6 +3494,8 @@ const AdminRepDevices: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

@@ -17,6 +17,7 @@ import { ingestPunch } from './repService';
 import { parseAFD, parseTxtOrCsv } from './repParser';
 import { ingestAfdRecords } from './repService';
 import type { RepEmployeePayload, RepDeviceClockSet, RepExchangeOp } from './types';
+import { assertPlanLimit, PlanLimitError, PLAN_LIMIT_CODE } from '../../services/planEnforcement';
 
 const JSON_HDR = { 'Content-Type': 'application/json' };
 
@@ -137,6 +138,23 @@ async function handlePushEmployee(request: Request): Promise<Response> {
     if (device.tipo_conexao !== 'rede') {
       return Response.json({ ok: false, message: 'Dispositivo deve ser do tipo rede (IP).' }, { status: 400, headers });
     }
+    const svcPush = getServiceSupabase();
+    if (svcPush) {
+      try {
+        await assertPlanLimit(svcPush.admin, {
+          tenantId: device.company_id,
+          action: { type: 'USE_REP', feature: 'rep_devices' },
+        });
+      } catch (e) {
+        if (e instanceof PlanLimitError) {
+          return Response.json(
+            { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+            { status: 403, headers: { ...headers } }
+          );
+        }
+        throw e;
+      }
+    }
 
     const row = await fetchUserRowForRepPush(request, userId, device.company_id);
     if (row instanceof Response) return row;
@@ -196,6 +214,23 @@ async function handleExchange(request: Request): Promise<Response> {
     const { device } = auth;
     if (device.tipo_conexao !== 'rede') {
       return Response.json({ ok: false, message: 'Dispositivo deve ser do tipo rede (IP).' }, { status: 400, headers });
+    }
+    const svcEx = getServiceSupabase();
+    if (svcEx) {
+      try {
+        await assertPlanLimit(svcEx.admin, {
+          tenantId: device.company_id,
+          action: { type: 'USE_REP', feature: 'rep_devices' },
+        });
+      } catch (e) {
+        if (e instanceof PlanLimitError) {
+          return Response.json(
+            { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+            { status: 403, headers: { ...headers } }
+          );
+        }
+        throw e;
+      }
     }
     const result = await runRepExchange(device, opRaw as RepExchangeOp, body.clock);
     try {
@@ -274,6 +309,23 @@ async function handleStatus(request: Request): Promise<Response> {
     if (device.tipo_conexao !== 'rede') {
       return Response.json({ ok: false, message: 'Dispositivo não é do tipo rede (IP).' }, { status: 400, headers });
     }
+    const svcSt = getServiceSupabase();
+    if (svcSt) {
+      try {
+        await assertPlanLimit(svcSt.admin, {
+          tenantId: device.company_id,
+          action: { type: 'USE_REP', feature: 'rep_devices' },
+        });
+      } catch (e) {
+        if (e instanceof PlanLimitError) {
+          return Response.json(
+            { code: PLAN_LIMIT_CODE, message: e.message, error: e.message, ok: false },
+            { status: 403, headers }
+          );
+        }
+        throw e;
+      }
+    }
     const ip = (device.ip || '').trim();
     if (ip && isPrivateOrLocalIPv4(ip) && isRunningOnVercel()) {
       return Response.json(
@@ -337,6 +389,23 @@ async function handlePunches(request: Request): Promise<Response> {
     if (device.tipo_conexao === 'arquivo') {
       return Response.json({ ok: false, message: 'Dispositivo configurado apenas para arquivo.' }, { status: 400, headers });
     }
+    const svcPu = getServiceSupabase();
+    if (svcPu) {
+      try {
+        await assertPlanLimit(svcPu.admin, {
+          tenantId: device.company_id,
+          action: { type: 'USE_REP', feature: 'rep_devices' },
+        });
+      } catch (e) {
+        if (e instanceof PlanLimitError) {
+          return Response.json(
+            { code: PLAN_LIMIT_CODE, message: e.message, error: e.message, ok: false },
+            { status: 403, headers }
+          );
+        }
+        throw e;
+      }
+    }
     let since: Date | undefined;
     if (sinceRaw) {
       const d = new Date(sinceRaw);
@@ -393,6 +462,22 @@ async function handleSync(request: Request): Promise<Response> {
   });
   const urlObj = new URL(request.url);
   const companyId = urlObj.searchParams.get('company_id') || undefined;
+  if (companyId) {
+    try {
+      await assertPlanLimit(supabase, {
+        tenantId: companyId,
+        action: { type: 'USE_REP', feature: 'rep_devices' },
+      });
+    } catch (e) {
+      if (e instanceof PlanLimitError) {
+        return Response.json(
+          { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+          { status: 403, headers: { ...corsSync, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw e;
+    }
+  }
   const result = await syncRepDevices(supabase, companyId);
   return Response.json(
     {
@@ -455,6 +540,20 @@ async function handlePunch(request: Request): Promise<Response> {
   const supabase = createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+  try {
+    await assertPlanLimit(supabase, {
+      tenantId: company_id,
+      action: { type: 'USE_REP', feature: 'rep_devices' },
+    });
+  } catch (e) {
+    if (e instanceof PlanLimitError) {
+      return Response.json(
+        { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+        { status: 403, headers: { ...corsPunch, 'Content-Type': 'application/json' } }
+      );
+    }
+    throw e;
+  }
   const result = await ingestPunch(supabase, {
     company_id,
     rep_device_id: device_id || null,
@@ -485,6 +584,7 @@ async function handlePunch(request: Request): Promise<Response> {
 }
 
 async function handleImportAfd(request: Request): Promise<Response> {
+  const corsImport = repCorsHeaders(request);
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsImport });
   }
@@ -566,15 +666,29 @@ async function handleImportAfd(request: Request): Promise<Response> {
   if (userCompanyId && companyId !== userCompanyId) {
     return Response.json({ error: 'company_id não autorizado' }, { status: 403, headers: { ...corsImport, 'Content-Type': 'application/json' } });
   }
+  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const supabaseAdmin = serviceKey
+    ? createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+    : supabase;
+  try {
+    await assertPlanLimit(supabaseAdmin, {
+      tenantId: companyId,
+      action: { type: 'USE_REP', feature: 'rep_afd_import' },
+    });
+  } catch (e) {
+    if (e instanceof PlanLimitError) {
+      return Response.json(
+        { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+        { status: 403, headers: { ...corsImport, 'Content-Type': 'application/json' } }
+      );
+    }
+    throw e;
+  }
   const isCsv = fileContent.includes(',') && fileContent.split('\n')[0].includes(',');
   const records = isCsv ? parseTxtOrCsv(fileContent, ',') : parseAFD(fileContent);
   if (records.length === 0) {
     return Response.json({ error: 'Nenhum registro válido encontrado no arquivo' }, { status: 400, headers: { ...corsImport, 'Content-Type': 'application/json' } });
   }
-  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  const supabaseAdmin = serviceKey
-    ? createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
-    : supabase;
   const result = await ingestAfdRecords(supabaseAdmin, companyId, repDeviceId, records, undefined, forceUserId);
   return Response.json(
     {

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TimeRecord, LogType, PunchMethod } from '../../types';
 import { PontoService } from '../../services/pontoService';
 import { OfflinePunchService } from '../../services/offlinePunchService';
-import { timeRecordsQueries } from '../../services/queryOptimizations';
+import { getTimeRecordsByUser } from '../../services/timeRecords.service';
 import { invalidateAfterPunch } from '../services/queryCache';
 import { isSupabaseConfigured, supabase } from '../../services/supabase';
 import { normalizePunchRegistrationError, registerPunchSecure } from '../rep/repEngine';
@@ -17,7 +17,14 @@ export const useRecords = (userId: string | undefined, companyId: string | undef
   // não faz sentido manter cache de 1 minuto.
   const { data: records = [], isLoading, refetch } = useQuery({
     queryKey: ['records', userId],
-    queryFn: () => userId ? timeRecordsQueries.getRecordsByUser(userId, 50, 0).then(r => r.data || []) : Promise.resolve([]),
+    queryFn: async () => {
+      if (!userId) return [];
+      try {
+        return await getTimeRecordsByUser(userId, 50, 0);
+      } catch {
+        return [];
+      }
+    },
     enabled: !!userId,
     staleTime: 0,
   });

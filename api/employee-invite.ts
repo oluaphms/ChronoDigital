@@ -5,6 +5,7 @@
  */
 
 import { getSecureCorsHeaders, checkRateLimit, getClientIP } from './_shared/security';
+import { assertPlanLimit, isPlanLimitError, PLAN_LIMIT_CODE } from '../services/planEnforcement';
 
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
@@ -166,6 +167,20 @@ export default async function handler(request: Request): Promise<Response> {
       authUserId = authData?.user?.id ?? authData?.id ?? null;
     }
     if (!authUserId) return Response.json({ error: 'Erro ao criar usuário', code: 'AUTH_ERROR' }, { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    if (companyId && (role === 'employee' || !row.role)) {
+      try {
+        await assertPlanLimit(adminSup, { tenantId: companyId, action: { type: 'CREATE_EMPLOYEE' } });
+      } catch (e) {
+        if (isPlanLimitError(e)) {
+          return Response.json(
+            { code: PLAN_LIMIT_CODE, message: e.message, error: e.message },
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw e;
+      }
+    }
 
     const { error: userInsertError } = await adminSup.from('users').insert({
       id: authUserId, nome: name, email, cargo: 'Colaborador', role, company_id: companyId, department_id: '', avatar: null,

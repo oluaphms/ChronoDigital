@@ -11,6 +11,7 @@ import {
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, storage, isSupabaseConfigured } from '../../services/supabaseClient';
+import { getRecentTimeRecordsForUser } from '../../../services/timeRecords.service';
 import { getDayRecords, getLocalDateString, validatePunchSequence } from '../../services/timeProcessingService';
 import {
   getCurrentLocationRobustResult,
@@ -479,7 +480,7 @@ const EmployeeClockIn: React.FC = () => {
         const [locRows, devRows, histRows] = await Promise.all([
           db.select('work_locations', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
           db.select('trusted_devices', [{ column: 'employee_id', operator: 'eq', value: user.id }]) as Promise<any[]>,
-          db.select('time_records', [{ column: 'user_id', operator: 'eq', value: user.id }], { column: 'created_at', ascending: false }, 50) as Promise<any[]>,
+          getRecentTimeRecordsForUser(user.id, 50),
         ]);
         allowedLocations = (locRows ?? []).map((r) => ({
           id: r.id,

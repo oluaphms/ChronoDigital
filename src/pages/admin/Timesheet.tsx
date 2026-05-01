@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { isSupabaseConfigured, supabase } from '../../services/supabaseClient';
+import { isSupabaseConfigured } from '../../services/supabaseClient';
+import { insertAdminMirrorTimeRecord } from '../../../services/timeRecords.service';
 import { buscarEspelhoAdmin, buscarFiltrosEspelhoAdmin } from '../../../services/api';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
@@ -20,6 +21,7 @@ import {
   getDayStatus,
   normalizeRecordTypeForMirror,
   recordEffectiveMirrorInstant,
+  type DayScheduleSlots,
 } from '../../utils/timesheetMirror';
 import { getEmployeeSchedule, getEmployeeTimesheetScheduleContext } from '../../services/timeProcessingService';
 import type { DayScheduleWindow } from '../../utils/timesheetMirror';
@@ -74,6 +76,12 @@ type TimeRecord = {
   origin?: string | null;
 };
 
+type DayIssuesModalState = {
+  date: string;
+  extras: string[];
+  inconsistencias: string[];
+} | null;
+
 const AdminTimesheet: React.FC = () => {
   const { user, loading } = useCurrentUser();
   const toast = useToast();
@@ -110,6 +118,7 @@ const AdminTimesheet: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [recordToEdit, setRecordToEdit] = useState<TimeRecord | null>(null);
+  const [issuesModal, setIssuesModal] = useState<DayIssuesModalState>(null);
 
   /** Evita `loadEspelho` com período vazio antes de ler sessionStorage (caso típico: novo login → batidas “sumiam”). */
   const [filtersHydrated, setFiltersHydrated] = useState(false);
@@ -242,6 +251,20 @@ const AdminTimesheet: React.FC = () => {
     void loadEspelho();
   }, [loadEspelho, filtersHydrated]);
 
+  useEffect(() => {
+    if (!issuesModal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIssuesModal(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [issuesModal]);
+
   const filteredEmployees = useMemo(() => {
     return employees.filter((emp) => {
       if (filterDepartmentId && emp.department_id !== filterDepartmentId) return false;
@@ -259,8 +282,25 @@ const AdminTimesheet: React.FC = () => {
 
   const empMirror = useMemo(() => {
     if (!periodValid) return new Map<string, DayMirror>();
-    return buildDayMirrorSummary(displayRecords, periodStart, periodEnd);
-  }, [displayRecords, periodStart, periodEnd, periodValid]);
+    const scheduleByDay = (date: string): DayScheduleSlots | null => {
+      const win = expectedWindowForYmd(date);
+      if (!win) return null;
+      const [eh = '08', em = '00'] = String(win.entrada || '08:00').split(':');
+      const [sh = '17', sm = '00'] = String(win.saida || '17:00').split(':');
+      const entrada = `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`;
+      const saida_final = `${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}`;
+      const saida_intervalo = win.saida_intervalo || '12:00';
+      const volta_intervalo = win.volta_intervalo || '14:00';
+      return {
+        entrada,
+        saida_intervalo,
+        volta_intervalo,
+        saida_final,
+        toleranceMin: win.toleranceMin ?? 60,
+      };
+    };
+    return buildDayMirrorSummary(displayRecords, periodStart, periodEnd, { scheduleByDay });
+  }, [displayRecords, periodStart, periodEnd, periodValid, expectedWindowForYmd]);
 
   const periodDates = useMemo(() => {
     if (!periodValid) return [];
@@ -295,46 +335,11 @@ const AdminTimesheet: React.FC = () => {
     });
 
     try {
-      const { data: rpcData, error: rpcError } = await supabase.rpc('insert_time_record_for_user', {
-        p_user_id: data.user_id,
-        p_company_id: cid,
-        p_type: data.type,
-        p_method: 'admin',
-        p_source: 'admin',
-        p_timestamp: data.created_at,
-        p_latitude: data.latitude ?? null,
-        p_longitude: data.longitude ?? null,
-        p_manual_reason: data.manual_reason ?? null,
-      });
-
-      let mergeRow: TimeRecord | null = null;
-      let mergeId: string | null = null;
-
-      if (!rpcError && rpcData && typeof rpcData === 'object' && rpcData !== null && 'record_id' in rpcData) {
-        const r = rpcData as { record_id: string; timestamp?: string | number | null };
-        mergeId = String(r.record_id);
-        let createdIso = data.created_at;
-        if (typeof r.timestamp === 'string') {
-          createdIso = r.timestamp;
-        } else if (r.timestamp != null && (typeof r.timestamp === 'number' || typeof r.timestamp === 'object')) {
-          createdIso = new Date(r.timestamp as number | Date).toISOString();
-        }
-        mergeRow = buildMergeRow(mergeId, createdIso);
-      } else {
-        if (rpcError && import.meta.env.DEV) {
-          console.warn('[Espelho admin] insert_time_record_for_user:', rpcError);
-        }
-        mergeId = crypto.randomUUID();
-        const { error: insErr } = await supabase.from('time_records').insert({
-          ...data,
-          id: mergeId,
-          company_id: cid,
-          is_manual: true,
-          method: 'admin',
-        });
-        if (insErr) throw insErr;
-        mergeRow = buildMergeRow(mergeId, data.created_at);
-      }
+      const { id: mergeId, createdAt: mergeCreated } = await insertAdminMirrorTimeRecord(
+        { ...data },
+        cid,
+      );
+      const mergeRow = buildMergeRow(mergeId, mergeCreated);
 
       toast.addToast('success', 'Batida adicionada com sucesso.');
       setShowAddModal(false);
@@ -804,7 +809,7 @@ const AdminTimesheet: React.FC = () => {
                     expectedWindowForYmd(date),
                     holidayDates,
                   );
-                  let dataNote: 'Folga' | 'Falta' | 'Feriado' | null = null;
+                  let dataNote: 'Folga' | 'Falta' | 'Feriado' | 'Inconsistente' | null = null;
                   if (holidayDates.has(date)) dataNote = 'Feriado';
                   else if (dayStatus.status === 'folga') dataNote = 'Folga';
                   else if (dayStatus.status === 'falta') dataNote = 'Falta';
@@ -868,6 +873,65 @@ const AdminTimesheet: React.FC = () => {
                       voltaSlotTime = candidates[0]!.time;
                     }
                   }
+                  // Fallback visual para dias inconsistentes:
+                  // se houver batidas do dia que não encaixaram nas colunas padrão,
+                  // preencher as colunas vazias com horários de inconsistência
+                  // (na ordem cronológica) para evitar "----" com batida existente.
+                  const occupiedTimes = new Set<string>(
+                    [day.entradaInicio, day.saidaIntervalo, voltaSlotTime, day.saidaFinal]
+                      .filter((x): x is string => !!x && String(x).trim() !== ''),
+                  );
+                  const inconsistentTimes = day.inconsistencias
+                    .map((r) => fmtRecord(r))
+                    .filter((t) => !occupiedTimes.has(t));
+                  const uniqueInconsistentTimes = [...new Set(inconsistentTimes)];
+                  let fallbackIdx = 0;
+                  const nextFallbackTime = (): string | null => {
+                    if (fallbackIdx >= uniqueInconsistentTimes.length) return null;
+                    const t = uniqueInconsistentTimes[fallbackIdx]!;
+                    fallbackIdx += 1;
+                    return t;
+                  };
+                  const pickInconsistentRecord = (time: string | null): TimeRecord | undefined => {
+                    if (!time) return undefined;
+                    return day.inconsistencias.find((r) => fmtRecord(r) === time);
+                  };
+                  const entradaSlotTime = day.entradaInicio || nextFallbackTime();
+                  const saidaIntSlotTime = day.saidaIntervalo || nextFallbackTime();
+                  const voltaIntSlotTime = voltaSlotTime || nextFallbackTime();
+                  const saidaFinalSlotTime = day.saidaFinal || nextFallbackTime();
+                  const entradaSlotRecord = entradaRecord || pickInconsistentRecord(entradaSlotTime);
+                  const saidaIntSlotRecord = saidaIntRecord || pickInconsistentRecord(saidaIntSlotTime);
+                  const voltaIntSlotRecord = voltaIntRecord || pickInconsistentRecord(voltaIntSlotTime);
+                  const saidaFinalSlotRecord = saidaRecord || pickInconsistentRecord(saidaFinalSlotTime);
+                  let fallbackWorkedMinutes = 0;
+                  if (hasRealRecords && day.workedMinutes <= 0) {
+                    const start = hhmmToMin(entradaSlotTime);
+                    const end = hhmmToMin(saidaFinalSlotTime);
+                    if (start != null && end != null && end > start) {
+                      fallbackWorkedMinutes = end - start;
+                      const intStart = hhmmToMin(saidaIntSlotTime);
+                      const intEnd = hhmmToMin(voltaIntSlotTime);
+                      if (
+                        intStart != null &&
+                        intEnd != null &&
+                        intEnd > intStart &&
+                        intStart >= start &&
+                        intEnd <= end
+                      ) {
+                        fallbackWorkedMinutes -= (intEnd - intStart);
+                      }
+                      if (fallbackWorkedMinutes < 0) fallbackWorkedMinutes = 0;
+                    }
+                  }
+                  const hasInconsistentOnly =
+                    hasRealRecords &&
+                    !day.entradaInicio &&
+                    !day.saidaIntervalo &&
+                    !voltaSlotTime &&
+                    !day.saidaFinal &&
+                    day.inconsistencias.length > 0;
+                  if (!dataNote && hasInconsistentOnly) dataNote = 'Inconsistente';
                   const renderMirrorSlot = (t: string | null, rec?: TimeRecord) => {
                     const hasTime = t != null && String(t).trim() !== '';
                     if (hasTime) return renderTimeCell(t, rec);
@@ -892,6 +956,13 @@ const AdminTimesheet: React.FC = () => {
                         </span>
                       );
                     }
+                    if (dataNote === 'Inconsistente') {
+                      return (
+                        <span className="inline-flex px-2 py-1 rounded text-sm font-semibold text-rose-700 dark:text-rose-300">
+                          Inconsist.
+                        </span>
+                      );
+                    }
                     return renderTimeCell(null, undefined);
                   };
                   return (
@@ -907,6 +978,8 @@ const AdminTimesheet: React.FC = () => {
                                   ? 'text-emerald-600 dark:text-emerald-400'
                                   : dataNote === 'Feriado'
                                     ? 'text-amber-700 dark:text-amber-300'
+                                    : dataNote === 'Inconsistente'
+                                      ? 'text-rose-600 dark:text-rose-400'
                                     : 'text-slate-500 dark:text-slate-400'
                             }`}
                           >
@@ -915,19 +988,35 @@ const AdminTimesheet: React.FC = () => {
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        {renderMirrorSlot(hasRealRecords ? day.entradaInicio : null, hasRealRecords ? entradaRecord : undefined)}
+                        {renderMirrorSlot(hasRealRecords ? entradaSlotTime : null, hasRealRecords ? entradaSlotRecord : undefined)}
                       </td>
                       <td className="px-3 py-2">
-                        {renderMirrorSlot(hasRealRecords ? day.saidaIntervalo : null, hasRealRecords ? saidaIntRecord : undefined)}
+                        {renderMirrorSlot(hasRealRecords ? saidaIntSlotTime : null, hasRealRecords ? saidaIntSlotRecord : undefined)}
                       </td>
                       <td className="px-3 py-2">
-                        {renderMirrorSlot(hasRealRecords ? voltaSlotTime : null, hasRealRecords ? voltaIntRecord : undefined)}
+                        {renderMirrorSlot(hasRealRecords ? voltaIntSlotTime : null, hasRealRecords ? voltaIntSlotRecord : undefined)}
                       </td>
                       <td className="px-3 py-2">
-                        {renderMirrorSlot(hasRealRecords ? day.saidaFinal : null, hasRealRecords ? saidaRecord : undefined)}
+                        {renderMirrorSlot(hasRealRecords ? saidaFinalSlotTime : null, hasRealRecords ? saidaFinalSlotRecord : undefined)}
                       </td>
                       <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">
-                        {hasRealRecords && day.workedMinutes > 0 ? formatMinutes(day.workedMinutes) : EMPTY_DASH}
+                        {hasRealRecords && day.workedMinutes > 0
+                          ? formatMinutes(day.workedMinutes)
+                          : hasRealRecords && fallbackWorkedMinutes > 0
+                            ? (
+                              <span
+                                className="inline-flex items-center gap-1.5"
+                                title="Total estimado com base nas batidas visíveis do dia (não é fechamento oficial)."
+                              >
+                                <span>{formatMinutes(fallbackWorkedMinutes)}</span>
+                                <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                                  Estimado
+                                </span>
+                              </span>
+                            )
+                            : hasInconsistentOnly
+                              ? 'Ver ocorrências'
+                              : EMPTY_DASH}
                       </td>
                     </tr>
                   );
@@ -937,6 +1026,57 @@ const AdminTimesheet: React.FC = () => {
           </div>
         </div>
       )}
+      {periodValid && filterUserId && !loadingEspelho && (() => {
+        const daysWithIssues = periodDates
+          .map((date) => ({ date, day: empMirror.get(date) }))
+          .filter((x) => x.day && (x.day.batidasExtra.length > 0 || x.day.inconsistencias.length > 0));
+        if (daysWithIssues.length === 0) return null;
+        return (
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 shadow-sm p-4">
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">
+              Ocorrências (extras e inconsistências)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+              * No total diário, valores com asterisco indicam cálculo estimado a partir das batidas visíveis.
+            </p>
+            <div className="space-y-2">
+              {daysWithIssues.map(({ date, day }) => {
+                if (!day) return null;
+                const fmt = (iso: string) =>
+                  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
+                const fmtRecord = (r: TimeRecord) => fmt(recordEffectiveMirrorInstant(r, date));
+                const issueLabel = (r: TimeRecord) => `${fmtRecord(r)} · ${resolvePunchOrigin(r).label}`;
+                const extraLabels = day.batidasExtra.map(issueLabel);
+                const inconsistLabels = day.inconsistencias.map(issueLabel);
+                return (
+                  <div key={`issue-${date}`} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{formatDateBR(date)}</span>
+                      {extraLabels.length > 0 && (
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                          Extra: {extraLabels.length}
+                        </span>
+                      )}
+                      {inconsistLabels.length > 0 && (
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
+                          Incons.: {inconsistLabels.length}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:underline"
+                        onClick={() => setIssuesModal({ date, extras: extraLabels, inconsistencias: inconsistLabels })}
+                      >
+                        Ver lista completa
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
 
       <AddTimeRecordModal
         isOpen={showAddModal}
@@ -958,6 +1098,60 @@ const AdminTimesheet: React.FC = () => {
           void loadEspelho();
         }}
       />
+      {issuesModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          onClick={() => setIssuesModal(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Detalhes de extras/inconsistências - {formatDateBR(issuesModal.date)}
+              </h3>
+              <button
+                type="button"
+                className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                onClick={() => setIssuesModal(null)}
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-auto">
+              <div>
+                <h4 className="text-sm font-semibold text-purple-700 dark:text-purple-300 mb-1">
+                  Batidas extras ({issuesModal.extras.length})
+                </h4>
+                {issuesModal.extras.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma batida extra.</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                    {issuesModal.extras.map((item, idx) => (
+                      <li key={`extra-${idx}`}>- {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-rose-700 dark:text-rose-300 mb-1">
+                  Inconsistências ({issuesModal.inconsistencias.length})
+                </h4>
+                {issuesModal.inconsistencias.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma inconsistência.</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                    {issuesModal.inconsistencias.map((item, idx) => (
+                      <li key={`incons-${idx}`}>- {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { db, supabase, isSupabaseConfigured, getSupabaseClient } from '../../services/supabaseClient';
+import { listTimeRecords } from '../../../services/timeRecords.service';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
@@ -118,16 +119,19 @@ const AdminMonitoring: React.FC = () => {
       const end = todayEnd();
       const [usersRows, recentRecords, recordListToday] = await Promise.all([
         db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'nome', ascending: true }, 500) as Promise<UserRow[]>,
-        db.select('time_records', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }, 500) as Promise<TimeRecordRow[]>,
-        db.select(
-          'time_records',
+        listTimeRecords(
+          [{ column: 'company_id', operator: 'eq', value: user.companyId }],
+          { column: 'created_at', ascending: false },
+          500,
+        ) as Promise<TimeRecordRow[]>,
+        listTimeRecords(
           [
             { column: 'company_id', operator: 'eq', value: user.companyId },
             { column: 'created_at', operator: 'gte', value: start },
             { column: 'created_at', operator: 'lte', value: end },
           ],
           { column: 'created_at', ascending: true },
-          500
+          500,
         ) as Promise<TimeRecordRow[]>,
       ]);
       const users = usersRows ?? [];

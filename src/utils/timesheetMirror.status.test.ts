@@ -10,6 +10,8 @@ function baseDay(partial: Partial<DayMirror>): DayMirror {
     saidaFinal: null,
     workedMinutes: 0,
     records: [],
+    batidasExtra: [],
+    inconsistencias: [],
     ...partial,
   };
 }

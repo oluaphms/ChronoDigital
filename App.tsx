@@ -67,6 +67,8 @@ import {
   AbsencesPage,
   AcceptInviteRoute,
   AdminAjuda,
+  AdminMetricasProduto,
+  AdminPlanUpgrade,
   AdminArquivarCalculos,
   AdminAusencias,
   AdminBankHours,
@@ -128,9 +130,6 @@ import {
   TimeRecordsPage,
   AdminArquivosFiscais,
 } from './src/routes/portalLazyPages';
-
-// Lazy loading of complex views
-const AdminView = React.lazy(() => import('./components/AdminView'));
 
 function ConfigSupabaseScreen() {
   const isVercel = typeof window !== 'undefined' && /vercel\.app/i.test(window.location.hostname);
@@ -653,16 +652,14 @@ const AppMain: React.FC = () => {
         new Promise<'unknown'>((resolve) => setTimeout(() => resolve('unknown'), FAST_PRECHECK_TIMEOUT_MS)),
       ]);
       if (precheckResult !== 'unknown' && !precheckResult.ok) {
+        // Pré-check deve ser apenas informativo e NUNCA bloquear a tentativa de login.
+        // Em ambientes locais/rede instável, a sessão pode autenticar mesmo com health-check falhando.
         const dnsHint =
           precheckResult.status === 'dns'
             ? ' Falha de DNS detectada. Verifique internet, DNS da rede e se o domínio do projeto Supabase resolve no dispositivo.'
             : '';
         setConnectionIssueMessage(`${precheckResult.message}.${dnsHint}`.trim());
         setConnectionUnavailable(true);
-        setLoginError(
-          `${precheckResult.message} Verifique em supabase.com/dashboard e use "Limpar sessão e tentar de novo".`
-        );
-        return;
       }
 
       const loginPromise = authService.signInWithEmail(identifier, password);
@@ -683,8 +680,10 @@ const AppMain: React.FC = () => {
         let isDnsError =
           errText.includes('err_name_not_resolved') ||
           errText.includes('name_not_resolved') ||
-          errText.includes('dns') ||
-          errText.includes('failed to fetch');
+          errText.includes('net::err_name_not_resolved') ||
+          errText.includes('enotfound') ||
+          errText.includes('getaddrinfo') ||
+          errText.includes('dns');
 
         if (isTimeoutError && !isDnsError) {
           try {
@@ -736,8 +735,10 @@ const AppMain: React.FC = () => {
         const isDnsErrorResult =
           normalizedError.includes('err_name_not_resolved') ||
           normalizedError.includes('name_not_resolved') ||
-          normalizedError.includes('dns') ||
-          normalizedError.includes('failed to fetch');
+          normalizedError.includes('net::err_name_not_resolved') ||
+          normalizedError.includes('enotfound') ||
+          normalizedError.includes('getaddrinfo') ||
+          normalizedError.includes('dns');
         if (
           normalizedError.includes('tempo esgotado') ||
           normalizedError.includes('timeout') ||
@@ -1244,6 +1245,8 @@ const AppMain: React.FC = () => {
               <Route path="reports/security" element={<ReportSecurity />} />
               <Route path="bank-hours" element={<AdminBankHours />} />
               <Route path="ajuda" element={<AdminAjuda />} />
+              <Route path="plan" element={<AdminPlanUpgrade />} />
+              <Route path="metricas-produto" element={<AdminMetricasProduto />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>
             {/* Rotas Funcionário: só colaborador/supervisor (admin já é redirecionado antes; reforço RBAC) */}
@@ -1589,7 +1592,9 @@ const AppMain: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'admin' && (user.role === 'admin' || user.role === 'hr') && <AdminView admin={user} />}
+        {activeTab === 'admin' && (user.role === 'admin' || user.role === 'hr') && (
+          <Navigate to="/admin/dashboard" replace />
+        )}
 
         {activeTab === 'settings' && <ProfileViewLazy user={user} />}
       </React.Suspense>

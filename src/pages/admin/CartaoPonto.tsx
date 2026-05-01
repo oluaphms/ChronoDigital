@@ -13,6 +13,7 @@ import {
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { listTimeRecords } from '../../../services/timeRecords.service';
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
 
@@ -143,9 +144,7 @@ const AdminCartaoPonto: React.FC = () => {
     setLoadingData(true);
     try {
       const [recs, dias] = await Promise.all([
-        db.select('time_records', [
-          { column: 'user_id', operator: 'eq', value: selectedEmployee.id },
-        ]) as Promise<any[]>,
+        listTimeRecords([{ column: 'user_id', operator: 'eq', value: selectedEmployee.id }]) as Promise<any[]>,
         db.select('cartao_ponto_dia', [
           { column: 'user_id', operator: 'eq', value: selectedEmployee.id },
         ]) as Promise<any[]>,

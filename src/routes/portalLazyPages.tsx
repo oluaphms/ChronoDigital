@@ -58,6 +58,8 @@ export const AdminRepDevices = React.lazy(ROUTE_LOADERS['/admin/rep-devices']);
 export const AdminImportRep = React.lazy(ROUTE_LOADERS['/admin/import-rep']);
 export const AdminAusencias = React.lazy(ROUTE_LOADERS['/admin/ausencias']);
 export const AdminAjuda = React.lazy(ROUTE_LOADERS['/admin/ajuda']);
+export const AdminPlanUpgrade = React.lazy(ROUTE_LOADERS['/admin/plan']);
+export const AdminMetricasProduto = React.lazy(ROUTE_LOADERS['/admin/metricas-produto']);
 
 export const EmployeeDashboard = React.lazy(ROUTE_LOADERS['/employee/dashboard']);
 export const EmployeeClockIn = React.lazy(ROUTE_LOADERS['/employee/clock']);

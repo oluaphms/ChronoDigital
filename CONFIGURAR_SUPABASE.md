@@ -1,7 +1,7 @@
 # 🗄️ Como Configurar o Supabase
 
-## ⚠️ Erro Atual
-Se você está recebendo erros relacionados ao Firebase, isso acontece porque o app foi migrado para usar **Supabase** como banco de dados.
+## ⚠️ Antes de começar
+O backend de dados e a autenticação do produto são **Supabase** (PostgreSQL + Auth). Configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` no `.env.local` conforme abaixo. Documentação de visão geral: **`docs/overview.md`**.
 
 ## 📋 Passo a Passo
 
@@ -95,7 +95,7 @@ Após configurar o `.env.local`:
 ## 🧪 Testar a Configuração
 
 Após configurar, você deve ver:
-- ✅ O app carrega sem erros de Firebase
+- ✅ O app carrega sem erros de consola relacionados a Supabase (URL/chave)
 - ✅ A tela de login aparece
 - ✅ É possível criar conta/fazer login
 - ✅ Os dados são salvos no Supabase

@@ -20,6 +20,7 @@ import {
   recordEffectiveMirrorInstant,
   type TimeRecord as MirrorTimeRecord,
   type DayScheduleWindow,
+  type DayScheduleSlots,
 } from '../../utils/timesheetMirror';
 import { getEmployeeTimesheetScheduleContext } from '../../services/timeProcessingService';
 import { extractLatLng } from '../../utils/reverseGeocode';
@@ -45,6 +46,12 @@ function formatDateBR(dateStr: string) {
 }
 
 const EMPTY_DASH = '----';
+
+type DayIssuesModalState = {
+  date: string;
+  extras: string[];
+  inconsistencias: string[];
+} | null;
 
 const EmployeeTimesheet: React.FC = () => {
   const { user, loading } = useCurrentUser();
@@ -76,6 +83,7 @@ const EmployeeTimesheet: React.FC = () => {
     origin?: string | null;
   } | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [issuesModal, setIssuesModal] = useState<DayIssuesModalState>(null);
 
   useEffect(() => {
     const sync = () => setSpecialBarsLayout(readSpecialBarsPref());
@@ -190,6 +198,20 @@ const EmployeeTimesheet: React.FC = () => {
     };
   }, [user?.id, companyId, periodStart, periodEnd, periodValid, refreshNonce]);
 
+  useEffect(() => {
+    if (!issuesModal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIssuesModal(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [issuesModal]);
+
   const mirrorRecords = useMemo((): MirrorTimeRecord[] => {
     return (records ?? []).map((r: any) => ({
       id: r.id,
@@ -209,8 +231,21 @@ const EmployeeTimesheet: React.FC = () => {
   /** Mesmo cálculo do espelho admin (`AdminTimesheet`). */
   const empMirror = useMemo(() => {
     if (!periodValid) return new Map<string, DayMirror>();
-    return buildDayMirrorSummary(mirrorRecords, periodStart, periodEnd);
-  }, [mirrorRecords, periodStart, periodEnd, periodValid]);
+    const scheduleByDay = (date: string): DayScheduleSlots | null => {
+      const win = expectedWindowForYmd(date);
+      if (!win) return null;
+      const [eh = '08', em = '00'] = String(win.entrada || '08:00').split(':');
+      const [sh = '17', sm = '00'] = String(win.saida || '17:00').split(':');
+      return {
+        entrada: `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`,
+        saida_intervalo: win.saida_intervalo || '12:00',
+        volta_intervalo: win.volta_intervalo || '14:00',
+        saida_final: `${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}`,
+        toleranceMin: win.toleranceMin ?? 60,
+      };
+    };
+    return buildDayMirrorSummary(mirrorRecords, periodStart, periodEnd, { scheduleByDay });
+  }, [mirrorRecords, periodStart, periodEnd, periodValid, expectedWindowForYmd]);
 
   const periodDates = useMemo(() => {
     if (!periodValid) return [];
@@ -603,6 +638,54 @@ const EmployeeTimesheet: React.FC = () => {
           </p>
         )}
       </div>
+      {periodValid && !loadingData && (() => {
+        const daysWithIssues = periodDates
+          .map((date) => ({ date, day: empMirror.get(date) }))
+          .filter((x) => x.day && (x.day.batidasExtra.length > 0 || x.day.inconsistencias.length > 0));
+        if (daysWithIssues.length === 0) return null;
+        return (
+          <section className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 shadow-sm p-4">
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">
+              Ocorrências (extras e inconsistências)
+            </h3>
+            <div className="space-y-2">
+              {daysWithIssues.map(({ date, day }) => {
+                if (!day) return null;
+                const fmt = (iso: string) =>
+                  new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
+                const fmtRecord = (r: MirrorTimeRecord) => fmt(recordEffectiveMirrorInstant(r, date));
+                const issueLabel = (r: MirrorTimeRecord) => `${fmtRecord(r)} · ${resolvePunchOrigin(r).label}`;
+                const extraLabels = day.batidasExtra.map(issueLabel);
+                const inconsistLabels = day.inconsistencias.map(issueLabel);
+                return (
+                  <div key={`issue-${date}`} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{formatDateBR(date)}</span>
+                      {extraLabels.length > 0 && (
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
+                          Extra: {extraLabels.length}
+                        </span>
+                      )}
+                      {inconsistLabels.length > 0 && (
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
+                          Incons.: {inconsistLabels.length}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:underline"
+                        onClick={() => setIssuesModal({ date, extras: extraLabels, inconsistencias: inconsistLabels })}
+                      >
+                        Ver lista completa
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
 
       <EditTimeRecordModal
         isOpen={showEditModal}
@@ -619,6 +702,60 @@ const EmployeeTimesheet: React.FC = () => {
         }}
         readOnly={!canEditManualAsHr}
       />
+      {issuesModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          onClick={() => setIssuesModal(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Detalhes de extras/inconsistências - {formatDateBR(issuesModal.date)}
+              </h3>
+              <button
+                type="button"
+                className="text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                onClick={() => setIssuesModal(null)}
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-auto">
+              <div>
+                <h4 className="text-sm font-semibold text-purple-700 dark:text-purple-300 mb-1">
+                  Batidas extras ({issuesModal.extras.length})
+                </h4>
+                {issuesModal.extras.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma batida extra.</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                    {issuesModal.extras.map((item, idx) => (
+                      <li key={`extra-${idx}`}>- {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-rose-700 dark:text-rose-300 mb-1">
+                  Inconsistências ({issuesModal.inconsistencias.length})
+                </h4>
+                {issuesModal.inconsistencias.length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma inconsistência.</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
+                    {issuesModal.inconsistencias.map((item, idx) => (
+                      <li key={`incons-${idx}`}>- {item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

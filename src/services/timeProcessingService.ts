@@ -4,6 +4,7 @@
  */
 
 import { db, isSupabaseConfigured, supabase } from './supabaseClient';
+import { getTimeRecordsForUserDayRange } from '../../services/timeRecords.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,8 @@ export type DayExpectedWindow = {
   entrada: string;
   saida: string;
   toleranceMin: number;
+  saida_intervalo?: string;
+  volta_intervalo?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -381,6 +384,8 @@ export async function getEmployeeTimesheetScheduleContext(
           entrada: info.start_time,
           saida: info.end_time,
           toleranceMin: info.tolerance_minutes ?? 0,
+          saida_intervalo: info.break_start,
+          volta_intervalo: info.break_end,
         };
       } else {
         windowByJsDow[js] = null;
@@ -400,6 +405,8 @@ export async function getEmployeeTimesheetScheduleContext(
         entrada: legacy.start_time,
         saida: legacy.end_time,
         toleranceMin: legacy.tolerance_minutes ?? 0,
+        saida_intervalo: legacy.break_start,
+        volta_intervalo: legacy.break_end,
       }
     : null;
   for (let d = 0; d <= 6; d++) {
@@ -473,12 +480,7 @@ export async function getDayRecords(employeeId: string, dateStr: string): Promis
   const end = `${dateStr}T23:59:59.999`;
 
   try {
-    const rows = (await db.select('time_records', [
-      { column: 'user_id', operator: 'eq', value: employeeId },
-      { column: 'created_at', operator: 'gte', value: start },
-      { column: 'created_at', operator: 'lte', value: end },
-    ], { column: 'created_at', ascending: true })) as RawTimeRecord[];
-
+    const rows = (await getTimeRecordsForUserDayRange(employeeId, start, end)) as RawTimeRecord[];
     return Array.isArray(rows) ? rows : [];
   } catch (e) {
     console.warn('[timeProcessingService] getDayRecords:', e);

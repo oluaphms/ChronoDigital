@@ -3,6 +3,9 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, supabase, isSupabaseConfigured } from '../../services/supabaseClient';
+import { useTenantPlan } from '../../hooks/useTenantPlan';
+import { isPlanFeatureEnabled } from '../../../services/tenantPlan.service';
+import { PlanUpgradePanel } from '../../components/plan/PlanUpgradePanel';
 import { buscarFiltrosEspelhoAdmin } from '../../../services/api';
 import { LoadingState, Button } from '../../../components/UI';
 import { Upload, FileText } from 'lucide-react';
@@ -16,6 +19,7 @@ const getAppUrl = () => {
 
 const AdminImportRep: React.FC = () => {
   const { user, loading } = useCurrentUser();
+  const tenantPlan = useTenantPlan(user?.companyId);
   const [searchParams] = useSearchParams();
   const [devices, setDevices] = useState<RepDeviceOption[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(true);
@@ -117,8 +121,10 @@ const AdminImportRep: React.FC = () => {
     }
   };
 
-  if (loading) return <LoadingState message="Carregando..." />;
+  if (loading || tenantPlan.loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
+
+  const repImportOk = isPlanFeatureEnabled(tenantPlan.plan, 'rep_afd_import');
 
   return (
     <div className="p-4 md:p-6 max-w-2xl mx-auto">
@@ -128,6 +134,13 @@ const AdminImportRep: React.FC = () => {
         icon={<Upload size={24} />}
       />
 
+      {!repImportOk ? (
+        <PlanUpgradePanel
+          plan={tenantPlan.plan}
+          title="Recurso disponível no Pro e Enterprise"
+          message="A importação de ficheiros AFD e integração REP avançada não está incluída no plano Free. Faça upgrade para desbloquear."
+        />
+      ) : (
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-6 space-y-6">
         <p className="text-sm text-slate-600 dark:text-slate-400">
           Formatos aceitos: AFD (Portaria 671), TXT ou CSV com colunas NSR, Data, Hora, PIS/CPF, Tipo (E/S). Pode
@@ -215,6 +228,7 @@ const AdminImportRep: React.FC = () => {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

@@ -254,3 +254,64 @@ describe('buildDayMirrorSummary — prioridade relógio (rep)', () => {
   });
 
 });
+
+describe('buildDayMirrorSummary — classificação por jornada (proximidade)', () => {
+  const day = '2026-04-24';
+  const schedule = {
+    entrada: '08:00',
+    saida_intervalo: '12:00',
+    volta_intervalo: '14:00',
+    saida_final: '18:00',
+    toleranceMin: 60,
+  };
+
+  const mk = (id: string, hhmm: string): TimeRecord =>
+    tr({
+      id,
+      user_id: 'u',
+      created_at: `${day}T00:00:00.000Z`,
+      timestamp: `${day}T${hhmm}:00.000-03:00`,
+      type: 'saida',
+      source: 'rep',
+      method: 'rep',
+    });
+
+  it('13:50 cai em Volta intervalo', () => {
+    const map = buildDayMirrorSummary([mk('1', '13:50')], day, day, { scheduleByDay: () => schedule });
+    const dm = map.get(day);
+    expect(dm?.voltaIntervalo).toBe('13:50');
+    expect(dm?.saidaFinal).toBeNull();
+  });
+
+  it('14:02 cai em Volta intervalo', () => {
+    const map = buildDayMirrorSummary([mk('1', '14:02')], day, day, { scheduleByDay: () => schedule });
+    const dm = map.get(day);
+    expect(dm?.voltaIntervalo).toBe('14:02');
+    expect(dm?.saidaFinal).toBeNull();
+  });
+
+  it('11:55 cai em Saída intervalo', () => {
+    const map = buildDayMirrorSummary([mk('1', '11:55')], day, day, { scheduleByDay: () => schedule });
+    const dm = map.get(day);
+    expect(dm?.saidaIntervalo).toBe('11:55');
+    expect(dm?.voltaIntervalo).toBeNull();
+  });
+
+  it('fora da tolerância não classifica por proximidade', () => {
+    const map = buildDayMirrorSummary([mk('1', '22:30')], day, day, { scheduleByDay: () => schedule });
+    const dm = map.get(day);
+    expect(dm?.entradaInicio).toBeNull();
+    expect(dm?.saidaIntervalo).toBeNull();
+    expect(dm?.voltaIntervalo).toBeNull();
+    expect(dm?.saidaFinal).toBeNull();
+    expect(dm?.inconsistencias.map((r) => r.id)).toEqual(['1']);
+  });
+
+  it('batidas duplicadas na mesma coluna não sobrescrevem a mais próxima', () => {
+    const records = [mk('1', '14:02'), mk('2', '13:50')];
+    const map = buildDayMirrorSummary(records, day, day, { scheduleByDay: () => schedule });
+    const dm = map.get(day);
+    expect(dm?.voltaIntervalo).toBe('14:02');
+    expect(dm?.batidasExtra.map((r) => r.id)).toContain('2');
+  });
+});

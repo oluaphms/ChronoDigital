@@ -5,6 +5,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { assertPlanLimit, PlanLimitError } from '../../services/planEnforcement';
 import { mergeHubProviderIntoRepDevice } from './repHubMerge';
 import { getPunchesForSync, testConnectionForSync } from './repSyncFetch';
 import type { PunchFromDevice, RepDevice } from './types';
@@ -105,6 +106,18 @@ export async function syncRepDevice(
 
   if (merged.tipo_conexao === 'arquivo') {
     return { ok: true, imported: 0 }; // arquivo não sincroniza automaticamente
+  }
+
+  try {
+    await assertPlanLimit(supabase, {
+      tenantId: merged.company_id,
+      action: { type: 'USE_REP', feature: 'rep_devices' },
+    });
+  } catch (e) {
+    if (e instanceof PlanLimitError) {
+      return { ok: false, imported: 0, error: e.message };
+    }
+    throw e;
   }
 
   await updateDeviceLastSync(supabase, deviceId, 'sincronizando');

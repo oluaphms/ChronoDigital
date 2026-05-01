@@ -73,6 +73,8 @@ const RAW_ROUTE_LOADERS: Record<string, RouteLoader> = {
   '/admin/bank-hours': () => import('../pages/admin/BankHours'),
   '/admin/ajuda': () => import('../pages/admin/Ajuda'),
   '/admin/settings': () => import('../pages/admin/Settings'),
+  '/admin/plan': () => import('../pages/admin/PlanUpgrade'),
+  '/admin/metricas-produto': () => import('../pages/admin/MetricasProduto'),
 
   '/employee/dashboard': () => import('../pages/employee/Dashboard'),
   '/employee/work-schedule': () => import('../pages/employee/MyWorkSchedule'),

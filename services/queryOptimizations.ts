@@ -10,6 +10,12 @@
  */
 
 import { getSupabaseClientOrThrow } from '../src/lib/supabaseClient';
+import {
+  countTimeRecordsByUser,
+  getTimeRecordsByCompany,
+  getTimeRecordsByDateForUser,
+  getTimeRecordsByUser,
+} from './timeRecords.service';
 
 // Lazy getter — resolve o cliente apenas quando uma query é executada,
 // garantindo que as variáveis de ambiente já foram carregadas.
@@ -22,58 +28,49 @@ const getClient = () => getSupabaseClientOrThrow();
 /**
  * ❌ RUIM: SELECT * FROM time_records
  * ✅ BOM: SELECT id, user_id, type, created_at, location, fraud_flags
- * 
- * Redução: 5-10MB → 50-100KB (99% redução)
+ *
+ * Implementação em `timeRecords.service.ts` (lança em erro).
+ * Mantém assinatura compatível com chamadas que esperam `{ data, error }`.
  */
 export const timeRecordsQueries = {
-  // Otimizado: Apenas colunas necessárias (colunas core que sempre existem)
   async getRecordsByUser(userId: string, limit = 50, offset = 0) {
-    return getClient()
-      .from('time_records')
-      .select(
-        'id, user_id, type, method, created_at, location, company_id'
-      )
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    try {
+      const data = await getTimeRecordsByUser(userId, limit, offset);
+      return { data, error: null };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { data: null, error: { message: msg } as { message: string } };
+    }
   },
 
-  // Otimizado: Apenas colunas necessárias + filtro por empresa
   async getRecordsByCompany(companyId: string, limit = 50, offset = 0) {
-    return getClient()
-      .from('time_records')
-      .select(
-        'id, user_id, type, created_at, company_id'
-      )
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    try {
+      const data = await getTimeRecordsByCompany(companyId, limit, offset);
+      return { data, error: null };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { data: null, error: { message: msg } as { message: string } };
+    }
   },
 
-  // Otimizado: Apenas colunas necessárias + filtro por data
   async getRecordsByDate(userId: string, date: string) {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    return getClient()
-      .from('time_records')
-      .select(
-        'id, user_id, type, created_at, location, method'
-      )
-      .eq('user_id', userId)
-      .gte('created_at', startOfDay.toISOString())
-      .lte('created_at', endOfDay.toISOString())
-      .order('created_at', { ascending: true });
+    try {
+      const data = await getTimeRecordsByDateForUser(userId, date);
+      return { data, error: null };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { data: null, error: { message: msg } as { message: string } };
+    }
   },
 
-  // Otimizado: Contar registros sem carregar dados
   async countRecordsByUser(userId: string) {
-    return getClient()
-      .from('time_records')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId);
+    try {
+      const count = await countTimeRecordsByUser(userId);
+      return { count, error: null };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { count: null, error: { message: msg } as { message: string } };
+    }
   },
 };
 

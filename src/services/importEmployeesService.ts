@@ -251,6 +251,17 @@ export async function importEmployeesBatch(
   }
 
   const toInsert = validatedRows.filter((r) => r._valid);
+  if (toInsert.length > 0) {
+    const { evaluateEmployeeSeat, fetchCompanyPlan, countActiveEmployeesForCompany } = await import(
+      '../../services/tenantPlan.service'
+    );
+    const plan = await fetchCompanyPlan(companyId);
+    const current = await countActiveEmployeesForCompany(companyId);
+    const ev = evaluateEmployeeSeat(plan, current, toInsert.length);
+    if (!ev.allowed) {
+      throw new Error(ev.reason || 'Limite de colaboradores do plano excedido.');
+    }
+  }
   const errors: { rowNumber: number; errorMessage: string; data: ImportRow }[] = validatedRows
     .filter((r) => !r._valid)
     .map((r) => ({

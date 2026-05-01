@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { db, supabase, isSupabaseConfigured, getSupabaseClient } from '../../services/supabaseClient';
+import { listTimeRecords } from '../../../services/timeRecords.service';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import MonitoringMap from '../../components/MonitoringMap';
@@ -32,7 +33,11 @@ const EmployeeMonitoring: React.FC = () => {
     try {
       const [usersRows, recordsRows] = await Promise.all([
         db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-        db.select('time_records', [{ column: 'company_id', operator: 'eq', value: user.companyId }], { column: 'created_at', ascending: false }, 500) as Promise<any[]>,
+        listTimeRecords(
+          [{ column: 'company_id', operator: 'eq', value: user.companyId }],
+          { column: 'created_at', ascending: false },
+          500,
+        ) as Promise<any[]>,
       ]);
       const users = usersRows ?? [];
       const records = [...(recordsRows ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));

@@ -9,6 +9,7 @@
  *   POST /api/admin/sync-errors          (requeue)
  *   GET  /api/admin/system-status
  *   GET  /api/admin/global-dashboard
+ *   GET  /api/admin/saas-metrics
  *   GET  /api/admin/flags
  *   POST /api/admin/flags
  *   GET  /api/admin/incidents
@@ -248,6 +249,83 @@ async function handleGlobalDashboard(): Promise<Response> {
     espelho: { unpromotedEvents: unpromotedCount, status: unpromotedCount > 100 ? 'stalled' : unpromotedCount > 0 ? 'lagging' : 'ok' },
     featureFlags: featureFlagsStatus, compliance: { lgpdRetention: retentionStatus, auditIntegrity }, recentAlerts,
   }, status === 'critical' ? 503 : 200);
+}
+
+/** Métricas globais de monetização / saúde do produto (service role). */
+async function handleSaaSMetrics(): Promise<Response> {
+  const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!supabaseUrl || !serviceKey) {
+    return json(
+      {
+        error: 'Supabase não configurado no servidor.',
+        activeCompaniesLast30d: 0,
+        activeUsers: 0,
+        punchesTodayUtc: 0,
+        timestamp: new Date().toISOString(),
+      },
+      503,
+    );
+  }
+  const sb = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
+
+  const since30 = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const startUtcDay = new Date();
+  startUtcDay.setUTCHours(0, 0, 0, 0);
+  const dayStart = startUtcDay.toISOString();
+
+  let activeCompaniesLast30d = 0;
+  let activeUsers = 0;
+  let punchesTodayUtc = 0;
+
+  try {
+    const { data: punchRows, error: e1 } = await sb
+      .from('time_records')
+      .select('company_id')
+      .gte('created_at', since30)
+      .limit(25_000);
+    if (!e1 && punchRows?.length) {
+      const set = new Set<string>();
+      for (const r of punchRows as { company_id?: string }[]) {
+        if (r.company_id) set.add(r.company_id);
+      }
+      activeCompaniesLast30d = set.size;
+    }
+
+    const { count: uCount, error: e2 } = await sb
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'active');
+    if (!e2) activeUsers = uCount ?? 0;
+
+    const { count: pCount, error: e3 } = await sb
+      .from('time_records')
+      .select('id', { count: 'exact', head: true })
+      .gte('created_at', dayStart);
+    if (!e3) punchesTodayUtc = pCount ?? 0;
+  } catch (e) {
+    return json(
+      {
+        error: e instanceof Error ? e.message : 'Erro ao agregar métricas',
+        activeCompaniesLast30d: 0,
+        activeUsers: 0,
+        punchesTodayUtc: 0,
+        timestamp: new Date().toISOString(),
+      },
+      500,
+    );
+  }
+
+  return json({
+    timestamp: new Date().toISOString(),
+    activeCompaniesLast30d,
+    note:
+      'activeCompaniesLast30d = empresas distintas com pelo menos uma batida em time_records nos últimos 30 dias (amostra até 25k linhas).',
+    activeUsers,
+    noteUsers: 'activeUsers = utilizadores com status active em todo o projeto.',
+    punchesTodayUtc,
+    notePunches: 'punchesTodayUtc = batidas em time_records desde 00:00 UTC de hoje.',
+  });
 }
 
 async function handleFlags(request: Request): Promise<Response> {
@@ -541,6 +619,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (route === 'sync-errors')      return await handleSyncErrors(request, url);
     if (route === 'system-status')    return await handleSystemStatus();
     if (route === 'global-dashboard') return await handleGlobalDashboard();
+    if (route === 'saas-metrics') return await handleSaaSMetrics();
     if (route === 'flags')            return await handleFlags(request);
     if (route === 'incidents')        return await handleIncidents(request, url, slug);
     if (route === 'slo')              return await handleSLO(url);
@@ -548,7 +627,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (route === 'onboarding')       return await handleOnboarding(request);
     if (route === 'support')          return await handleSupport(request, url);
 
-    return json({ error: `Rota /api/admin/${slug.join('/')} não encontrada.`, available: ['metrics','logs','sync-errors','system-status','global-dashboard','flags','incidents','slo','audit','audit/verify','audit/export','audit/snapshot','audit/daily-report','onboarding','support/diagnose'] }, 404);
+    return json({ error: `Rota /api/admin/${slug.join('/')} não encontrada.`, available: ['metrics','logs','sync-errors','system-status','global-dashboard','saas-metrics','flags','incidents','slo','audit','audit/verify','audit/export','audit/snapshot','audit/daily-report','onboarding','support/diagnose'] }, 404);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : 'Erro interno' }, 500);
   }

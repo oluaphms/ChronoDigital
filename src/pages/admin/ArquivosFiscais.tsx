@@ -4,6 +4,7 @@ import { FileText, Download } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured, type Filter } from '../../services/supabaseClient';
+import { listTimeRecords } from '../../../services/timeRecords.service';
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
 
@@ -78,7 +79,7 @@ const AdminArquivosFiscais: React.FC = () => {
         { column: 'created_at', operator: 'lte', value: `${periodEnd}T23:59:59` },
       ];
       if (employeeId) filters.push({ column: 'user_id', operator: 'eq', value: employeeId });
-      const recs = (await db.select('time_records', filters, { column: 'created_at', ascending: true }, 10000)) as any[];
+      const recs = (await listTimeRecords(filters, { column: 'created_at', ascending: true }, 10000)) as any[];
 
       if (!recs.length) {
         setMessage({ type: 'error', text: 'Nenhum registro encontrado no período selecionado.' });

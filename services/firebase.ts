@@ -63,7 +63,7 @@ const firebaseConfig = {
 if (!firebaseConfig.apiKey || firebaseConfig.apiKey === 'your_firebase_api_key_here') {
   console.error('❌ Firebase API Key não configurada!');
   console.error('Por favor, configure as variáveis do Firebase no arquivo .env.local');
-  console.error('Veja o arquivo CONFIGURAR_FIREBASE.md para instruções');
+  console.error('O produto usa Supabase como backend principal. Veja CONFIGURAR_SUPABASE.md e docs/overview.md');
 }
 
 // Initialize Firebase (only if not already initialized)

@@ -4,6 +4,7 @@ import { CalendarDays, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { db, isSupabaseConfigured } from '../../services/supabaseClient';
+import { listTimeRecords } from '../../../services/timeRecords.service';
 import { LoadingState } from '../../../components/UI';
 import RoleGuard from '../../components/auth/RoleGuard';
 
@@ -78,10 +79,14 @@ const AdminPontoDiario: React.FC = () => {
 
         const [usersRows, recsRows, metasRows] = await Promise.all([
           db.select('users', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
-          db.select('time_records', [
-            { column: 'company_id', operator: 'eq', value: user.companyId },
-            { column: 'created_at', operator: 'gte', value: dateFilter }
-          ], { column: 'created_at', ascending: true }, 500) as Promise<any[]>,
+          listTimeRecords(
+            [
+              { column: 'company_id', operator: 'eq', value: user.companyId },
+              { column: 'created_at', operator: 'gte', value: dateFilter },
+            ],
+            { column: 'created_at', ascending: true },
+            500,
+          ) as Promise<any[]>,
           db.select('cartao_ponto_dia', [{ column: 'company_id', operator: 'eq', value: user.companyId }]) as Promise<any[]>,
         ]);
         setEmployees(

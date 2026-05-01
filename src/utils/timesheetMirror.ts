@@ -135,6 +135,8 @@ export interface DayMirror {
   saidaFinal: string | null;
   workedMinutes: number;
   records: TimeRecord[];
+  batidasExtra: TimeRecord[];
+  inconsistencias: TimeRecord[];
 }
 
 /** Janela da escala no dia (entrada/saída esperadas) — opcional para status “extra” só fora da janela. */
@@ -144,11 +146,90 @@ export interface DayScheduleWindow {
   toleranceMin?: number;
 }
 
+export interface DayScheduleSlots {
+  entrada: string;
+  saida_intervalo: string;
+  volta_intervalo: string;
+  saida_final: string;
+  toleranceMin?: number;
+}
+
+type SlotType = 'entrada' | 'saida_intervalo' | 'volta_intervalo' | 'saida_final';
+
+const DEFAULT_MIRROR_TOLERANCE_MINUTES = 60;
+
 function parseHHmmToMinutes(hhmm: string | null | undefined): number | null {
   if (!hhmm || !/^\d{1,2}:\d{2}/.test(hhmm)) return null;
   const [h, m] = hhmm.split(':').map((x) => parseInt(x, 10));
   if (Number.isNaN(h) || Number.isNaN(m)) return null;
   return h * 60 + m;
+}
+
+function classifyRecordsByScheduleProximity(
+  sorted: TimeRecord[],
+  dayDateStr: string,
+  schedule: DayScheduleSlots
+): {
+  bySlot: Partial<Record<SlotType, string>>;
+  recordBySlot: Partial<Record<SlotType, TimeRecord>>;
+  assignedRecordIds: Set<string>;
+  extraRecordIds: Set<string>;
+  inconsistentRecordIds: Set<string>;
+} {
+  const tolerance = schedule.toleranceMin ?? DEFAULT_MIRROR_TOLERANCE_MINUTES;
+  const refs: Array<{ slot: SlotType; minute: number }> = [
+    { slot: 'entrada', minute: parseHHmmToMinutes(schedule.entrada) ?? 0 },
+    { slot: 'saida_intervalo', minute: parseHHmmToMinutes(schedule.saida_intervalo) ?? 0 },
+    { slot: 'volta_intervalo', minute: parseHHmmToMinutes(schedule.volta_intervalo) ?? 0 },
+    { slot: 'saida_final', minute: parseHHmmToMinutes(schedule.saida_final) ?? 0 },
+  ];
+
+  const bySlot: Partial<Record<SlotType, string>> = {};
+  const recordBySlot: Partial<Record<SlotType, TimeRecord>> = {};
+  const bestDiffBySlot = new Map<SlotType, number>();
+  const assignedRecordIds = new Set<string>();
+  const extraRecordIds = new Set<string>();
+  const inconsistentRecordIds = new Set<string>();
+
+  for (const r of sorted) {
+    const hhmm = extractTime(recordEffectiveMirrorInstant(r, dayDateStr));
+    const minute = parseHHmmToMinutes(hhmm);
+    if (minute == null) continue;
+    const minDiff = refs.reduce((acc, ref) => Math.min(acc, Math.abs(minute - ref.minute)), Number.POSITIVE_INFINITY);
+    if (minDiff > tolerance) {
+      inconsistentRecordIds.add(r.id);
+      continue;
+    }
+    let best: { slot: SlotType; diff: number } | null = null;
+    for (const ref of refs) {
+      const diff = Math.abs(minute - ref.minute);
+      if (diff > tolerance) continue;
+      const curBest = bestDiffBySlot.get(ref.slot);
+      // Se o slot já tem batida mais próxima, não substitui.
+      if (curBest != null && diff >= curBest) continue;
+      if (!best || diff < best.diff) best = { slot: ref.slot, diff };
+    }
+    if (!best) continue;
+
+    const existing = recordBySlot[best.slot];
+    if (existing) {
+      extraRecordIds.add(existing.id);
+      assignedRecordIds.delete(existing.id);
+    }
+    bySlot[best.slot] = hhmm;
+    recordBySlot[best.slot] = r;
+    bestDiffBySlot.set(best.slot, best.diff);
+    assignedRecordIds.add(r.id);
+    extraRecordIds.delete(r.id);
+  }
+
+  for (const r of sorted) {
+    if (!assignedRecordIds.has(r.id) && !inconsistentRecordIds.has(r.id)) {
+      extraRecordIds.add(r.id);
+    }
+  }
+
+  return { bySlot, recordBySlot, assignedRecordIds, extraRecordIds, inconsistentRecordIds };
 }
 
 const STATUS_TAG_REGEX = /\[STATUS:(FOLGA|FALTA|EXTRA)\]/i;
@@ -265,7 +346,7 @@ export function classifyPunch(recordsDoDia: TimeRecord[], dayDateStr: string): {
   return { sorted, times };
 }
 
-function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
+function buildDaySummary(records: TimeRecord[], dayDateStr: string, schedule?: DayScheduleSlots | null): DayMirror {
   const realRecords = records.filter((r) => !isStatusRecord(r));
   const sanitized = dedupeRepRecordsForMirror(realRecords, dayDateStr);
   const sorted = sortRecordsByTime(sanitized, dayDateStr);
@@ -292,7 +373,12 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
         timeByType.set('saida', time);
         break;
       case 'intervalo_saida':
-        timeByType.set('intervalo_saida', time);
+        if (!timeByType.has('intervalo_saida')) {
+          timeByType.set('intervalo_saida', time);
+        } else if (!timeByType.has('intervalo_volta')) {
+          // REP pode enviar segunda "pausa" para retorno de intervalo.
+          timeByType.set('intervalo_volta', time);
+        }
         break;
       case 'intervalo_volta':
         timeByType.set('intervalo_volta', time);
@@ -308,6 +394,46 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
   let saidaIntervalo: string | null = timeByType.get('intervalo_saida') || null;
   let voltaIntervalo: string | null = timeByType.get('intervalo_volta') || null;
   let saidaFinal: string | null = timeByType.get('saida') || null;
+  let batidasExtra: TimeRecord[] = [];
+  let inconsistencias: TimeRecord[] = [];
+
+  // Regra principal: com jornada configurada, classificar por proximidade ao horário previsto.
+  if (schedule) {
+    entradaInicio = null;
+    saidaIntervalo = null;
+    voltaIntervalo = null;
+    saidaFinal = null;
+    const classified = classifyRecordsByScheduleProximity(sorted, dayDateStr, schedule);
+    entradaInicio = classified.bySlot.entrada ?? entradaInicio;
+    saidaIntervalo = classified.bySlot.saida_intervalo ?? saidaIntervalo;
+    voltaIntervalo = classified.bySlot.volta_intervalo ?? voltaIntervalo;
+    saidaFinal = classified.bySlot.saida_final ?? saidaFinal;
+    batidasExtra = sorted.filter((r) => classified.extraRecordIds.has(r.id));
+    inconsistencias = sorted.filter((r) => classified.inconsistentRecordIds.has(r.id));
+
+    let workedMinutes = 0;
+    if (entradaInicio && saidaFinal) {
+      const entrada = new Date(`${date}T${entradaInicio}`);
+      const saida = new Date(`${date}T${saidaFinal}`);
+      workedMinutes = Math.round((saida.getTime() - entrada.getTime()) / 60000);
+      if (saidaIntervalo && voltaIntervalo) {
+        const intervaloSaida = new Date(`${date}T${saidaIntervalo}`);
+        const intervaloVolta = new Date(`${date}T${voltaIntervalo}`);
+        workedMinutes -= Math.round((intervaloVolta.getTime() - intervaloSaida.getTime()) / 60000);
+      }
+    }
+    return {
+      date,
+      entradaInicio,
+      saidaIntervalo,
+      voltaIntervalo,
+      saidaFinal,
+      workedMinutes: Math.max(0, workedMinutes),
+      records,
+      batidasExtra,
+      inconsistencias,
+    };
+  }
 
   // Fallback por ordem cronológica APENAS quando tipos estão incompletos
   // CORREÇÃO DEFINITIVA: Evitar duplicação de horários entre colunas
@@ -321,6 +447,11 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
   if (uniqueTimes.length === 2 && !saidaIntervalo && !voltaIntervalo && !saidaFinal) {
     saidaFinal = uniqueTimes[1];
   }
+  // Compatibilidade do espelho legado: quando houver só entrada + saída de intervalo,
+  // manter o horário também em "Saída" (jornada em aberto).
+  if (uniqueTimes.length === 2 && entradaInicio && saidaIntervalo && !voltaIntervalo && !saidaFinal) {
+    saidaFinal = saidaIntervalo;
+  }
 
   // Para 3 batidas sem tipos de intervalo: assume entrada, saída intervalo, volta
   if (uniqueTimes.length === 3 && !saidaIntervalo && !voltaIntervalo) {
@@ -333,6 +464,39 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
     if (!saidaIntervalo) saidaIntervalo = uniqueTimes[1];
     if (!voltaIntervalo) voltaIntervalo = uniqueTimes[2];
     if (!saidaFinal) saidaFinal = uniqueTimes[3];
+  }
+
+  // Heurística operacional:
+  // Quando há 3 batidas no dia e já existe saída para intervalo,
+  // a terceira batida costuma ser "volta de intervalo" (jornada em aberto),
+  // mesmo que tenha vindo com tipo "saida" por interpretação genérica.
+  if (sorted.length === 3 && entradaInicio && saidaIntervalo && !voltaIntervalo && saidaFinal) {
+    voltaIntervalo = saidaFinal;
+    saidaFinal = null;
+  }
+  if (sorted.length === 3 && entradaInicio && saidaIntervalo && voltaIntervalo && saidaFinal === voltaIntervalo) {
+    saidaFinal = null;
+  }
+  // REP pode enviar "pausa" (P) para volta de intervalo; quando isso ocorrer junto de saídas,
+  // reposiciona a primeira saída como "Saída int." e usa a pausa como "Volta int.".
+  if (sorted.some(isPausaRawType) && saidaIntervalo) {
+    const saidaTimes = sorted
+      .filter((r) => normalizeRecordTypeForMirror(r.type) === 'saida')
+      .map((r) => extractTime(recordEffectiveMirrorInstant(r, dayDateStr)));
+    if (saidaTimes.length > 0) {
+      const firstSaida = saidaTimes[0]!;
+      const lastSaida = saidaTimes[saidaTimes.length - 1]!;
+      if (firstSaida < saidaIntervalo) {
+        if (!voltaIntervalo) voltaIntervalo = saidaIntervalo;
+        saidaIntervalo = firstSaida;
+        saidaFinal = lastSaida;
+      }
+    }
+  }
+
+  // Nunca repetir o mesmo horário em Saída int. e Volta int. no espelho.
+  if (saidaIntervalo && voltaIntervalo && saidaIntervalo === voltaIntervalo) {
+    voltaIntervalo = null;
   }
 
   // CORREÇÃO: Simplificar caso de jornada sem intervalo (apenas entrada/saída)
@@ -356,10 +520,7 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
     (r) =>
       isRepMirrorRecord(r) && normalizeRecordTypeForMirror(r.type) === 'entrada',
   );
-  const hasNonRepEntrada = sorted.some(
-    (r) => !isRepMirrorRecord(r) && normalizeRecordTypeForMirror(r.type) === 'entrada',
-  );
-  if (repEntradas.length > 0 && !hasNonRepEntrada) {
+  if (repEntradas.length > 0) {
     repEntradas.sort(
       (a, b) =>
         new Date(recordEffectiveMirrorInstant(a, dayDateStr)).getTime() -
@@ -393,6 +554,12 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
     }
   }
 
+  const usedTimes = new Set<string>([entradaInicio, saidaIntervalo, voltaIntervalo, saidaFinal].filter(Boolean) as string[]);
+  batidasExtra = sorted.filter((r) => {
+    const t = extractTime(recordEffectiveMirrorInstant(r, dayDateStr));
+    return !usedTimes.has(t);
+  });
+
   // Calcula minutos trabalhados
   let workedMinutes = 0;
   if (entradaInicio && saidaFinal) {
@@ -416,6 +583,8 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string): DayMirror {
     saidaFinal,
     workedMinutes: Math.max(0, workedMinutes),
     records,
+    batidasExtra,
+    inconsistencias,
   };
 }
 
@@ -446,7 +615,10 @@ function groupRecordsByDate(
 export function buildDayMirrorSummary(
   records: TimeRecord[],
   startDate: string,
-  endDate: string
+  endDate: string,
+  options?: {
+    scheduleByDay?: (date: string) => DayScheduleSlots | null | undefined;
+  }
 ): Map<string, DayMirror> {
   const byDate = groupRecordsByDate(records, startDate, endDate);
   const result = new Map<string, DayMirror>();
@@ -460,7 +632,8 @@ export function buildDayMirrorSummary(
     const dayRecords = byDate.get(dateStr) || [];
 
     if (dayRecords.length > 0) {
-      result.set(dateStr, buildDaySummary(dayRecords, dateStr));
+      const daySchedule = options?.scheduleByDay?.(dateStr) ?? null;
+      result.set(dateStr, buildDaySummary(dayRecords, dateStr, daySchedule));
     } else {
       // Dia sem registros
       result.set(dateStr, {
@@ -471,6 +644,8 @@ export function buildDayMirrorSummary(
         saidaFinal: null,
         workedMinutes: 0,
         records: [],
+        batidasExtra: [],
+        inconsistencias: [],
       });
     }
   }

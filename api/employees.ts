@@ -47,7 +47,13 @@ export default async function handler(request: Request): Promise<Response> {
   });
 
   const searchParams = new URL(request.url).searchParams;
-  const companyId = searchParams.get('companyId') || undefined;
+  const companyId = searchParams.get('companyId')?.trim() || '';
+  if (!companyId) {
+    return Response.json(
+      { error: 'companyId é obrigatório (isolamento por tenant).', code: 'COMPANY_ID_REQUIRED' },
+      { status: 400, headers: corsHeaders }
+    );
+  }
   const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50', 10)));
   const offset = (page - 1) * limit;
@@ -56,11 +62,8 @@ export default async function handler(request: Request): Promise<Response> {
   const countQuery = supabase
     .from('users')
     .select('id', { count: 'exact', head: true })
-    .eq('role', 'employee');
-
-  if (companyId) {
-    countQuery.eq('company_id', companyId);
-  }
+    .eq('role', 'employee')
+    .eq('company_id', companyId);
 
   const { count, error: countError } = await countQuery;
   if (countError) {
@@ -68,16 +71,13 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   // Get paginated data
-  let query = supabase
+  const query = supabase
     .from('users')
     .select('id, nome, email, cpf, department_id, schedule_id, estrutura_id, status, company_id')
     .eq('role', 'employee')
+    .eq('company_id', companyId)
     .order('nome', { ascending: true })
     .range(offset, offset + limit - 1);
-
-  if (companyId) {
-    query = query.eq('company_id', companyId);
-  }
 
   const { data, error } = await query;
   if (error) {

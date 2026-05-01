@@ -13,13 +13,15 @@ function errorText(error: unknown): string {
   ).toLowerCase();
 }
 
+/** DNS real (Chrome/Chromium usa net::ERR_NAME_NOT_RESOLVED; Node pode usar ENOTFOUND / getaddrinfo). */
 export function isDnsError(error: unknown): boolean {
   const text = errorText(error);
   return (
-    text.includes('failed to fetch') ||
     text.includes('err_name_not_resolved') ||
     text.includes('name_not_resolved') ||
-    text.includes('dns')
+    text.includes('net::err_name_not_resolved') ||
+    text.includes('enotfound') ||
+    text.includes('getaddrinfo')
   );
 }
 
