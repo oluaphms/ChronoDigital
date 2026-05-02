@@ -123,7 +123,10 @@ export const PontoService = {
       };
 
       if (data.nome) updateData.nome = data.nome;
-      if (data.cargo) updateData.cargo = data.cargo;
+      if (typeof data.cargo === 'string') {
+        const c = data.cargo.trim();
+        updateData.cargo = c.length > 0 ? c : 'Colaborador';
+      }
       if (data.preferences) updateData.preferences = data.preferences;
 
       await db.update('users', userId, updateData);

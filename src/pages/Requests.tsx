@@ -66,7 +66,8 @@ const RequestsPage: React.FC = () => {
     punch_type: 'ENTRADA',
   });
 
-  const isAdminView = user?.role === 'admin' || user?.role === 'hr';
+  const isAdminView =
+    user?.role === 'admin' || user?.role === 'hr' || user?.role === 'supervisor';
 
   useEffect(() => {
     if (!user || !isSupabaseConfigured()) return;
@@ -94,7 +95,7 @@ const RequestsPage: React.FC = () => {
           res.map((r: any) => ({
             id: r.id,
             type: r.type,
-            status: r.status,
+            status: typeof r.status === 'string' ? r.status.trim().toLowerCase() : String(r.status ?? ''),
             reason: r.reason,
             created_at: r.created_at,
             user_id: r.user_id,
@@ -500,7 +501,7 @@ const RequestsPage: React.FC = () => {
                         variant="outline"
                         onClick={() => handleStatusChange(row, 'approved')}
                       >
-                        Aprovar
+                        Aceitar
                       </Button>
                       <Button
                         size="sm"

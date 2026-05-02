@@ -739,6 +739,7 @@ const AdminEmployees: React.FC = () => {
     }
     // PIS/PASEP opcional para não bloquear salvamento; recomendado para REP/relatórios
     const cargoFinal = form.cargo === OUTRO_CARGO_VALUE ? (form.cargoOutro.trim() || 'Colaborador') : form.cargo;
+    const editingSnapshot = editingId ? rows.find((r) => r.id === editingId) : undefined;
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -754,7 +755,6 @@ const AdminEmployees: React.FC = () => {
         shift_id: form.shift_id || null,
         numero_folha: form.numero_folha?.trim() || null,
         salario_base: salarioParsed,
-        pis_pasep: form.pis_pasep?.trim() || null,
         numero_identificador: form.numero_identificador?.trim() || null,
         ctps: form.ctps?.trim() || null,
         admissao: form.admissao || null,
@@ -779,6 +779,16 @@ const AdminEmployees: React.FC = () => {
         endereco_estado: form.endereco_estado?.trim() || null,
         endereco_cep: form.endereco_cep?.trim() || null,
       };
+      // Em edição: não reenviar pis_pasep se não mudou (evita sobrescrita acidental / cast no backend).
+      if (!editingId || !editingSnapshot) {
+        payload.pis_pasep = form.pis_pasep?.trim() || null;
+      } else {
+        const nextPis = (form.pis_pasep ?? '').trim();
+        const prevPis = String(editingSnapshot.pis_pasep ?? '').trim();
+        if (nextPis !== prevPis) {
+          payload.pis_pasep = nextPis || null;
+        }
+      }
       if (editingId) {
         const editingRow = rows.find((r) => r.id === editingId);
         const isLegacyRow = editingId.startsWith('legacy-');

@@ -111,7 +111,34 @@ export function getSupabaseClient(): SupabaseClient | null {
       },
     });
 
-    console.log('[SUPABASE] Cliente inicializado');
+    console.info('[SUPABASE] Cliente inicializado');
+    const viteUrlRaw = String(import.meta.env.VITE_SUPABASE_URL || '').trim();
+    let viteHost = '';
+    try {
+      viteHost = viteUrlRaw ? new URL(sanitizeSupabaseUrl(viteUrlRaw)).hostname : '';
+    } catch {
+      viteHost = '';
+    }
+    let effectiveHost = '';
+    try {
+      effectiveHost = new URL(url).hostname;
+    } catch {
+      effectiveHost = '(url inválida)';
+    }
+    const bundleKeyLen = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim().length;
+    const hostMismatch =
+      Boolean(viteUrlRaw && viteHost) && viteHost !== effectiveHost;
+    const keyLenMismatch =
+      Boolean(bundleKeyLen) && bundleKeyLen !== String(key || '').trim().length;
+    /* Uma linha legível sem depender de “Object” expansível no console */
+    console.info(
+      `[SUPABASE INIT] host_efetivo=${effectiveHost} anon_key_chars=${String(key || '').trim().length}` +
+        (viteUrlRaw
+          ? ` | bundle_vite_host=${viteHost}`
+          : ' | bundle_vite_host=(vazio, usa window.ENV/__VITE__ após AppInitializer)') +
+        (bundleKeyLen ? ` bundle_anon_chars=${bundleKeyLen}` : '') +
+        (hostMismatch || keyLenMismatch ? ' ⚠ efetivo ≠ .env bundle — revise assertEnv/AppInitializer.' : ''),
+    );
     return supabaseInstance;
   } catch (error) {
     console.error('[SUPABASE] Erro ao criar cliente:', error);

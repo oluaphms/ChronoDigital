@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { Routes, Route, Navigate, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './src/lib/queryClient';
@@ -23,6 +24,7 @@ import {
   clearLocalAuthSession,
   clearCurrentUserFromAllStorages,
 } from './services/supabaseClient';
+import { getSupabaseClient } from './src/lib/supabaseClient';
 import { checkSupabaseConnection } from './src/services/checkSupabaseConnection';
 import { logSupabaseError } from './src/services/errorLogger';
 import { validateLogin } from './lib/validationSchemas';
@@ -310,9 +312,9 @@ const AppMain: React.FC = () => {
 
         // Não usar getSession() isolado com timeout curto como “portão”: se IndexedDB/rede atrasarem,
         // a app saía antes de hidratar e o usuário via tela presa / sem perfil em cache.
-        // getCurrentUser(): até 2×30s + retry delay — não cortar antes (cold start / deploy).
-        // CORREÇÃO LOGIN: Timeout mais curto + listener explícito de auth
-        const INIT_HYDRATE_MS = 7_000; // Mantém segurança sem segurar splash por muito tempo
+        // getCurrentUser() pode levar até ~2×30s + retry; não bloqueamos o splash tanto assim.
+        // `onAuthStateChanged` e o fallback de perfil mínimo no authService ainda atualizam o usuário depois.
+        const INIT_HYDRATE_MS = 7_000;
         const currentUser = await Promise.race([
           authService.getCurrentUser(),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), INIT_HYDRATE_MS)),
@@ -635,8 +637,32 @@ const AppMain: React.FC = () => {
   }, [records, historyTypeFilter, historyMethodFilter, historyDateFilter]);
 
   const handleLogin = async (identifier: string, password: string, role: LoginRole) => {
+    try {
+      if (typeof window !== 'undefined') {
+        const q = new URLSearchParams(window.location.search);
+        if (q.get('clearAuthCache') === '1') {
+          window.localStorage.clear();
+          window.sessionStorage.clear();
+          if (typeof console !== 'undefined') {
+            console.info('[LOGIN] clearAuthCache=1 → storage limpo antes do submit');
+          }
+        }
+      }
+    } catch {
+      // ignorar
+    }
+    if (typeof console !== 'undefined' && import.meta.env?.DEV) {
+      console.info('[LOGIN] submit', {
+        identifierLen: (identifier || '').trim().length,
+        passwordLen: (password || '').length,
+        role,
+      });
+    }
     const parsed = validateLogin({ identifier, password });
     if (!parsed.success) {
+      if (typeof console !== 'undefined' && import.meta.env?.DEV) {
+        console.warn('[LOGIN] validação Zod falhou:', parsed.error.flatten());
+      }
       setLoginError(parsed.error.errors[0]?.message ?? 'Dados inválidos');
       return;
     }
@@ -646,31 +672,23 @@ const AppMain: React.FC = () => {
 
     try {
       // Pré-check rápido para reduzir espera percebida quando o projeto Supabase está pausado.
-      const FAST_PRECHECK_TIMEOUT_MS = 900;
+      const FAST_PRECHECK_TIMEOUT_MS = 3000;
       const precheckResult = await Promise.race([
         checkSupabaseConnection(),
         new Promise<'unknown'>((resolve) => setTimeout(() => resolve('unknown'), FAST_PRECHECK_TIMEOUT_MS)),
       ]);
       if (precheckResult !== 'unknown' && !precheckResult.ok) {
-        // Pré-check deve ser apenas informativo e NUNCA bloquear a tentativa de login.
-        // Em ambientes locais/rede instável, a sessão pode autenticar mesmo com health-check falhando.
-        const dnsHint =
-          precheckResult.status === 'dns'
-            ? ' Falha de DNS detectada. Verifique internet, DNS da rede e se o domínio do projeto Supabase resolve no dispositivo.'
-            : '';
-        setConnectionIssueMessage(`${precheckResult.message}.${dnsHint}`.trim());
-        setConnectionUnavailable(true);
+        // Pré-check informativo: NÃO acionar telas globais nem connectionUnavailable —
+        // isso roubava o formulário de login e mostrava "Servidor indisponível" mesmo antes de tentar sessão Auth.
+        if (import.meta.env.DEV && typeof console !== 'undefined') {
+          console.warn('[LOGIN PRECHECK] Health-check inconclusivo (login segue igual):', precheckResult.message);
+        }
       }
-
-      const loginPromise = authService.signInWithEmail(identifier, password);
-      const LOGIN_TIMEOUT_MS = 55_000;
-      const timeoutPromise = new Promise<{ user: any; error: string | null }>((_, reject) =>
-        setTimeout(() => reject(new Error('LOGIN_TIMEOUT')), LOGIN_TIMEOUT_MS)
-      );
 
       let result: { user: any; error: string | null };
       try {
-        result = await Promise.race([loginPromise, timeoutPromise]);
+        /** Sem Promise.race: `signInWithEmail` já tem retry/backoff por cold start; timeout externo derrubava login lento válido (free tier). */
+        result = await authService.signInWithEmail(identifier, password);
       } catch (authErr: any) {
         const errText = String(
           authErr?.message || authErr?.details || authErr?.hint || authErr?.error?.message || ''
@@ -756,9 +774,32 @@ const AppMain: React.FC = () => {
       }
 
       if (result.user) {
-        // CORREÇÃO LOGIN: Forçar atualização imediata do estado + disparar evento
-        setUser(result.user);
-        setIsInitialLoading(false); // Garantir que loading inicial não trave a UI
+        let redirectSessionExists = false;
+
+        flushSync(() => {
+          setUser(result.user);
+          setIsInitialLoading(false);
+          if (typeof console !== 'undefined') {
+            console.log('[USER SET MANUAL]');
+          }
+        });
+
+        try {
+          const client = getSupabaseClient();
+          if (client) {
+            const { data: sessSnap, error: sessErr } = await client.auth.getSession();
+            redirectSessionExists = !!sessSnap?.session;
+            if (typeof console !== 'undefined') {
+              console.log('[SESSION AFTER LOGIN]', {
+                sessionExists: redirectSessionExists,
+                error: sessErr?.message ?? null,
+              });
+            }
+          }
+        } catch {
+          redirectSessionExists = false;
+          // não bloquear navegação
+        }
 
         // Disparar evento para sincronizar outros componentes
         window.dispatchEvent(new Event('current_user_changed'));
@@ -775,6 +816,13 @@ const AppMain: React.FC = () => {
 
         // Navegar após garantir que estado foi atualizado
         setTimeout(() => {
+          if (typeof console !== 'undefined') {
+            console.log('[REDIRECT CHECK]', {
+              sessionExists: redirectSessionExists,
+              userInState: !!result.user,
+              targetRoute: result.user.role === 'admin' || result.user.role === 'hr' ? '/admin/dashboard' : '/employee/dashboard',
+            });
+          }
           if (result.user.role === 'admin' || result.user.role === 'hr') {
             setActiveTab('admin');
             navigate('/admin/dashboard', { replace: true });

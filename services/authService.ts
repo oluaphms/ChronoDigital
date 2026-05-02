@@ -9,6 +9,7 @@ import {
   auth,
   clearCurrentUserFromAllStorages,
   db,
+  getSupabaseClient,
   getUserProfileStorage,
   isSupabaseConfigured,
   checkSupabaseConfigured,
@@ -33,7 +34,8 @@ const TENANT_META_SYNC_KEY = 'sp_tenant_meta_sync';
 /**
  * Timeout por tentativa em `getCurrentUser` (sessão + perfil). Após deploy / cold start do Supabase
  * (free tier) ou IndexedDB lento, 18s falhava sem motivo. Há **2ª tentativa** após pequeno atraso.
- * O `App.tsx` usa `INIT_HYDRATE_MS` ≥ pior caso (2× timeout + delay).
+ * O `App.tsx` usa `INIT_HYDRATE_MS` menor que o pior caso (splash curto): o listener de auth +
+ * fallback abaixo ainda recuperam sessão quando o SELECT do perfil estoura o tempo.
  */
 const GET_CURRENT_USER_TIMEOUT_MS = 30_000;
 const GET_CURRENT_USER_RETRY_DELAY_MS = 750;
@@ -57,7 +59,27 @@ function readCurrentUserFromProfileStore(): string | null {
   }
 }
 
+/** True se GoTrue já persistiu projeto (JWT) em local/session storage — falta distingue eco SIGNED_OUT de cold start vs logout real */
+function hasSbAuthKeysInBrowser(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k?.startsWith('sb-')) return true;
+    }
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const k = window.sessionStorage.key(i);
+      if (k?.startsWith('sb-')) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 class AuthService {
+  /** Login por senha em andamento: amplia retentativas de `getSession` no listener (evita callback(null) cedo). */
+  private _passwordSignInActive = false;
   /** Previne que o listener onAuthStateChanged tente recuperar sessão durante o logout. */
   private _isSigningOut = false;
   /** Single-flight para chamadas concorrentes de getCurrentUser em Strict Mode. */
@@ -341,6 +363,142 @@ class AuthService {
 
   private isOnline(): boolean {
     return typeof navigator === 'undefined' || navigator.onLine !== false;
+  }
+
+  private maskEmailForLog(email: string): string {
+    const e = String(email || '').trim();
+    const at = e.indexOf('@');
+    if (at < 1) return e ? '***' : '';
+    return `${e.slice(0, Math.min(2, at))}***${e.slice(at)}`;
+  }
+
+  /** Erros de rede / cold start — podem ser repetidos; credenciais inválidas não. */
+  private isRetriableLoginTransportError(error: unknown): boolean {
+    const msg = String(
+      (error as { message?: string })?.message ??
+        (error as { error_description?: string })?.error_description ??
+        '',
+    ).toLowerCase();
+    if (msg.includes('invalid login credentials')) return false;
+    if (msg.includes('email not confirmed')) return false;
+    return (
+      msg.includes('fetch') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('tempo esgotado') ||
+      msg.includes('aborted') ||
+      (error as { status?: number })?.status === 503 ||
+      (error as { status?: number })?.status === 504
+    );
+  }
+
+  /**
+   * signInWithPassword com retry para cold start (free tier) e rede instável.
+   * Não repete em credenciais inválidas.
+   */
+  private async signInWithPasswordWithColdStartRetry(
+    email: string,
+    password: string,
+  ): Promise<{ user: any; session: any }> {
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (typeof console !== 'undefined') {
+        const emailPreview = import.meta.env?.DEV ? email : this.maskEmailForLog(email);
+        console.log('[LOGIN START]', { email: emailPreview, attempt: attempt + 1, maxAttempts });
+      }
+      try {
+        const client = getSupabaseClient();
+        if (!client) {
+          throw new Error('Supabase não inicializado.');
+        }
+        const { data, error } = await client.auth.signInWithPassword({ email, password });
+        const sessionSummary = data?.session
+          ? {
+              expires_at: data.session.expires_at,
+              tokenPreview: !!(data.session as { access_token?: string }).access_token,
+            }
+          : null;
+        if (typeof console !== 'undefined') {
+          console.log('[LOGIN RESULT]', {
+            error: error?.message ?? error ?? null,
+            data: data
+              ? {
+                  user: data.user ? { id: data.user.id, email: this.maskEmailForLog(data.user.email || '') } : null,
+                  session: sessionSummary,
+                }
+              : null,
+          });
+        }
+        try {
+          const after = await client.auth.getSession();
+          if (typeof console !== 'undefined') {
+            console.log('[SESSION AFTER LOGIN]', {
+              hasSession: !!after.data?.session,
+              error: after.error?.message ?? null,
+              userId: after.data?.session?.user?.id ?? null,
+            });
+          }
+        } catch (afterErr: unknown) {
+          if (typeof console !== 'undefined') {
+            console.log('[SESSION AFTER LOGIN]', { hasSession: false, error: String(afterErr) });
+          }
+        }
+        if (!error && data?.user) {
+          return { user: data.user, session: data.session };
+        }
+        if (!error && !data?.user) {
+          if (attempt < maxAttempts - 1) {
+            if (typeof console !== 'undefined') {
+              console.warn('[LOGIN RETRY]', { afterMs: 2000, reason: 'resposta_sem_usuario' });
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          throw new Error('Erro ao fazer login. Tente novamente.');
+        }
+        if (error) {
+          if (this.isRetriableLoginTransportError(error) && attempt < maxAttempts - 1) {
+            if (typeof console !== 'undefined') {
+              console.warn('[LOGIN RETRY]', { afterMs: 2000, attempt: attempt + 1 });
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          if (this.isRetriableLoginTransportError(error)) {
+            throw new Error(
+              'Falha de conexão com o servidor. Verifique a internet ou tente novamente em instantes.',
+            );
+          }
+          throw error;
+        }
+      } catch (err: unknown) {
+        const msg = String((err as { message?: string })?.message ?? '').toLowerCase();
+        if (msg.includes('invalid login credentials') || msg.includes('email not confirmed')) {
+          throw err;
+        }
+        if (this.isRetriableLoginTransportError(err) && attempt < maxAttempts - 1) {
+          if (typeof console !== 'undefined') {
+            console.warn('[LOGIN RETRY]', { afterMs: 2000, reason: (err as Error)?.message });
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        if (
+          msg.includes('fetch') ||
+          msg.includes('failed to fetch') ||
+          msg.includes('timeout') ||
+          msg.includes('network') ||
+          msg.includes('tempo esgotado')
+        ) {
+          throw new Error(
+            'Falha de conexão com o servidor. Verifique a internet ou tente novamente em instantes.',
+          );
+        }
+        throw err;
+      }
+    }
+    throw new Error('Falha de conexão com o servidor após várias tentativas.');
   }
 
   private isNetworkLikeError(error: unknown): boolean {
@@ -654,6 +812,8 @@ class AuthService {
         };
       }
 
+      this._passwordSignInActive = true;
+
       try {
         clearCurrentUserFromAllStorages();
         if (typeof window !== 'undefined') {
@@ -669,7 +829,42 @@ class AuthService {
       }
       await clearLocalAuthSession();
 
-      const data = await auth.signIn(resolvedEmail, password);
+      try {
+        const { data: sessPre, error: sessPreErr } = await supabase.auth.getSession();
+        if (typeof console !== 'undefined') {
+          console.log('[SUPABASE SESSION TEST]', {
+            hasSession: !!sessPre?.session,
+            error: sessPreErr?.message ?? null,
+          });
+        }
+      } catch (sessionTestErr: unknown) {
+        if (typeof console !== 'undefined') {
+          console.log('[SUPABASE SESSION TEST]', { hasSession: false, error: String(sessionTestErr) });
+        }
+      }
+
+      let signPayload: { user: any; session: any };
+      try {
+        signPayload = await this.signInWithPasswordWithColdStartRetry(resolvedEmail, password);
+      } catch (signErr: unknown) {
+        throw signErr;
+      }
+
+      try {
+        const { data: sessPost, error: sessPostErr } = await supabase.auth.getSession();
+        if (typeof console !== 'undefined') {
+          console.log('[SUPABASE SESSION TEST POST]', {
+            hasSession: !!sessPost?.session,
+            error: sessPostErr?.message ?? null,
+          });
+        }
+      } catch (sessionPostErr: unknown) {
+        if (typeof console !== 'undefined') {
+          console.log('[SUPABASE SESSION TEST POST]', { hasSession: false, error: String(sessionPostErr) });
+        }
+      }
+
+      const data = { user: signPayload.user, session: signPayload.session };
 
       if (!data || !data.user) {
         return { user: null, error: 'Erro ao fazer login. Tente novamente.' };
@@ -682,10 +877,10 @@ class AuthService {
       });
 
       if (data.user) {
-        // Timeout na carga do perfil: free tier / RLS podem demorar; fallback evita travar o login
-        const PROFILE_LOAD_TIMEOUT_MS = 6000;
+        // Timeout na carga do perfil: free tier / RLS — ≥10s no caminho de login (HARD LOCK: só login).
+        const PROFILE_LOAD_TIMEOUT_MS = 12_000;
         const appUser = await Promise.race([
-          this.supabaseUserToAppUser(data.user),
+          this.supabaseUserToAppUser(data.user).catch(() => null as User | null),
           new Promise<User | null>((resolve) =>
             setTimeout(() => {
               if (import.meta.env?.DEV && typeof console !== 'undefined') {
@@ -731,8 +926,18 @@ class AuthService {
     } catch (error: any) {
       let errorMessage = 'Erro ao fazer login';
       const msg = error?.message ?? '';
+      const msgLower = msg.toLowerCase();
 
-      if (msg.includes('Invalid login credentials') || error?.status === 400) {
+      if (
+        msgLower.includes('fetch') ||
+        msgLower.includes('failed to fetch') ||
+        msgLower.includes('network') ||
+        msgLower.includes('timeout') ||
+        msgLower.includes('tempo esgotado')
+      ) {
+        errorMessage =
+          'Falha de conexão com o servidor. Verifique a internet ou tente novamente em instantes.';
+      } else if (msg.includes('Invalid login credentials') || error?.status === 400) {
         if (!isEmailInput && resolvedEmail) {
           errorMessage = `Usuário ou senha incorreto. O nome "${identifier}" foi resolvido para: ${resolvedEmail}. Se não for o e-mail correto, use o e-mail completo ou o nome completo.`;
         } else {
@@ -748,6 +953,10 @@ class AuthService {
       }
 
       return { user: null, error: errorMessage };
+    } finally {
+      setTimeout(() => {
+        this._passwordSignInActive = false;
+      }, 12_000);
     }
   }
 
@@ -1067,6 +1276,23 @@ class AuthService {
             // ignora
           }
           if (errMsg.includes('Tempo esgotado')) {
+            // SELECT do perfil pode estourar 30s; sessão JWT costuma estar ok — evita ficar sem usuário.
+            try {
+              const { data: sd } = await auth.getSession();
+              const sud = sd?.session?.user;
+              if (sud) {
+                const minimal = await this.buildMinimalAppUserFromAuthUser(sud);
+                persistCurrentUserToProfileStore(minimal);
+                if (import.meta.env?.DEV && typeof console !== 'undefined') {
+                  console.info(
+                    '[Auth] getCurrentUser: carga completa esgotou o tempo — sessão válida; usando perfil mínimo até o próximo refresh.',
+                  );
+                }
+                return minimal;
+              }
+            } catch {
+              // segue para o aviso
+            }
             if (typeof console !== 'undefined') {
               console.warn(
                 '[Auth] getCurrentUser: tempo esgotado após 2 tentativas; sem perfil em cache (rede lenta ou Supabase a iniciar).',
@@ -1186,6 +1412,24 @@ class AuthService {
     return minimal;
   }
 
+  /** Evita logout na UI quando getSession volta atrasado com sessão válida (corrida com SIGNED_OUT pré-login). */
+  private async tryRecoverAppUserFromCurrentSession(): Promise<User | null> {
+    try {
+      const { data } = await auth.getSession();
+      const su = data.session?.user;
+      if (!su) return null;
+      try {
+        const u = await this.supabaseUserToAppUser(su);
+        if (u) return u;
+      } catch {
+        // segue fallback mínimo
+      }
+      return await this.buildMinimalAppUserFromAuthUser(su);
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Observar mudanças no estado de autenticação.
    * Em erro ao converter sessão (ex.: timeout no DB), limpa e chama callback(null) para evitar estado inconsistente e loop.
@@ -1202,17 +1446,121 @@ class AuthService {
       }
 
       /**
+       * `signInWithEmail` chama `signOut({ local })` antes do `signInWithPassword`. Esse `SIGNED_OUT` não deve
+       * disparar dezenas de `getSession()` — o cliente Supabase usa fila única (lock interno): isso empata o
+       * próprio login em localhost ou faz o pedido falhar por timeout.
+       */
+      if (event === 'SIGNED_OUT' && !session?.user && this._passwordSignInActive) {
+        if (typeof console !== 'undefined') {
+          console.log(
+            '[AUTH EVENT] SIGNED_OUT — ignorado (signOut local pré-login; não bloquear fila auth) [OK]',
+          );
+        }
+        return;
+      }
+
+      const isLikelyLocalhost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+      /**
+       * GoTrue (especialmente com Vite HMR) pode emitir `INITIAL_SESSION null` seguido de `SIGNED_OUT null`
+       * sem haver utilizador nem tokens em storage — não é logout real; só duplica clears e corrida com getSession().
+       * Caso login em curso usa o bypass imediato acima (`_passwordSignInActive`).
+       */
+      if (
+        event === 'SIGNED_OUT' &&
+        !session?.user &&
+        !this._passwordSignInActive &&
+        !hasSbAuthKeysInBrowser()
+      ) {
+        if (typeof console !== 'undefined') {
+          console.log(
+            '[AUTH EVENT] SIGNED_OUT null — eco cold start, ignorado (sem chaves sb-* no storage) [OK]',
+          );
+        }
+        return;
+      }
+
+      if (typeof console !== 'undefined') {
+        if (event === 'INITIAL_SESSION' && !session?.user) {
+          const sbOrfa = hasSbAuthKeysInBrowser();
+          console.log(
+            sbOrfa
+              ? '[AUTH EVENT] INITIAL_SESSION — sem JWT válido mas há chaves sb-* (tokens antigos/corruptos; serão limpos se getSession continuar vazio) [AVISO]'
+              : '[AUTH EVENT] INITIAL_SESSION null — sem sessão guardada (normal antes de fazer login) [OK]',
+          );
+        } else {
+          const detail = session?.user
+            ? { userId: session.user.id, expires_at: session.expires_at }
+            : hasSbAuthKeysInBrowser()
+              ? 'payload sem user · há sb-* no storage (revalidando / possível token órfão)'
+              : 'payload sem user';
+          console.log('[AUTH EVENT]', event, detail);
+        }
+      }
+
+      /**
        * Corrida comum no login: `clearLocalAuthSession()` chama signOut e o listener pode receber
        * `session === null` *depois* do signIn já ter concluído — isso apagava o usuário na UI.
        * Se o storage ainda tiver sessão válida, recuperamos antes de deslogar.
        * IMPORTANTE: só faz isso fora do fluxo de logout (flag acima já garante isso).
        */
       let sess = session;
-      if (!sess?.user && event !== 'SIGNED_OUT') {
+      // Revalidar storage quando vier sem usuário. Em `SIGNED_OUT` após signOut local (troca de conta/login),
+      // a nova sessão pode ainda não estar escrita quando o handler roda — getSession pode falhar uma vez só.
+      if (!sess?.user) {
+        const loginBoost = this._passwordSignInActive;
+        let attempts = 1;
+        let gapMs = 0;
+        if (loginBoost) {
+          attempts = 32;
+          gapMs = 70;
+          /** Localhost: margem extra sem alongar demais — handler lento aumenta corrida com SIGNED_IN */
+          if (isLikelyLocalhost) {
+            attempts = 40;
+            gapMs = 72;
+          }
+        } else if (event === 'SIGNED_OUT') {
+          attempts = 18;
+          gapMs = 75;
+          if (isLikelyLocalhost) {
+            attempts = Math.max(attempts, 28);
+            gapMs = Math.max(gapMs, 72);
+          }
+        } else if (event === 'INITIAL_SESSION') {
+          /** Localhost / IndexedDB: INITIAL_SESSION pode chegar antes da sessão ser lida — 1 tentativa zerava o utilizador à toa */
+          attempts = isLikelyLocalhost ? 24 : 1;
+          gapMs = isLikelyLocalhost ? 70 : 0;
+        } else {
+          attempts = 10;
+          gapMs = 55;
+        }
+        for (let i = 0; i < attempts && !sess?.user; i++) {
+          if (i > 0) {
+            await new Promise((r) => setTimeout(r, gapMs));
+          }
+          try {
+            const { data } = await auth.getSession();
+            if (data.session?.user) {
+              sess = data.session;
+              break;
+            }
+          } catch {
+            // ignora
+          }
+        }
+      }
+
+      /**
+       * SIGNED_OUT do signOut local antes do signIn pode demorar a processar; SIGNED_IN pode já ter corrido.
+       * Última leitura evita `callback(null)` fantasma após login bem-sucedido.
+       */
+      if (!sess?.user) {
         try {
-          const { data } = await auth.getSession();
-          if (data.session?.user) {
-            sess = data.session;
+          const { data: rebound } = await auth.getSession();
+          if (rebound.session?.user) {
+            sess = rebound.session;
           }
         } catch {
           // ignora
@@ -1249,6 +1597,38 @@ class AuthService {
           persistCurrentUserToProfileStore(appUser!);
           callback(appUser);
         } else {
+          const recovered = await this.tryRecoverAppUserFromCurrentSession();
+          if (recovered) {
+            persistCurrentUserToProfileStore(recovered);
+            callback(recovered);
+            return;
+          }
+          /**
+           * Chaves `sb-*` sem sessão JWT restabelecível — típico em dev (projeto/URL trocado, refresh parcial, HMR).
+           * Sem limpar isto o GoTrue pode manter estado inconsistente e o login falha em localhost.
+           */
+          if (
+            hasSbAuthKeysInBrowser() &&
+            !this._passwordSignInActive &&
+            !this._isSigningOut
+          ) {
+            if (typeof console !== 'undefined') {
+              console.warn(
+                '[AUTH] Removendo tokens sb-* locais órfãos (getSession continuou sem utilizador válido).',
+              );
+            }
+            try {
+              await clearLocalAuthSession();
+            } catch {
+              /* ignora */
+            }
+            const recoveredAfterSweep = await this.tryRecoverAppUserFromCurrentSession();
+            if (recoveredAfterSweep) {
+              persistCurrentUserToProfileStore(recoveredAfterSweep);
+              callback(recoveredAfterSweep);
+              return;
+            }
+          }
           try {
             clearCurrentUserFromAllStorages();
             window.dispatchEvent(new Event('current_user_changed'));
@@ -1273,13 +1653,42 @@ class AuthService {
             callback(null);
           }
         } else {
-          try {
-            clearCurrentUserFromAllStorages();
-            window.dispatchEvent(new Event('current_user_changed'));
-          } catch {
-            // ignora
+          const recoveredOut = await this.tryRecoverAppUserFromCurrentSession();
+          if (recoveredOut) {
+            persistCurrentUserToProfileStore(recoveredOut);
+            callback(recoveredOut);
+          } else if (
+            hasSbAuthKeysInBrowser() &&
+            !this._passwordSignInActive &&
+            !this._isSigningOut
+          ) {
+            try {
+              await clearLocalAuthSession();
+            } catch {
+              /* ignora */
+            }
+            const swept = await this.tryRecoverAppUserFromCurrentSession();
+            if (swept) {
+              persistCurrentUserToProfileStore(swept);
+              callback(swept);
+            } else {
+              try {
+                clearCurrentUserFromAllStorages();
+                window.dispatchEvent(new Event('current_user_changed'));
+              } catch {
+                // ignora
+              }
+              callback(null);
+            }
+          } else {
+            try {
+              clearCurrentUserFromAllStorages();
+              window.dispatchEvent(new Event('current_user_changed'));
+            } catch {
+              // ignora
+            }
+            callback(null);
           }
-          callback(null);
         }
       }
     });

@@ -3,19 +3,31 @@
  * para gravar em `timestamptz` (alinhado ao que o colaborador/admin escolhe no calendário).
  */
 export function localDateAndTimeToIsoUtc(dateYmd: string, timeHm: string): string {
-  const datePart = dateYmd.slice(0, 10);
-  const timePart = (timeHm || '00:00').slice(0, 5);
+  const datePart = (dateYmd || '').trim().slice(0, 10);
+  const timePart = ((timeHm || '').trim() || '00:00').slice(0, 5);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    throw new RangeError(`Data inválida para registro (use AAAA-MM-DD): "${dateYmd}"`);
+  }
   const [ys, ms, ds] = datePart.split('-');
   const [hs, mins] = timePart.split(':');
   const y = parseInt(ys || '0', 10);
   const mo = parseInt(ms || '1', 10);
   const d = parseInt(ds || '1', 10);
-  const hh = parseInt(hs || '0', 10);
-  const mm = parseInt(mins || '0', 10);
-  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) {
-    return new Date().toISOString();
+  const hh = parseInt(hs !== undefined ? hs : '0', 10);
+  const mm = parseInt(mins !== undefined ? mins : '0', 10);
+  if (
+    !Number.isFinite(y) ||
+    !Number.isFinite(mo) ||
+    !Number.isFinite(d) ||
+    !Number.isFinite(hh) ||
+    !Number.isFinite(mm)
+  ) {
+    throw new RangeError(`Data ou horário inválido: "${dateYmd}" "${timeHm}"`);
   }
-  const dt = new Date(y, mo - 1, d, Number.isFinite(hh) ? hh : 0, Number.isFinite(mm) ? mm : 0, 0, 0);
+  const dt = new Date(y, mo - 1, d, hh, mm, 0, 0);
+  if (Number.isNaN(dt.getTime())) {
+    throw new RangeError(`Combinação data/hora inválida no calendário local: ${datePart} ${timePart}`);
+  }
   return dt.toISOString();
 }
 

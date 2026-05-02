@@ -98,7 +98,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
   };
 
   return (
-    <div className="glass-card rounded-2xl p-6 max-w-2xl w-full max-h-[80vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg" role="dialog" aria-label="Centro de notificações">
+    <div className="glass-card rounded-2xl p-4 sm:p-6 max-w-[min(100%,42rem)] w-full max-h-[min(80vh,32rem)] sm:max-h-[80vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg min-w-0 mx-auto" role="dialog" aria-label="Centro de notificações">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <Bell className="w-6 h-6 text-indigo-600" />
@@ -155,15 +155,15 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
               <div className="flex items-start gap-3">
                 {getIcon(notif.type)}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-semibold text-slate-900 dark:text-white text-sm">
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap min-w-0">
+                        <h3 className="font-semibold text-slate-900 dark:text-white text-sm break-words min-w-0">
                           {notif.title}
                         </h3>
                         {getStatusBadge(notif)}
                       </div>
-                      <p className="text-slate-600 dark:text-slate-400 text-xs mt-1">
+                      <p className="text-slate-600 dark:text-slate-400 text-xs mt-1 break-words">
                         {notif.message}
                       </p>
                       <p className="text-slate-400 dark:text-slate-500 text-[10px] mt-2">

@@ -36,8 +36,31 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
       let supabaseKey = '';
       try {
         const env = assertEnv();
-        supabaseUrl = envConfig?.url || env.url;
-        supabaseKey = envConfig?.key || env.key;
+        /*
+         * Só sobrescreve com `SUPABASES[env]` quando vier **par** URL+key; senão pode casar URL de um projeto
+         * com a chave anon de outro (auth falha sempre, sem erro óbvio no UI).
+         */
+        if (
+          typeof envConfig?.url === 'string' &&
+          envConfig.url.trim() &&
+          typeof envConfig?.key === 'string' &&
+          envConfig.key.trim()
+        ) {
+          supabaseUrl = envConfig.url.trim().replace(/\/+$/, '');
+          supabaseKey = envConfig.key.trim();
+        } else {
+          supabaseUrl = env.url;
+          supabaseKey = env.key;
+          if (
+            envConfig &&
+            (envConfig.url || envConfig.key) &&
+            typeof console !== 'undefined'
+          ) {
+            console.warn(
+              `[ENV] window.ENV.SUPABASES['${envName}'] ignorado — defina url e anon key juntos (ou omita).`,
+            );
+          }
+        }
       } catch (error: any) {
         const message = error?.message || '[ENV] Variáveis ausentes';
         setSupabaseInfraFatal(message);

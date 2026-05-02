@@ -37,8 +37,15 @@ export function assertEnv(): { url: string; key: string } {
   const injectedUrl = trimUrl(w?.__VITE_SUPABASE_URL);
   const injectedKey = trimKey(w?.__VITE_SUPABASE_ANON_KEY);
 
-  const url = viteUrl || envUrl || injectedUrl;
-  const key = viteKey || envKey || injectedKey;
+  /*
+   * O AppInitializer grava um par válido em __VITE_* após mesclar `window.ENV.SUPABASES`.
+   * Se `vite*` e esse par divergirem (projeto A no .env, projeto B no runtime), usar Vite primeiro
+   * fazia o GoTrue autenticar no projeto **errado** enquanto o log mostrava a URL “certa”.
+   * Par injectado só vale quando URL **e** chave existem (evita misturar metade).
+   */
+  const useInjectedPair = !!(injectedUrl && injectedKey);
+  const url = useInjectedPair ? injectedUrl : viteUrl || envUrl || injectedUrl;
+  const key = useInjectedPair ? injectedKey : viteKey || envKey || injectedKey;
 
   if (!url || !key) {
     console.error('[ENV ERROR] Supabase não configurado corretamente');

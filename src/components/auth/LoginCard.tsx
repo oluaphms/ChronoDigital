@@ -27,7 +27,6 @@ export const LoginCard: React.FC<LoginCardProps> = ({
   const [role, setRole] = useState<LoginRole>(null);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [showIdentifier, setShowIdentifier] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
@@ -151,36 +150,20 @@ export const LoginCard: React.FC<LoginCardProps> = ({
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-5">
-                {/* Campo oculto para acessibilidade e gerenciadores de senha */}
-                <input
-                  type="text"
-                  autoComplete="username"
-                  value={identifier}
-                  readOnly
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  className="absolute w-px h-px -left-[9999px] opacity-0 pointer-events-none"
-                />
-
-                {/* Campo Identificador */}
+                {/*
+                  Nunca usar type="password" aqui: dois campos password quebram autofill/password managers
+                  e podem jogar a senha no campo de usuário → login falha para todos os perfis.
+                */}
                 <div className="relative">
                   <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                   <input
-                    type={showIdentifier ? 'text' : 'password'}
+                    type="text"
                     placeholder={i18n.t('login.usernameOrEmail')}
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
                     autoComplete="username"
-                    className="w-full pl-12 pr-10 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl sm:rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 focus:border-indigo-500 transition-all text-sm"
+                    className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl sm:rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-600 focus:border-indigo-500 transition-all text-sm"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowIdentifier((prev) => !prev)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-                    aria-label={showIdentifier ? i18n.t('app.hidePassword') : i18n.t('app.showPassword')}
-                  >
-                    {showIdentifier ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
                 </div>
 
                 {/* Campo Senha */}
