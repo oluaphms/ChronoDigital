@@ -18,16 +18,32 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+/** Lazy route falhou porque o servidor Vite já não está a responder (ERR_CONNECTION_REFUSED / HMR perdido). */
+function isLikelyViteDevServerGone(error: unknown): boolean {
+  const raw = `${error instanceof Error ? error.message : String(error)}\n${error instanceof Error && error.stack ? error.stack : ''}`;
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes('failed to fetch dynamically imported module') ||
+    lower.includes('net::err_connection_refused') ||
+    (lower.includes('localhost') && lower.includes('failed to fetch') && lower.includes('.tsx'))
+  );
+}
+
+function isDevUiEnv(): boolean {
+  return (
+    (typeof import.meta !== 'undefined' && !!import.meta.env?.DEV) ||
+    (typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
+  );
+}
+
 function DefaultFallback({
   error,
   resetErrorBoundary,
 }: FallbackProps) {
   const err = toError(error);
-
-  const isDevUi =
-    (typeof import.meta !== 'undefined' && !!import.meta.env?.DEV) ||
-    (typeof window !== 'undefined' &&
-      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'));
+  const isDevUi = isDevUiEnv();
+  const deadViteHint = isDevUi && isLikelyViteDevServerGone(err);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-6">
@@ -44,6 +60,20 @@ function DefaultFallback({
             Ocorreu um erro inesperado. Nossa equipe foi notificada.
           </p>
         </div>
+
+        {deadViteHint && (
+          <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-5 text-left space-y-2">
+            <p className="font-bold text-amber-900 dark:text-amber-200 text-sm">
+              Provável causa (ambiente de desenvolvimento)
+            </p>
+            <p className="text-sm text-amber-800 dark:text-amber-100/90 leading-relaxed">
+              O servidor Vite em <code className="text-xs bg-amber-100 dark:bg-amber-900/50 px-1 rounded">localhost:3010</code>{' '}
+              deixou de responder (processo terminou ou conexão HMR perdida). O pedido falhou ao carregar uma página lazy
+              (ex.: Employees). Reinicia o comando <code className="text-xs bg-amber-100 dark:bg-amber-900/50 px-1 rounded">npm run dev</code> no terminal,
+              espera ficar estável e recarrega a página — o login em si pode já ter corrido bem.
+            </p>
+          </div>
+        )}
 
         {isDevUi && (
           <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl p-6 space-y-4">

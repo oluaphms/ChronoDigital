@@ -6,11 +6,25 @@ export interface User {
   id: string;
   email?: string;
   nome?: string;
+  /** Texto da função/cargo (coluna `users.cargo` — mesmo valor escolhido no modal admin). */
+  cargo?: string;
   role: 'admin' | 'hr' | 'employee';
   company_id?: string;
   /** Alias camelCase (rotas admin usam `user.companyId`). */
   companyId?: string;
   department_id?: string;
+  /** Alias camelCase usado no perfil do colaborador. */
+  departmentId?: string;
+  schedule_id?: string;
+  shift_id?: string;
+  phone?: string;
+  avatar?: string;
+}
+
+function strOrUndef(v: unknown): string | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  return s || undefined;
 }
 
 function mapRowToUser(row: Record<string, unknown>): User {
@@ -20,14 +34,21 @@ function mapRowToUser(row: Record<string, unknown>): User {
     roleRaw === 'admin' || roleRaw === 'hr' || roleRaw === 'employee' || roleRaw === 'supervisor'
       ? (roleRaw === 'supervisor' ? 'hr' : (roleRaw as User['role']))
       : 'employee';
+  const dept = strOrUndef(row.department_id);
   return {
     id: String(row.id),
     email: row.email != null ? String(row.email) : undefined,
     nome: row.nome != null ? String(row.nome) : undefined,
+    cargo: strOrUndef(row.cargo) ?? 'Colaborador',
     role,
     company_id: cid || undefined,
     companyId: cid || undefined,
-    department_id: row.department_id != null ? String(row.department_id) : undefined,
+    department_id: dept,
+    departmentId: dept,
+    schedule_id: strOrUndef(row.schedule_id),
+    shift_id: strOrUndef((row as { shift_id?: unknown }).shift_id),
+    phone: strOrUndef(row.phone),
+    avatar: strOrUndef((row as { avatar?: unknown }).avatar),
   };
 }
 
@@ -54,10 +75,12 @@ function minimalUserFromAuthSession(sessionUser: {
         ? 'hr'
         : 'employee';
   const email = (sessionUser.email || '').trim();
+  const cargoMeta = pick(meta.cargo);
   return {
     id: sessionUser.id,
     email: email || undefined,
     nome: (pick(meta.nome) || email.split('@')[0] || 'Usuário') as string,
+    cargo: cargoMeta || 'Colaborador',
     role,
     company_id: cid || undefined,
     companyId: cid || undefined,
