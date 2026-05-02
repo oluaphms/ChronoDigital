@@ -24,6 +24,7 @@ import {
 } from '../../engine/timeEngine';
 import {
   getEmployeeSchedule,
+  isTimesheetClosed,
   type DailyProcessResult,
   type WorkScheduleInfo,
 } from '../../services/timeProcessingService';
@@ -255,6 +256,23 @@ const AdminCalculos: React.FC = () => {
     if (dias.length > MAX_DIAS) {
       toast.addToast('error', `Reduza o período (máximo ${MAX_DIAS} dias).`);
       return;
+    }
+    const ymKeys = new Set<string>();
+    for (const d of dias) {
+      ymKeys.add(d.slice(0, 7));
+    }
+    for (const ym of ymKeys) {
+      const y = Number(ym.slice(0, 4));
+      const mo = Number(ym.slice(5, 7));
+      if (!y || !mo) continue;
+      const closed = await isTimesheetClosed(user.companyId, mo, y, filterUserId);
+      if (closed) {
+        toast.addToast(
+          'error',
+          `Período fechado (${String(mo).padStart(2, '0')}/${y}). Recálculo manual não permitido.`,
+        );
+        return;
+      }
     }
     setLoadingCalc(true);
     setCalcRows(null);

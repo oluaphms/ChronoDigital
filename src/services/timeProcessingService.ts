@@ -6,6 +6,25 @@
 import { db, isSupabaseConfigured, supabase } from './supabaseClient';
 import { getTimeRecordsForUserDayRange } from '../../services/timeRecords.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  assertMonthOpenForEmployee,
+  isTimesheetClosed,
+  logBlockedTimesheetMutation,
+  monthYearFromCivilYmd,
+  monthYearFromIsoInSaoPaulo,
+  reopenTimesheet,
+  throwIfTimesheetClosedForPunchMutation,
+} from './timesheetClosure';
+
+export {
+  assertMonthOpenForEmployee,
+  isTimesheetClosed,
+  logBlockedTimesheetMutation,
+  monthYearFromCivilYmd,
+  monthYearFromIsoInSaoPaulo,
+  reopenTimesheet,
+  throwIfTimesheetClosedForPunchMutation,
+};
 
 // ---------------------------------------------------------------------------
 // Tipos (consumidos por timeEngine / payrollCalculator)
@@ -696,59 +715,175 @@ export async function updateBankHours(
 }
 
 // ---------------------------------------------------------------------------
-// Fechamento de folha (já usado pela UI)
+// Fechamento de folha (motor timeEngine + marcação + snapshot)
 // ---------------------------------------------------------------------------
 
+/** Espelho na tela deve ser o mês civil completo = mês seleccionado no fecho — evita fechar período diferente do exibido. */
+export function assertClosingPeriodMatchesEspelho(params: {
+  closingMonthYm: string;
+  periodStart: string;
+  periodEnd: string;
+}): void {
+  const raw = params.closingMonthYm.trim();
+  const match = /^(\d{4})-(\d{2})$/.exec(raw);
+  if (!match) throw new Error('Mês de fechamento inválido.');
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  if (!y || m < 1 || m > 12) throw new Error('Mês de fechamento inválido.');
+  const lastDay = new Date(y, m, 0).getDate();
+  const expStart = `${y}-${String(m).padStart(2, '0')}-01`;
+  const expEnd = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  if (params.periodStart.slice(0, 10) !== expStart || params.periodEnd.slice(0, 10) !== expEnd) {
+    throw new Error(
+      `Período exibido (${params.periodStart} → ${params.periodEnd}) diferente do mês civil do fecho (${expStart} → ${expEnd}). Ajuste os filtros do espelho antes de fechar.`,
+    );
+  }
+}
+
+export type RealTimesheetCloseResult = {
+  closure: Record<string, unknown>;
+  snapshot: Record<string, unknown>;
+  totals: Record<string, unknown>;
+  saldo_banco_final: number;
+};
+
+/**
+ * Fechamento oficial: corre o motor (`timeEngine.closeTimesheet` já inclui recálculo do mês),
+ * persiste `timesheet_closures` (gatilhos de travamento) e `timesheet_snapshots` (consolidados).
+ * Idempotência: se já existe fecho para empresa/colaborador/ano/mês, devolve null sem repetir motor.
+ */
 export async function closeTimesheet(
   companyId: string,
   month: number,
   year: number,
-  employeeId?: string,
-  closedBy?: string
-) {
+  employeeId: string | undefined,
+  closedBy?: string | null,
+  espelho?: { periodStart: string; periodEnd: string; closingMonthYm: string },
+): Promise<RealTimesheetCloseResult | null> {
   const client = supabase as SupabaseClient | null;
   if (!client) throw new Error('Supabase não inicializado');
+  const empId = String(employeeId || '').trim();
+  if (!empId) throw new Error('employeeId é obrigatório para fechar a folha.');
 
-  const { data, error } = await client
+  const existing = await isTimesheetClosed(companyId, month, year, empId);
+  if (existing) {
+    console.warn('[FECHAMENTO IGNORADO - JÁ EXISTE]', { employeeId: empId, month, year });
+    return null;
+  }
+
+  if (espelho) {
+    assertClosingPeriodMatchesEspelho({
+      closingMonthYm: espelho.closingMonthYm,
+      periodStart: espelho.periodStart,
+      periodEnd: espelho.periodEnd,
+    });
+  }
+
+  const periodStart =
+    espelho?.periodStart ??
+    `${year}-${String(month).padStart(2, '0')}-01`;
+  const periodEnd =
+    espelho?.periodEnd ??
+    `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
+
+  console.log('[FECHAMENTO REAL START]', {
+    employeeId: empId,
+    periodStart: periodStart.slice(0, 10),
+    periodEnd: periodEnd.slice(0, 10),
+    year,
+    month,
+  });
+
+  const { closeTimesheet: engineCloseTimesheet } = await import('../engine/timeEngine');
+  const engineResult = await engineCloseTimesheet(empId, companyId, year, month);
+
+  if (engineResult.halted) {
+    const msg =
+      typeof engineResult.schedule_error === 'object' && engineResult.schedule_error !== null
+        ? `Escala ou jornada inválida (${JSON.stringify(engineResult.schedule_error)})`
+        : 'Recálculo interrompido (escala inválida)';
+    throw new Error(msg);
+  }
+
+  const ms = engineResult.engine.monthly_summary;
+  const totals = {
+    worked: engineResult.total_trabalhado,
+    extra_50: engineResult.total_extra_50,
+    extra_100: engineResult.total_extra_100,
+    negative: ms.negative_total,
+    faltas: engineResult.total_faltas,
+    noturno: ms.total_noturno,
+    atrasos: engineResult.total_atrasos,
+    banco_credito_minutes: engineResult.total_banco_credito,
+    banco_debito_minutes: engineResult.total_banco_debito,
+    dsr_extra_50: ms.dsr_extra_50,
+    dsr_extra_100: ms.dsr_extra_100,
+    bank_balance_approx: ms.bank_balance_approx,
+  };
+
+  const snapshotPayload = {
+    employee_id: empId,
+    period_start: periodStart.slice(0, 10),
+    period_end: periodEnd.slice(0, 10),
+    totals,
+    bank_hours_balance: engineResult.saldo_banco_final,
+    closed_by: closedBy ?? null,
+    violations_count: engineResult.engine.inconsistent_days,
+    total_days: engineResult.engine.total_days,
+    closed_at_iso: new Date().toISOString(),
+  };
+
+  console.log('[FECHAMENTO SNAPSHOT]', snapshotPayload);
+
+  const { data: closure, error: errClosure } = await client
     .from('timesheet_closures')
     .insert({
       company_id: companyId,
-      employee_id: employeeId,
+      employee_id: empId,
       month,
       year,
-      user_id: employeeId, // compat legado
+      user_id: empId,
+      closed_by: closedBy ?? null,
+      closed_at: new Date().toISOString(),
+      signature_metadata: { snapshot_totals_v1: totals },
+    })
+    .select()
+    .single();
+
+  if (errClosure) throw errClosure;
+
+  const closureRow = closure as Record<string, unknown>;
+  const closureId = closureRow?.id != null ? String(closureRow.id) : null;
+
+  const { data: snapIns, error: errSnap } = await client
+    .from('timesheet_snapshots')
+    .insert({
+      company_id: companyId,
+      employee_id: empId,
+      year,
+      month,
+      period_start: periodStart.slice(0, 10),
+      period_end: periodEnd.slice(0, 10),
+      totals,
+      bank_hours_balance: engineResult.saldo_banco_final,
+      timesheet_closure_id: closureId,
       closed_by: closedBy ?? null,
       closed_at: new Date().toISOString(),
     })
     .select()
     .single();
 
-  if (error) throw error;
-  return data;
-}
-
-export async function isTimesheetClosed(
-  companyId: string,
-  month: number,
-  year: number,
-  employeeId?: string,
-): Promise<boolean> {
-  const client = supabase as SupabaseClient | null;
-  if (!client) return false;
-
-  let query = client
-    .from('timesheet_closures')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('month', month)
-    .eq('year', year);
-
-  if (employeeId) {
-    query = query.eq('employee_id', employeeId);
+  if (errSnap) {
+    console.error('[FECHAMENTO] Falha ao gravar timesheet_snapshots:', errSnap);
+    throw errSnap;
   }
 
-  const { data, error } = await query.maybeSingle();
-
-  if (error) throw error;
-  return !!data;
+  console.log('[FECHAMENTO DONE]');
+  return {
+    closure: closureRow,
+    snapshot: snapIns as Record<string, unknown>,
+    totals,
+    saldo_banco_final: engineResult.saldo_banco_final,
+  };
 }
+

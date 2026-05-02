@@ -8,6 +8,10 @@ import { showFatalError, setSupabaseInfraFatal } from '../lib/supabaseInfraGuard
 import { validateSupabaseUrl } from '../lib/validateSupabaseUrl';
 import { assertEnv } from '../lib/assertEnv';
 import { checkSupabaseConnection } from '../services/checkSupabaseConnection';
+import { getSchemaGuardError } from '@/services/schemaGuard';
+import { readAuditLogsTenantIdFromEnv } from '@/services/schemaColumnDetection';
+import { IS_PRODUCTION } from '@/config/runtimeEnv';
+import { reportSchemaGuardState } from '@/services/schemaGuardReporter';
 
 interface AppInitializerProps {
   children: React.ReactNode;
@@ -79,6 +83,24 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         console.log('URL:', supabaseUrl);
         console.log('Online:', typeof navigator === 'undefined' ? true : navigator.onLine);
         console.groupEnd();
+      }
+
+      readAuditLogsTenantIdFromEnv();
+      const schemaError = getSchemaGuardError();
+      if (schemaError) {
+        void reportSchemaGuardState({
+          mode: schemaError.mode,
+          env: schemaError.env,
+          timestamp: schemaError.timestamp,
+          message: schemaError.message,
+          correlation_id: schemaError.correlation_id,
+          origin: 'AppInitializer',
+        });
+        if (schemaError.mode === 'production-error') {
+          console.error('[APP INIT] Schema Guard CRÍTICO:', schemaError);
+        } else {
+          console.warn('[APP INIT] Schema Guard (dev):', schemaError);
+        }
       }
 
       if (!supabaseUrl || !supabaseKey) {

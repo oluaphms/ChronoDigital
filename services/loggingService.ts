@@ -7,6 +7,17 @@ const listeners = new Set<AlertListener>();
 const STORAGE_KEY = 'smartponto_audit_logs';
 const MAX_LOCAL = 1000;
 
+/** UUID em formato lexical (PostgreSQL uuid); não valida checksum de variant. */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertAuditLogsUuid(id: string, context = 'audit_logs'): void {
+  const s = String(id || '').trim();
+  if (!UUID_REGEX.test(s)) {
+    throw new Error(`${context}: id inválido (esperado formato UUID)`);
+  }
+}
+
 export const LoggingService = {
   subscribe(listener: AlertListener) {
     listeners.add(listener);
@@ -24,9 +35,12 @@ export const LoggingService = {
 
     if (isSupabaseConfigured()) {
       try {
+        assertAuditLogsUuid(logEntry.id);
+        const tsIso = logEntry.timestamp.toISOString();
         await db.insert('audit_logs', {
           id: logEntry.id,
-          timestamp: logEntry.timestamp.toISOString(),
+          timestamp: tsIso,
+          created_at: tsIso,
           severity: logEntry.severity,
           action: logEntry.action,
           user_id: logEntry.userId ?? null,

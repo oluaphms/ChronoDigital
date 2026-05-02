@@ -45,6 +45,10 @@ import {
 import { LoggingService } from '../../../services/loggingService';
 import { LogSeverity } from '../../../types';
 
+/** Espelho: tooltip único quando a folha do período está fechada (coerente com bloqueio no banco/API). */
+const TOOLTIP_PERIODO_FECHADO_HARD_LOCK =
+  'Período fechado. Reabra oficialmente para editar/importar batidas.';
+
 /** Filtros do espelho por utilizador — sobrevivem a novo login na mesma aba/navegador. */
 function adminTimesheetFiltersKey(userId: string) {
   return `pontowebdesk:admin-timesheet-filters:${userId}`;
@@ -116,6 +120,8 @@ const AdminTimesheet: React.FC = () => {
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
   });
   const [closingLoading, setClosingLoading] = useState(false);
+  /** Mês do período do espelho já fechado oficialmente — bloqueia edição e novo fecho na UI. */
+  const [periodClosedLock, setPeriodClosedLock] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -203,6 +209,33 @@ const AdminTimesheet: React.FC = () => {
     }
     setFiltersHydrated(true);
   }, [user?.id]);
+
+  /** Alinha “mês a fechar” com o início do período visível (mês civil único). */
+  useEffect(() => {
+    if (!periodValid || !periodStart || periodStart.length < 7) return;
+    setClosingMonth(periodStart.slice(0, 7));
+  }, [periodValid, periodStart]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!companyId || !filterUserId || !periodValid || !periodStart || periodStart.length < 10) {
+        if (!cancelled) setPeriodClosedLock(false);
+        return;
+      }
+      const y = Number(periodStart.slice(0, 4));
+      const mo = Number(periodStart.slice(5, 7));
+      try {
+        const closed = await isTimesheetClosed(companyId, mo, y, filterUserId);
+        if (!cancelled) setPeriodClosedLock(closed);
+      } catch {
+        if (!cancelled) setPeriodClosedLock(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, filterUserId, periodStart, periodValid]);
 
   /** Persiste filtros para o próximo acesso. */
   useEffect(() => {
@@ -324,6 +357,10 @@ const AdminTimesheet: React.FC = () => {
   }) => {
     const cid = String(companyId ?? '').trim();
     if (!cid) return;
+    if (periodClosedLock) {
+      toast.addToast('error', 'Período fechado. Não é possível incluir batidas.');
+      return;
+    }
 
     const buildMergeRow = (id: string, createdIso: string): TimeRecord => ({
       id,
@@ -479,6 +516,21 @@ const AdminTimesheet: React.FC = () => {
       toast.addToast('error', 'Selecione um colaborador para fechar a folha.');
       return;
     }
+    if (!periodValid) {
+      toast.addToast('error', 'Defina o período completo do espelho (início e fim).');
+      return;
+    }
+    if (periodClosedLock) {
+      toast.addToast('info', 'Este período já está fechado.');
+      return;
+    }
+    if (closingMonth !== periodStart.slice(0, 7)) {
+      toast.addToast(
+        'error',
+        'Período exibido diferente do período de fechamento. Ajuste os filtros do espelho ou o mês a fechar.',
+      );
+      return;
+    }
     const [y, m] = closingMonth.split('-').map(Number);
     if (!y || !m) return;
     setClosingLoading(true);
@@ -486,13 +538,32 @@ const AdminTimesheet: React.FC = () => {
       const already = await isTimesheetClosed(companyId, m, y, filterUserId);
       if (already) {
         toast.addToast('info', 'Este mês já consta como fechado.');
+        setPeriodClosedLock(true);
         return;
       }
-      await closeTimesheet(companyId, m, y, filterUserId, user?.id);
+      console.log('[FECHAMENTO INPUT]', {
+        totalDays: periodDates.length,
+        registros: displayRecords.length,
+        calculos: 'recalculate_month via timeEngine.closeTimesheet',
+        periodStart,
+        periodEnd,
+        closingMonth,
+      });
+      const result = await closeTimesheet(companyId, m, y, filterUserId, user?.id, {
+        periodStart,
+        periodEnd,
+        closingMonthYm: closingMonth,
+      });
+      if (!result) {
+        console.warn('[FECHAMENTO IGNORADO - JÁ EXISTE]');
+        toast.addToast('info', 'Este mês já consta como fechado.');
+        setPeriodClosedLock(true);
+        return;
+      }
       invalidateAfterTimesheetMonthClose(companyId);
       await LoggingService.log({
         severity: LogSeverity.SECURITY,
-        action: 'ADMIN_CLOSE_TIMESHEET_MONTH',
+        action: 'TIMESHEET_CLOSE',
         userId: user?.id,
         userName: user?.nome,
         companyId,
@@ -500,13 +571,27 @@ const AdminTimesheet: React.FC = () => {
           employeeId: filterUserId,
           month: m,
           year: y,
+          periodStart,
+          periodEnd,
+          totals: result.totals,
+          saldo_banco_final: result.saldo_banco_final,
+          snapshot_id: result.snapshot?.id,
+          closure_id: result.closure?.id,
         },
       });
+      console.log('[FECHAMENTO TOTAIS]', result.totals);
+      console.log('[FECHAMENTO BH]', {
+        credited: result.totals?.banco_credito_minutes,
+        debited: result.totals?.banco_debito_minutes,
+        saldo_final: result.saldo_banco_final,
+      });
+      setPeriodClosedLock(true);
       toast.addToast('success', 'Folha fechada com sucesso.');
       await loadEspelho();
     } catch (e) {
       console.error(e);
-      toast.addToast('error', 'Não foi possível fechar a folha.');
+      const msg = e instanceof Error ? e.message : 'Não foi possível fechar a folha.';
+      toast.addToast('error', msg);
     } finally {
       setClosingLoading(false);
     }
@@ -517,7 +602,7 @@ const AdminTimesheet: React.FC = () => {
     const fromRep = !!(record && isRepMirrorRecord(record));
     const display = time != null && String(time).trim() !== '' ? String(time).trim() : EMPTY_DASH;
     const isEmpty = display === EMPTY_DASH;
-    const clickable = !!(record && isManual);
+    const clickable = !!(record && isManual && !periodClosedLock);
     return (
       <span
         className={`inline-flex items-center gap-1 px-2 py-1 rounded text-sm font-medium ${
@@ -541,7 +626,9 @@ const AdminTimesheet: React.FC = () => {
           isEmpty
             ? 'Sem batida'
             : isManual
-              ? `Batida manual: ${record?.manual_reason || 'Sem motivo'}. Clique para editar. · Origem: ${resolvePunchOrigin(record!).label}`
+              ? periodClosedLock
+                ? `Batida manual: ${record?.manual_reason || 'Sem motivo'}. ${TOOLTIP_PERIODO_FECHADO_HARD_LOCK} Origem: ${resolvePunchOrigin(record!).label}`
+                : `Batida manual: ${record?.manual_reason || 'Sem motivo'}. Clique para editar. · Origem: ${resolvePunchOrigin(record!).label}`
               : `${fromRep ? 'Batida do registrador (REP / relógio)' : 'Batida pelo app/dispositivo'}. Não editável no espelho. · Origem: ${record ? resolvePunchOrigin(record).label : '—'}`
         }
       >
@@ -696,27 +783,44 @@ const AdminTimesheet: React.FC = () => {
             type="button"
             size="sm"
             className="inline-flex items-center gap-2"
+            disabled={periodClosedLock || !filterUserId || !periodValid}
+            title={
+              periodClosedLock
+                ? `${TOOLTIP_PERIODO_FECHADO_HARD_LOCK} Não é possível adicionar batidas.`
+                : undefined
+            }
             onClick={() => setShowAddModal(true)}
           >
             <Plus className="w-4 h-4" />
             Adicionar batida
           </Button>
-          <Link
-            to={
-              filterUserId
-                ? `/admin/import-rep?forceUserId=${encodeURIComponent(filterUserId)}`
-                : '/admin/import-rep'
-            }
-            className="inline-flex items-center justify-center gap-2 font-bold rounded-2xl transition-all active:scale-[0.98] border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-2 text-xs"
-            title={
-              filterUserId
-                ? 'Envie um AFD/TXT do relógio e atribua as batidas a este colaborador (quando o PIS do arquivo não casa com o cadastro)'
-                : 'Importar arquivo AFD ou TXT das marcações'
-            }
-          >
-            <Upload className="w-4 h-4" aria-hidden />
-            Importar arquivo REP
-          </Link>
+          {periodClosedLock ? (
+            <span
+              className="inline-flex items-center justify-center gap-2 font-bold rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-4 py-2 text-xs cursor-not-allowed select-none opacity-70"
+              title={`${TOOLTIP_PERIODO_FECHADO_HARD_LOCK} Importação REP bloqueada.`}
+              role="presentation"
+            >
+              <Upload className="w-4 h-4 shrink-0" aria-hidden />
+              Importar arquivo REP
+            </span>
+          ) : (
+            <Link
+              to={
+                filterUserId
+                  ? `/admin/import-rep?forceUserId=${encodeURIComponent(filterUserId)}`
+                  : '/admin/import-rep'
+              }
+              className="inline-flex items-center justify-center gap-2 font-bold rounded-2xl transition-all active:scale-[0.98] border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-2 text-xs"
+              title={
+                filterUserId
+                  ? 'Envie um AFD/TXT do relógio e atribua as batidas a este colaborador (quando o PIS do arquivo não casa com o cadastro)'
+                  : 'Importar arquivo AFD ou TXT das marcações'
+              }
+            >
+              <Upload className="w-4 h-4" aria-hidden />
+              Importar arquivo REP
+            </Link>
+          )}
         </div>
       </section>
 
@@ -733,8 +837,12 @@ const AdminTimesheet: React.FC = () => {
             <input
               type="month"
               value={closingMonth}
+              title={
+                periodClosedLock ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK : 'Sincronizado com o primeiro dia do período do espelho.'
+              }
               onChange={(e) => setClosingMonth(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm"
+              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm disabled:opacity-70"
+              disabled={periodClosedLock}
             />
           </div>
           <Button
@@ -742,7 +850,16 @@ const AdminTimesheet: React.FC = () => {
             variant="secondary"
             size="sm"
             className="inline-flex items-center gap-2"
-            disabled={closingLoading || !filterUserId}
+            disabled={
+              closingLoading || !filterUserId || !periodValid || periodClosedLock
+            }
+            title={
+              periodClosedLock
+                ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK
+                : !periodValid
+                  ? 'Defina o período completo no espelho.'
+                  : undefined
+            }
             onClick={() => void handleCloseMonth()}
           >
             <Lock className="w-4 h-4" />
@@ -1115,6 +1232,7 @@ const AdminTimesheet: React.FC = () => {
       />
       <EditTimeRecordModal
         isOpen={showEditModal}
+        readOnly={periodClosedLock}
         onClose={() => {
           setShowEditModal(false);
           setRecordToEdit(null);

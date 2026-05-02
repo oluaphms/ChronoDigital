@@ -43,6 +43,11 @@ import type { RepDeviceClockSet, RepExchangeOp, RepUserFromDevice } from '../../
 import { upsertTimeClockDeviceMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
 import type { RepDeviceRowForMirror } from '../../../modules/timeclock/utils/timeclockDeviceMirror';
 import { invalidateCompanyListCaches } from '../../services/queryCache';
+import {
+  isTimesheetClosed,
+  logBlockedTimesheetMutation,
+  monthYearFromCivilYmd,
+} from '../../services/timesheetClosure';
 
 type RepDeviceRow = {
   id: string;
@@ -1431,6 +1436,30 @@ const AdminRepDevices: React.FC = () => {
       }
 
       if (!targetTimeRecordId) {
+        const rawDh = String(row.data_hora ?? '');
+        const mYmd = /^(\d{4}-\d{2}-\d{2})/.exec(rawDh.trim());
+        const civilYmd = mYmd ? mYmd[1].slice(0, 10) : null;
+        if (civilYmd && /^\d{4}-\d{2}-\d{2}$/.test(civilYmd)) {
+          const cy = monthYearFromCivilYmd(civilYmd);
+          if (
+            cy.year &&
+            cy.month &&
+            (await isTimesheetClosed(companyId, cy.month, cy.year, emp.id))
+          ) {
+            void logBlockedTimesheetMutation({
+              companyId,
+              auditActionType: 'IMPORT_BLOCKED_CLOSED_PERIOD',
+              employeeId: emp.id,
+              date: civilYmd,
+              refIso: row.data_hora,
+              userId: user?.id ?? null,
+              userName: user?.nome ?? null,
+              extra: { rep_punch_log_id: row.id, nsr: row.nsr, flow: 'tryFallbackPromotePendingByLocalMatch' },
+            });
+            continue;
+          }
+        }
+
         const newId = crypto.randomUUID();
         try {
           await createTimeRecord({

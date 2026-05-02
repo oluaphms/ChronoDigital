@@ -58,6 +58,7 @@ import RoleGuard from './src/components/auth/RoleGuard';
 import ProtectedRoute from './src/components/auth/ProtectedRoute';
 import { PresentationPanel } from './src/components/auth/PresentationPanel';
 import { LoginCard, type LoginRole } from './src/components/auth/LoginCard';
+import SchemaGuardBadge from './src/components/dev/SchemaGuardBadge';
 import { useSettings, SettingsProvider } from './src/contexts/SettingsContext';
 import { useLanguage } from './src/contexts/LanguageContext';
 import { i18n } from './lib/i18n';
@@ -1811,6 +1812,7 @@ const AppContent: React.FC = () =>
     <QueryClientProvider client={queryClient}>
       <SettingsProvider>
         <AppMain />
+        <SchemaGuardBadge />
       </SettingsProvider>
     </QueryClientProvider>
   );

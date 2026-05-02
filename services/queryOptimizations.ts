@@ -16,6 +16,21 @@ import {
   getTimeRecordsByDateForUser,
   getTimeRecordsByUser,
 } from './timeRecords.service';
+import {
+  getAuditLogsSelectColumns,
+  hasColumn,
+  clearSchemaColumnCache,
+  readAuditLogsTenantIdFromEnv,
+  AUDIT_LOGS_TENANT_ID_CACHE_KEY,
+} from '../src/services/schemaColumnDetection';
+
+export {
+  getAuditLogsSelectColumns,
+  hasColumn,
+  clearSchemaColumnCache,
+  readAuditLogsTenantIdFromEnv,
+  AUDIT_LOGS_TENANT_ID_CACHE_KEY,
+};
 
 // Lazy getter — resolve o cliente apenas quando uma query é executada,
 // garantindo que as variáveis de ambiente já foram carregadas.
@@ -171,23 +186,19 @@ export const requestsQueries = {
 };
 
 /**
- * ❌ RUIM: SELECT * FROM audit_logs
- * ✅ BOM: SELECT id, user_id, action, created_at
- * 
- * Redução: 5-10MB → 100KB (98% redução)
+ * `audit_logs`: projeção via `getAuditLogsSelectColumns()` (com ou sem `tenant_id` segundo `information_schema`).
  */
 export const auditLogsQueries = {
-  // Otimizado: Apenas colunas necessárias + paginação
   async getAuditLogsByCompany(companyId: string, limit = 50, offset = 0) {
+    const cols = await getAuditLogsSelectColumns();
     return getClient()
       .from('audit_logs')
-      .select('id, user_id, action, table, record_id, created_at')
+      .select(cols)
       .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
+      .order('timestamp', { ascending: false })
       .range(offset, offset + limit - 1);
   },
 
-  // Otimizado: Contar logs sem carregar dados
   async countAuditLogsByCompany(companyId: string) {
     return getClient()
       .from('audit_logs')
@@ -195,13 +206,13 @@ export const auditLogsQueries = {
       .eq('company_id', companyId);
   },
 
-  // Otimizado: Logs por usuário
   async getAuditLogsByUser(userId: string, limit = 50, offset = 0) {
+    const cols = await getAuditLogsSelectColumns();
     return getClient()
       .from('audit_logs')
-      .select('id, action, table, record_id, created_at')
+      .select(cols)
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
+      .order('timestamp', { ascending: false })
       .range(offset, offset + limit - 1);
   },
 };

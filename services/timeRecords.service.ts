@@ -4,6 +4,7 @@
  */
 
 import { getSupabaseClientOrThrow } from '../src/lib/supabaseClient';
+import { throwIfTimesheetClosedForPunchMutation } from '../src/services/timesheetClosure';
 import { db, type Filter } from './supabaseClient';
 
 type DbSelectArg2 = Parameters<typeof db.select>[2];
@@ -107,7 +108,46 @@ export async function getTimeRecordsForEmployeeDashboard(userId: string): Promis
   });
 }
 
+type TimeRecordLockRow = {
+  company_id: string;
+  user_id: string;
+  timestamp: string | null;
+  created_at: string;
+};
+
+async function selectTimeRecordLockRow(id: string): Promise<TimeRecordLockRow | null> {
+  const { data, error } = await getSupabaseClientOrThrow()
+    .from('time_records')
+    .select('company_id, user_id, timestamp, created_at')
+    .eq('id', id)
+    .maybeSingle();
+  throwIfError(error, 'selectTimeRecordLockRow');
+  return data ? (data as TimeRecordLockRow) : null;
+}
+
+function refInstantFromLockRow(row: TimeRecordLockRow): string | null {
+  const t = row.timestamp != null && String(row.timestamp).trim() ? String(row.timestamp).trim() : '';
+  const c = row.created_at != null && String(row.created_at).trim() ? String(row.created_at).trim() : '';
+  return t || c || null;
+}
+
 export async function createTimeRecord(row: Record<string, unknown>): Promise<void> {
+  const companyId = String(row.company_id ?? '').trim();
+  const employeeId = String(row.user_id ?? '').trim();
+  const refIso =
+    (typeof row.timestamp === 'string' && row.timestamp.trim() ? row.timestamp : null) ||
+    (typeof row.created_at === 'string' && row.created_at.trim() ? row.created_at : null);
+
+  if (companyId && employeeId) {
+    await throwIfTimesheetClosedForPunchMutation({
+      companyId,
+      employeeId,
+      refIso,
+      auditSource: 'services/timeRecords.service.createTimeRecord',
+      auditAction: 'INSERT_PUNCH',
+    });
+  }
+
   const { error } = await getSupabaseClientOrThrow().from('time_records').insert(row);
   throwIfError(error, 'createTimeRecord');
 }
@@ -130,11 +170,53 @@ export async function findTimeRecordIdByCompanySourceNsr(
 }
 
 export async function updateTimeRecord(id: string, patch: Record<string, unknown>): Promise<void> {
+  const row = await selectTimeRecordLockRow(id);
+  if (!row) throw new Error('Registro de ponto não encontrado.');
+
+  const oldRef = refInstantFromLockRow(row);
+  await throwIfTimesheetClosedForPunchMutation({
+    companyId: row.company_id,
+    employeeId: row.user_id,
+    refIso: oldRef,
+    auditSource: 'services/timeRecords.service.updateTimeRecord',
+    auditAction: 'UPDATE_PUNCH',
+  });
+
+  const patchTs =
+    patch.timestamp !== undefined && patch.timestamp != null ? String(patch.timestamp).trim() : undefined;
+  const patchCreated =
+    patch.created_at !== undefined && patch.created_at != null ? String(patch.created_at).trim() : undefined;
+  const newRef =
+    patchTs ??
+    patchCreated ??
+    oldRef ??
+    undefined;
+  if (newRef !== oldRef) {
+    await throwIfTimesheetClosedForPunchMutation({
+      companyId: row.company_id,
+      employeeId: row.user_id,
+      refIso: newRef || null,
+      auditSource: 'services/timeRecords.service.updateTimeRecord:novo-instante',
+      auditAction: 'UPDATE_PUNCH',
+    });
+  }
+
   const { error } = await getSupabaseClientOrThrow().from('time_records').update(patch).eq('id', id);
   throwIfError(error, 'updateTimeRecord');
 }
 
 export async function deleteTimeRecord(id: string): Promise<void> {
+  const row = await selectTimeRecordLockRow(id);
+  if (!row) throw new Error('Registro de ponto não encontrado.');
+
+  await throwIfTimesheetClosedForPunchMutation({
+    companyId: row.company_id,
+    employeeId: row.user_id,
+    refIso: refInstantFromLockRow(row),
+    auditSource: 'services/timeRecords.service.deleteTimeRecord',
+    auditAction: 'DELETE_PUNCH',
+  });
+
   const { error } = await getSupabaseClientOrThrow().from('time_records').delete().eq('id', id);
   throwIfError(error, 'deleteTimeRecord');
 }
@@ -145,6 +227,23 @@ export async function updateTimeRecordPunchInstant(
   newCreatedAtIso: string,
   updatedAtIso: string,
 ): Promise<void> {
+  const row = await selectTimeRecordLockRow(id);
+  if (!row) throw new Error('Registro de ponto não encontrado.');
+  await throwIfTimesheetClosedForPunchMutation({
+    companyId: row.company_id,
+    employeeId: row.user_id,
+    refIso: refInstantFromLockRow(row),
+    auditSource: 'services/timeRecords.service.updateTimeRecordPunchInstant:antes',
+    auditAction: 'UPDATE_PUNCH',
+  });
+  await throwIfTimesheetClosedForPunchMutation({
+    companyId: row.company_id,
+    employeeId: row.user_id,
+    refIso: newCreatedAtIso,
+    auditSource: 'services/timeRecords.service.updateTimeRecordPunchInstant:depois',
+    auditAction: 'UPDATE_PUNCH',
+  });
+
   const { error } = await getSupabaseClientOrThrow()
     .from('time_records')
     .update({ created_at: newCreatedAtIso, updated_at: updatedAtIso })
@@ -168,6 +267,14 @@ export async function insertAdminMirrorTimeRecord(
   if (!userId || !type || !createdAt) {
     throw new Error('insertAdminMirrorTimeRecord: user_id, type e created_at são obrigatórios.');
   }
+
+  await throwIfTimesheetClosedForPunchMutation({
+    companyId,
+    employeeId: userId,
+    refIso: createdAt,
+    auditSource: 'services/timeRecords.service.insertAdminMirrorTimeRecord:precheck-rpc',
+    auditAction: 'INSERT_PUNCH',
+  });
 
   const sb = getSupabaseClientOrThrow();
   const { data: rpcData, error: rpcError } = await sb.rpc('insert_time_record_for_user', {
