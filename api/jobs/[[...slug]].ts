@@ -9,6 +9,9 @@ import { createClient } from '@supabase/supabase-js';
 import { getCallerContext, isAdminOrHr } from '../_shared/callerContext';
 import { JOB_TYPE } from '../../src/services/jobs/jobTypes';
 import { processJobs } from '../../src/services/jobs/processJobs';
+import { calculatePeriodTimesheets } from '../../src/services/payrollCalculator';
+import { setSupabaseServiceRoleOverride } from '../../src/lib/supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const corsAll: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -28,6 +31,28 @@ function isJobIdSegment(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
 
+/**
+ * Cálculo síncrono quando a fila `jobs` não está disponível (fail-safe real).
+ */
+async function executeCalcPeriodFallback(
+  serviceClient: SupabaseClient,
+  employee_id: string,
+  companyId: string,
+  start_date: string,
+  end_date: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  setSupabaseServiceRoleOverride(serviceClient);
+  try {
+    await calculatePeriodTimesheets(employee_id, companyId, start_date, end_date);
+    return { ok: true };
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: message };
+  } finally {
+    setSupabaseServiceRoleOverride(null);
+  }
+}
+
 async function handleCalcPeriod(request: Request): Promise<Response> {
   const corsHeaders = { ...corsAll, 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
   if (request.method === 'OPTIONS') {
@@ -35,7 +60,7 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
   }
   if (request.method !== 'POST') {
     return Response.json(
-      { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      { error: 'METHOD_NOT_ALLOWED', allowed: ['POST'] },
       { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
@@ -151,8 +176,32 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     .single();
 
   if (insErr || !inserted?.id) {
+    const message = insErr?.message || 'Falha ao enfileirar job.';
+    const fallbackEligible =
+      /does not exist|permission|schema|relation|not found/i.test(message) || message.includes('PGRST');
+
+    if (fallbackEligible) {
+      const direct = await executeCalcPeriodFallback(
+        serviceClient,
+        employee_id,
+        caller.companyId,
+        start_date,
+        end_date,
+      );
+      if (direct.ok) {
+        return Response.json(
+          { success: true, mode: 'direct_fallback', fallback: 'calculatePeriodTimesheets' },
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+      return Response.json(
+        { error: direct.error || 'Falha no cálculo direto.', code: 'DIRECT_CALC_FAILED' },
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     return Response.json(
-      { error: insErr?.message || 'Falha ao enfileirar job.', code: 'INSERT_FAILED' },
+      { error: message, code: 'INSERT_FAILED' },
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
@@ -170,7 +219,7 @@ async function handleProcess(request: Request): Promise<Response> {
   }
   if (request.method !== 'POST') {
     return Response.json(
-      { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      { error: 'METHOD_NOT_ALLOWED', allowed: ['POST'] },
       { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
@@ -244,7 +293,7 @@ async function handleJobGet(request: Request, jobId: string): Promise<Response> 
   }
   if (request.method !== 'GET') {
     return Response.json(
-      { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' },
+      { error: 'METHOD_NOT_ALLOWED', allowed: ['GET'] },
       { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }

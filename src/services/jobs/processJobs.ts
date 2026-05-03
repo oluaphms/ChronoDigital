@@ -36,8 +36,8 @@ function stripRecalcResult(raw: Awaited<ReturnType<typeof recalculate_period>>) 
   return {
     total_days: raw.total_days,
     inconsistent_days: raw.inconsistent_days,
-    halted: raw.halted ?? false,
-    schedule_error: raw.schedule_error,
+    halted: false,
+    schedule_error: null,
     violations_sample: (raw.violations ?? []).slice(0, 20),
     monthly_summary: raw.monthly_summary,
   };

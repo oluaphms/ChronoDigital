@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { isSupabaseConfigured } from '../../services/supabaseClient';
+import { isSupabaseConfigured, supabase } from '../../services/supabaseClient';
 import { insertAdminMirrorTimeRecord } from '../../../services/timeRecords.service';
 import { buscarEspelhoAdmin, buscarFiltrosEspelhoAdmin } from '../../../services/api';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
@@ -44,6 +44,17 @@ import {
 } from '../../services/professionalPDF.service';
 import { LoggingService } from '../../../services/loggingService';
 import { LogSeverity } from '../../../types';
+import { mapTimesheetForUI, type TimesheetUIRow } from '../../services/timesheetProcessingStatus';
+import {
+  computePeriodHealthSummary,
+  deriveOperationalDisplayStatus,
+  DRIFT_ALERT_COPY,
+  mapProcessingStatusToLabel,
+  operationalBadgeVariant,
+  operationalBadgeClassName,
+  operationalStatusTooltip,
+  type OperationalDisplayStatus,
+} from '../../utils/timesheetOperationalUx';
 
 /** Espelho: tooltip único quando a folha do período está fechada (coerente com bloqueio no banco/API). */
 const TOOLTIP_PERIODO_FECHADO_HARD_LOCK =
@@ -122,6 +133,11 @@ const AdminTimesheet: React.FC = () => {
   const [closingLoading, setClosingLoading] = useState(false);
   /** Mês do período do espelho já fechado oficialmente — bloqueia edição e novo fecho na UI. */
   const [periodClosedLock, setPeriodClosedLock] = useState(false);
+
+  /** Linhas `timesheets_daily` do período (UX auditoria / badges). */
+  const [dailyCalcUiByDate, setDailyCalcUiByDate] = useState<Map<string, TimesheetUIRow>>(() => new Map());
+  /** Admin: permite fechar apesar de inconsistent/error operacional no período. */
+  const [adminCloseOverride, setAdminCloseOverride] = useState(false);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -341,6 +357,77 @@ const AdminTimesheet: React.FC = () => {
     if (!periodValid) return [];
     return enumerateLocalCalendarDays(periodStart, periodEnd);
   }, [periodStart, periodEnd, periodValid]);
+
+  useEffect(() => {
+    setAdminCloseOverride(false);
+  }, [periodStart, periodEnd, filterUserId]);
+
+  useEffect(() => {
+    if (!filtersHydrated || !periodValid || !filterUserId || !companyId || !isSupabaseConfigured()) {
+      setDailyCalcUiByDate(new Map());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('timesheets_daily')
+        .select('date, raw_data')
+        .eq('employee_id', filterUserId)
+        .eq('company_id', companyId)
+        .gte('date', periodStart)
+        .lte('date', periodEnd);
+      if (cancelled) return;
+      if (error) {
+        console.warn('[Espelho] timesheets_daily:', error.message);
+        setDailyCalcUiByDate(new Map());
+        return;
+      }
+      const m = new Map<string, TimesheetUIRow>();
+      for (const row of data ?? []) {
+        const dateKey = String(row.date).slice(0, 10);
+        m.set(dateKey, mapTimesheetForUI({ raw_data: (row.raw_data ?? {}) as Record<string, unknown> }));
+      }
+      setDailyCalcUiByDate(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filtersHydrated, periodValid, filterUserId, companyId, periodStart, periodEnd]);
+
+  const operationalStatusesForPeriod = useMemo(() => {
+    const list: OperationalDisplayStatus[] = [];
+    for (const d of periodDates) {
+      const ui = dailyCalcUiByDate.get(d);
+      if (!ui) continue;
+      list.push(
+        deriveOperationalDisplayStatus({
+          processing_status: ui.processing_status,
+          replay_status: ui.replay_status,
+          has_drift: ui.has_drift,
+        }),
+      );
+    }
+    return list;
+  }, [periodDates, dailyCalcUiByDate]);
+
+  const periodHealthSummary = useMemo(
+    () => computePeriodHealthSummary(operationalStatusesForPeriod),
+    [operationalStatusesForPeriod],
+  );
+
+  const periodOperationalBlocked = useMemo(
+    () => operationalStatusesForPeriod.some((s) => s === 'inconsistent' || s === 'error'),
+    [operationalStatusesForPeriod],
+  );
+
+  const periodHasDrift = useMemo(
+    () => periodDates.some((d) => dailyCalcUiByDate.get(d)?.has_drift),
+    [periodDates, dailyCalcUiByDate],
+  );
+
+  const closeBlockedByOperational = Boolean(
+    periodOperationalBlocked && !(user?.role === 'admin' && adminCloseOverride),
+  );
 
   const formatDateBR = (dateStr: string) => {
     const [y, m, day] = dateStr.split('-');
@@ -851,22 +938,111 @@ const AdminTimesheet: React.FC = () => {
             size="sm"
             className="inline-flex items-center gap-2"
             disabled={
-              closingLoading || !filterUserId || !periodValid || periodClosedLock
+              closingLoading ||
+              !filterUserId ||
+              !periodValid ||
+              periodClosedLock ||
+              closeBlockedByOperational
             }
             title={
               periodClosedLock
                 ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK
-                : !periodValid
-                  ? 'Defina o período completo no espelho.'
-                  : undefined
+                : closeBlockedByOperational
+                  ? 'Há dias com divergência ou erro de cálculo (replay). Corrija ou use override de administrador.'
+                  : !periodValid
+                    ? 'Defina o período completo no espelho.'
+                    : undefined
             }
             onClick={() => void handleCloseMonth()}
           >
             <Lock className="w-4 h-4" />
             {closingLoading ? 'Fechando…' : 'Fechar folha'}
           </Button>
+          {periodOperationalBlocked && user?.role !== 'admin' && (
+            <p className="w-full text-sm text-red-700 dark:text-red-300 mt-2">
+              Fechamento bloqueado: existe divergência ou erro de cálculo em pelo menos um dia do período.
+              Solicite um administrador para analisar ou aplicar override.
+            </p>
+          )}
+          {periodOperationalBlocked && user?.role === 'admin' && (
+            <label className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-100 mt-2 max-w-xl cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-1 rounded border-slate-300"
+                checked={adminCloseOverride}
+                onChange={(e) => setAdminCloseOverride(e.target.checked)}
+              />
+              <span>
+                Permitir fechar a folha mesmo com divergência ou erro de cálculo no período (override
+                administrativo — use apenas após validação explícita).
+              </span>
+            </label>
+          )}
         </div>
       </section>
+
+      {/* Saúde do cálculo + alerta de drift */}
+      {periodValid && filterUserId && operationalStatusesForPeriod.length > 0 && (
+        <section className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 shadow-sm print:hidden">
+          <div className="px-4 pt-4 pb-2 border-b border-slate-100 dark:border-slate-800">
+            <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Saúde do cálculo (período)
+            </h2>
+          </div>
+          <div className="p-4 grid grid-cols-2 lg:grid-cols-7 gap-3 text-sm">
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 bg-emerald-50/80 dark:bg-emerald-950/20">
+              <div className="text-xs font-semibold text-emerald-800 dark:text-emerald-200">Confiável</div>
+              <div className="text-lg font-bold text-emerald-700 dark:text-emerald-300">
+                {periodHealthSummary.pctReliable}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 bg-amber-50/80 dark:bg-amber-950/20">
+              <div className="text-xs font-semibold text-amber-800 dark:text-amber-200">Com fallback</div>
+              <div className="text-lg font-bold text-amber-800 dark:text-amber-300">
+                {periodHealthSummary.pctFallback}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 bg-amber-50/60 dark:bg-amber-950/15">
+              <div className="text-xs font-semibold text-amber-900 dark:text-amber-100">Com drift</div>
+              <div className="text-lg font-bold text-amber-900 dark:text-amber-200">
+                {periodHealthSummary.pctDrift}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 bg-rose-50/80 dark:bg-rose-950/25">
+              <div className="text-xs font-semibold text-rose-800 dark:text-rose-200">Divergência</div>
+              <div className="text-lg font-bold text-rose-700 dark:text-rose-300">
+                {periodHealthSummary.pctInconsistent}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 bg-red-50/80 dark:bg-red-950/25">
+              <div className="text-xs font-semibold text-red-800 dark:text-red-200">Erro</div>
+              <div className="text-lg font-bold text-red-700 dark:text-red-300">
+                {periodHealthSummary.pctError}%
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 p-3 text-slate-600 dark:text-slate-400 col-span-2 lg:col-span-2">
+              <div className="text-xs font-semibold">Dias com linha calculada</div>
+              <div className="text-lg font-bold text-slate-800 dark:text-slate-100">
+                {periodHealthSummary.total} / {periodDates.length}
+              </div>
+            </div>
+          </div>
+          {periodHealthSummary.pctOther > 0 && (
+            <p className="px-4 pb-2 text-xs text-slate-500 dark:text-slate-400">
+              Outros estados (protegido / referência inválida): {periodHealthSummary.pctOther}% dos dias com linha
+              calculada.
+            </p>
+          )}
+          {periodHasDrift && (
+            <div
+              className="mx-4 mb-4 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-950 dark:text-amber-100"
+              role="status"
+            >
+              <strong className="font-semibold">Drift de regras ou motor:</strong> {DRIFT_ALERT_COPY}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Legenda + filtro de batidas */}
       <div className="flex flex-wrap gap-3 text-sm text-slate-600 dark:text-slate-400 print:text-xs">
@@ -905,6 +1081,27 @@ const AdminTimesheet: React.FC = () => {
         >
           Mostrar todas
         </button>
+        <div className="w-full border-t border-slate-200 dark:border-slate-700 pt-3 mt-1 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-600 dark:text-slate-400">
+          <span className="font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+            Estado do cálculo (persistido)
+          </span>
+          <span className="inline-flex items-center gap-2" title={operationalStatusTooltip('ok')}>
+            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${operationalBadgeClassName('green')}`} />
+            {mapProcessingStatusToLabel('ok')}
+          </span>
+          <span className="inline-flex items-center gap-2" title={operationalStatusTooltip('fallback_schedule')}>
+            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${operationalBadgeClassName('yellow')}`} />
+            {mapProcessingStatusToLabel('fallback_schedule')}
+          </span>
+          <span className="inline-flex items-center gap-2" title={operationalStatusTooltip('drift')}>
+            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${operationalBadgeClassName('yellow')}`} />
+            {mapProcessingStatusToLabel('drift')}
+          </span>
+          <span className="inline-flex items-center gap-2" title={operationalStatusTooltip('inconsistent')}>
+            <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${operationalBadgeClassName('red')}`} />
+            {mapProcessingStatusToLabel('inconsistent')}
+          </span>
+        </div>
       </div>
 
       {/* Tabela */}
@@ -1113,7 +1310,24 @@ const AdminTimesheet: React.FC = () => {
                   return (
                     <tr key={date} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                       <td className="px-3 py-2 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top">
-                        <div>{formatDateBR(date)}</div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>{formatDateBR(date)}</span>
+                          {dailyCalcUiByDate.has(date) &&
+                            (() => {
+                              const ui = dailyCalcUiByDate.get(date)!;
+                              const op = deriveOperationalDisplayStatus(ui);
+                              const variant = operationalBadgeVariant(op);
+                              const tip = `${mapProcessingStatusToLabel(op)} — ${operationalStatusTooltip(op)}`;
+                              return (
+                                <span
+                                  className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${operationalBadgeClassName(variant)}`}
+                                  title={tip}
+                                  aria-label={tip}
+                                  role="img"
+                                />
+                              );
+                            })()}
+                        </div>
                         {dataNote && (
                           <div
                             className={`text-xs font-semibold mt-0.5 ${

@@ -6,6 +6,16 @@
 
 import { db, checkSupabaseConfigured, isSupabaseConfigured } from './supabaseClient';
 import { processEmployeeDay } from '../engine/timeEngine';
+import { snapshotPunchesFromRecords } from './timesheetCalculationAudit';
+import { getDayRecords, resolveEmployeeScheduleForDate } from './timeProcessingService';
+import { writeTimesheetsDailyCalculatedRow, type TimesheetWriteOutcome } from './timesheetsDailyWrite';
+import { validateTimesheetIntegrity } from './timesheetIntegrity';
+import {
+  derivePeriodHealth,
+  processingStatusFromWrite,
+  type PeriodHealthStatus,
+  type TimesheetProcessingStatus,
+} from './timesheetProcessingStatus';
 
 // ============ TIPOS ============
 
@@ -23,6 +33,12 @@ export interface DailyTimesheet {
   is_absence: boolean;
   is_holiday: boolean;
   raw_data?: Record<string, unknown>;
+  calculation_audit?: {
+    punches: unknown[];
+    schedule_used: unknown;
+    correlation_id?: string;
+    calculation_type?: 'normal' | 'fallback';
+  };
 }
 
 export interface PayrollSummary {
@@ -83,11 +99,20 @@ export async function calculateDailyTimesheet(
   expectedMinutes: number = DEFAULT_EXPECTED_MINUTES
 ): Promise<DailyTimesheet> {
   const day = await processEmployeeDay(employeeId, companyId, dateStr);
+  const [records, resolvedSch] = await Promise.all([
+    getDayRecords(employeeId, dateStr),
+    resolveEmployeeScheduleForDate(employeeId, companyId, dateStr),
+  ]);
   const expectedMin =
     typeof day.daily.expected_minutes === 'number' && Number.isFinite(day.daily.expected_minutes)
       ? day.daily.expected_minutes
       : expectedMinutes;
   const isAbsence = day.daily.absence_minutes > 0;
+  const calculation_type = day.daily.contingency_schedule_fallback ? ('fallback' as const) : ('normal' as const);
+  const schedule_used =
+    resolvedSch.schedule != null
+      ? { ...resolvedSch.schedule }
+      : { no_schedule: true, js_day_of_week: resolvedSch.jsDayOfWeek };
 
   return {
     employee_id: employeeId,
@@ -110,6 +135,13 @@ export async function calculateDailyTimesheet(
       inicio_intervalo: day.daily.inicio_intervalo,
       fim_intervalo: day.daily.fim_intervalo,
       incomplete: day.daily.incomplete,
+      has_schedule_issue: day.daily.contingency_schedule_fallback === true,
+      contingency_schedule_fallback: day.daily.contingency_schedule_fallback === true,
+    },
+    calculation_audit: {
+      punches: snapshotPunchesFromRecords(records),
+      schedule_used,
+      calculation_type,
     },
   };
 }
@@ -117,7 +149,11 @@ export async function calculateDailyTimesheet(
 /**
  * Salva ou atualiza o cálculo diário no banco de dados.
  */
-export async function saveDailyTimesheet(data: DailyTimesheet): Promise<string> {
+export async function saveDailyTimesheet(data: DailyTimesheet): Promise<{
+  id: string;
+  outcome: TimesheetWriteOutcome;
+  processing_status: TimesheetProcessingStatus;
+}> {
   if (!checkSupabaseConfigured()) throw new Error('Supabase não configurado.');
 
   const payload = {
@@ -134,32 +170,30 @@ export async function saveDailyTimesheet(data: DailyTimesheet): Promise<string> 
     is_holiday: data.is_holiday,
     raw_data: data.raw_data || {},
     updated_at: new Date().toISOString(),
+    calculation_audit: data.calculation_audit,
   };
 
   try {
-    const existing = await db.select('timesheets_daily', [
-      { column: 'employee_id', operator: 'eq', value: data.employee_id },
-      { column: 'date', operator: 'eq', value: data.date },
-    ]) as any[];
-
-    if (existing?.[0]?.id) {
-      await db.update('timesheets_daily', existing[0].id, payload);
-      return existing[0].id;
-    } else {
-      const result = await db.insert('timesheets_daily', {
-        ...payload,
-        created_at: new Date().toISOString(),
-      }) as any[];
-      return result?.[0]?.id;
-    }
-  } catch (err: any) {
-    // Se a tabela não existe, loga e retorna ID simulado
-    if (err?.message?.includes('relation') || err?.message?.includes('does not exist')) {
+    const wr = await writeTimesheetsDailyCalculatedRow(payload);
+    const id = wr.id ?? `temp-${data.employee_id}-${data.date}`;
+    return { id, outcome: wr.outcome, processing_status: wr.processing_status };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const raw = data.raw_data || {};
+    if (msg.includes('relation') || msg.includes('does not exist')) {
       console.warn('[saveDailyTimesheet] Tabela timesheets_daily não existe. Execute a migração: 20260417230000_pre_folha_tables.sql');
-      // Retorna um ID temporário para não quebrar o fluxo
-      return `temp-${data.employee_id}-${data.date}`;
+      return {
+        id: `temp-${data.employee_id}-${data.date}`,
+        outcome: 'skipped_integrity',
+        processing_status: processingStatusFromWrite('skipped_integrity', raw as Record<string, unknown>),
+      };
     }
-    throw err;
+    console.info('[CALC INFO] saveDailyTimesheet_failed', { date: data.date, message: msg });
+    return {
+      id: `temp-${data.employee_id}-${data.date}`,
+      outcome: 'skipped_integrity',
+      processing_status: processingStatusFromWrite('skipped_integrity', raw as Record<string, unknown>),
+    };
   }
 }
 
@@ -286,30 +320,73 @@ async function calculatePayrollSummaryManual(
   };
 }
 
+export type PeriodCalcSummaryFinal = {
+  total_processed: number;
+  success_count: number;
+  skipped_count: number;
+  error_count: number;
+  schedule_missing_count: number;
+  fk_avoided_count: number;
+  duration_ms: number;
+  degraded: boolean;
+  period_status: PeriodHealthStatus;
+  reliability_score: number;
+};
+
 /**
- * Calcula o timesheet para todos os dias de um período.
+ * Calcula o período e devolve linhas + telemetria (`period_status`, `reliability_score`).
  */
-export async function calculatePeriodTimesheets(
+export async function calculatePeriodTimesheetsWithSummary(
   employeeId: string,
   companyId: string,
   startDate: string,
-  endDate: string
-): Promise<DailyTimesheet[]> {
+  endDate: string,
+): Promise<{ rows: DailyTimesheet[]; summary: PeriodCalcSummaryFinal }> {
+  const gate = await validateTimesheetIntegrity({ employee_id: employeeId, company_id: companyId });
+  if (!gate.ok) {
+    console.info('[CALC SKIP] period_calc_blocked', {
+      employee_id: employeeId,
+      company_id: companyId,
+      reason: gate.reason,
+    });
+    throw new Error(`TIMESHEET_EMPLOYEE_INVALID:${gate.reason ?? 'unknown'}`);
+  }
+
   const results: DailyTimesheet[] = [];
   const start = new Date(startDate);
   const end = new Date(endDate);
+  const t0 = Date.now();
+
+  let total_processed = 0;
+  let success_count = 0;
+  let skipped_count = 0;
+  let error_count = 0;
+  let schedule_missing_count = 0;
+  let fk_avoided_count = 0;
+  let degraded = false;
 
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const dateStr = d.toISOString().slice(0, 10);
+    total_processed += 1;
     try {
       const timesheet = await calculateDailyTimesheet(employeeId, companyId, dateStr);
-      // Tenta salvar, mas não falha se a tabela não existir
-      await saveDailyTimesheet(timesheet);
+      if ((timesheet.raw_data as { has_schedule_issue?: boolean })?.has_schedule_issue) {
+        schedule_missing_count += 1;
+      }
+      const save = await saveDailyTimesheet(timesheet);
+      if (save.outcome === 'written') {
+        success_count += 1;
+      } else {
+        skipped_count += 1;
+      }
+      if (save.outcome === 'skipped_integrity') {
+        fk_avoided_count += 1;
+      }
       results.push(timesheet);
-    } catch (err: any) {
-      // Loga o erro mas continua calculando os outros dias
-      console.warn(`[calculatePeriodTimesheets] Erro ao processar ${dateStr}:`, err?.message);
-      // Cria um registro vazio para este dia
+    } catch (err: unknown) {
+      error_count += 1;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.info('[CALC INFO] period_day_failed', { date: dateStr, message: msg });
       results.push({
         employee_id: employeeId,
         company_id: companyId,
@@ -322,12 +399,97 @@ export async function calculatePeriodTimesheets(
         late_minutes: 0,
         is_absence: false,
         is_holiday: false,
-        raw_data: { error: err?.message },
+        raw_data: { error: msg },
       });
+    }
+
+    if (total_processed >= 3 && error_count / total_processed > 0.3) {
+      degraded = true;
+      console.info('[CALC DEGRADED MODE]', {
+        employee_id: employeeId,
+        company_id: companyId,
+        total_processed,
+        error_count,
+        threshold: '30%',
+      });
+      break;
     }
   }
 
-  return results;
+  const duration_ms = Date.now() - t0;
+  const baseMetrics = {
+    total_processed,
+    success_count,
+    skipped_count,
+    error_count,
+    schedule_missing_count,
+    fk_avoided_count,
+    duration_ms,
+    degraded,
+  };
+  const period_status = derivePeriodHealth({
+    total_processed,
+    success_count,
+    skipped_count,
+    error_count,
+    schedule_missing_count,
+    fk_avoided_count,
+    duration_ms,
+    degraded,
+  });
+  const reliability_score = total_processed > 0 ? success_count / total_processed : 1;
+
+  const summary: PeriodCalcSummaryFinal = {
+    ...baseMetrics,
+    period_status,
+    reliability_score,
+  };
+
+  console.info('[CALC PERIOD STATUS]', {
+    employee_id: employeeId,
+    company_id: companyId,
+    start_date: startDate,
+    end_date: endDate,
+    period_status,
+    reliability_score,
+    total_processed,
+    success_count,
+    skipped_count,
+    error_count,
+    degraded,
+  });
+
+  if (period_status !== 'complete') {
+    console.warn('[UI WARNING] dados incompletos no período', {
+      employee_id: employeeId,
+      company_id: companyId,
+      period_status,
+      reliability_score,
+    });
+  }
+
+  console.log('[CALC SUMMARY FINAL]', {
+    employee_id: employeeId,
+    company_id: companyId,
+    start_date: startDate,
+    end_date: endDate,
+    ...summary,
+  });
+
+  return { rows: results, summary };
+}
+
+/**
+ * Calcula o timesheet para todos os dias de um período.
+ */
+export async function calculatePeriodTimesheets(
+  employeeId: string,
+  companyId: string,
+  startDate: string,
+  endDate: string,
+): Promise<DailyTimesheet[]> {
+  const { rows } = await calculatePeriodTimesheetsWithSummary(employeeId, companyId, startDate, endDate);
+  return rows;
 }
 
 /**

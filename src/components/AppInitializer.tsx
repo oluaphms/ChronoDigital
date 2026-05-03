@@ -10,8 +10,8 @@ import { assertEnv } from '../lib/assertEnv';
 import { checkSupabaseConnection } from '../services/checkSupabaseConnection';
 import { getSchemaGuardError } from '@/services/schemaGuard';
 import { readAuditLogsTenantIdFromEnv } from '@/services/schemaColumnDetection';
-import { IS_PRODUCTION } from '@/config/runtimeEnv';
 import { reportSchemaGuardState } from '@/services/schemaGuardReporter';
+import { getCurrentEngineVersion, getCurrentRulesVersion } from '@/services/timesheetCalculationAudit';
 
 interface AppInitializerProps {
   children: React.ReactNode;
@@ -122,6 +122,34 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
       if (typeof window !== 'undefined') {
         (window as any).__SUPABASE_OFFLINE_DEV = false;
       }
+
+      const engineVer = getCurrentEngineVersion();
+      const rulesVer = getCurrentRulesVersion();
+      if (typeof console !== 'undefined') {
+        console.info('[APP VERSION]', { ENGINE_VERSION: engineVer, RULES_VERSION: rulesVer });
+      }
+      try {
+        const versionStorageKey = 'pontowebdesk:last-engine-rules-version';
+        const nextPayload = JSON.stringify({ engine: engineVer, rules: rulesVer });
+        const prevRaw =
+          typeof localStorage !== 'undefined' ? localStorage.getItem(versionStorageKey) : null;
+        if (prevRaw && prevRaw !== nextPayload && typeof console !== 'undefined') {
+          try {
+            console.warn('[VERSION CHANGE DETECTED]', {
+              previous: JSON.parse(prevRaw) as { engine?: string; rules?: string },
+              current: { engine: engineVer, rules: rulesVer },
+            });
+          } catch {
+            console.warn('[VERSION CHANGE DETECTED]', { rawPrevious: prevRaw, current: nextPayload });
+          }
+        }
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(versionStorageKey, nextPayload);
+        }
+      } catch {
+        /* quota / modo privado */
+      }
+
       if (mounted) setIsReady(true);
 
       // Diagnóstico não bloqueante: resultado apenas informativo — nunca bloqueia login.

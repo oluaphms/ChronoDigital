@@ -87,7 +87,7 @@ async function insertAuditLog(state: SchemaGuardReportState): Promise<void> {
   if (shouldThrottle(state.mode)) return;
   const companyId = resolveCompanyId();
   if (!companyId) {
-    console.error('[SCHEMA GUARD REPORT] company_id ausente; auditoria ignorada');
+    console.warn('[SCHEMA GUARD] auditoria ignorada por falta de company_id');
     return;
   }
 

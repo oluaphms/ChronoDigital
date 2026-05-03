@@ -363,6 +363,29 @@ export async function resolveEmployeeScheduleForDate(
   return { schedule: legacy, jsDayOfWeek };
 }
 
+/** Origem da resolução de escala (sem alterar regras de cálculo). */
+export type ScheduleResolutionSource = 'employee' | 'default' | 'fallback';
+
+/**
+ * API explícita de resolução de jornada normalizada.
+ * Não altera fórmulas; apenas descreve o estado retornado por `resolveEmployeeScheduleForDate`.
+ */
+export async function resolveWorkSchedule(
+  employeeId: string,
+  companyId: string,
+  dateStr: string,
+): Promise<{
+  hasSchedule: boolean;
+  schedule: WorkScheduleInfo | null;
+  source: ScheduleResolutionSource;
+}> {
+  const resolved = await resolveEmployeeScheduleForDate(employeeId, companyId, dateStr);
+  if (resolved.schedule) {
+    return { hasSchedule: true, schedule: resolved.schedule, source: 'employee' };
+  }
+  return { hasSchedule: false, schedule: null, source: 'fallback' };
+}
+
 /**
  * Contexto para o espelho: dias úteis reais e janela entrada/saída por `getDay()` JS.
  */
@@ -794,16 +817,28 @@ export async function closeTimesheet(
     month,
   });
 
+  const { calculatePeriodTimesheetsWithSummary } = await import('./payrollCalculator');
+  const preCloseHealth = await calculatePeriodTimesheetsWithSummary(
+    empId,
+    companyId,
+    periodStart.slice(0, 10),
+    periodEnd.slice(0, 10),
+  );
+  const ps = preCloseHealth.summary.period_status;
+  if (ps === 'degraded' || ps === 'failed') {
+    throw new Error('PERIOD_NOT_RELIABLE');
+  }
+
+  const { summary: preSum } = preCloseHealth;
+  if (
+    preSum.total_processed > 0 &&
+    preSum.schedule_missing_count / preSum.total_processed > 0.2
+  ) {
+    throw new Error('TOO_MANY_SCHEDULE_FALLBACKS');
+  }
+
   const { closeTimesheet: engineCloseTimesheet } = await import('../engine/timeEngine');
   const engineResult = await engineCloseTimesheet(empId, companyId, year, month);
-
-  if (engineResult.halted) {
-    const msg =
-      typeof engineResult.schedule_error === 'object' && engineResult.schedule_error !== null
-        ? `Escala ou jornada inválida (${JSON.stringify(engineResult.schedule_error)})`
-        : 'Recálculo interrompido (escala inválida)';
-    throw new Error(msg);
-  }
 
   const ms = engineResult.engine.monthly_summary;
   const totals = {

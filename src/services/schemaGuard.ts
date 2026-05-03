@@ -97,7 +97,7 @@ export function enforceEnvSchemaFlag(envVar: unknown, envName: string): boolean 
       );
     }
 
-    return false;
+    return undefined;
   }
 
   if (!isProduction && parsed === undefined && !hasWarned) {

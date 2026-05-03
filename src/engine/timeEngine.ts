@@ -5,6 +5,8 @@
  */
 
 import { db, isSupabaseConfigured } from '../services/supabaseClient';
+import { snapshotPunchesFromRecords } from '../services/timesheetCalculationAudit';
+import { writeTimesheetsDailyCalculatedRow } from '../services/timesheetsDailyWrite';
 import { appendAfdTimeEngineAudit } from './afdTimeEngineAudit';
 import { appendEngineCalcAudit } from './engineCalcAudit';
 import { applyDailyBankLedger, getBankExpiredToPayroll50ForPeriod } from './bankLedger';
@@ -143,19 +145,6 @@ const DEFAULT_COMPANY_RULES: CompanyRules = {
 /** Produção HARD LOCK — `false` apenas via env explícito. */
 export const STRICT_SCHEDULE_MODE = import.meta.env.VITE_STRICT_SCHEDULE_MODE !== 'false';
 
-/** Escala indefinida / inválida em dia que exige jornada (determinístico para UI). */
-export class ScheduleInvalidError extends Error {
-  readonly code = 'SCHEDULE_INVALID' as const;
-  readonly payload: { date: string; employeeId: string; companyId: string; dayType: DayType; reason: string };
-
-  constructor(payload: { date: string; employeeId: string; companyId: string; dayType: DayType; reason: string }) {
-    super(`SCHEDULE_INVALID ${payload.date}`);
-    this.name = 'ScheduleInvalidError';
-    this.payload = payload;
-    Object.setPrototypeOf(this, ScheduleInvalidError.prototype);
-  }
-}
-
 function contingencyFallbackExpectedMinutes(dayType: DayType): number {
   return dayType === 'SATURDAY' ? 240 : 480;
 }
@@ -206,6 +195,33 @@ const MAX_WORK_MINUTES_PER_DAY = 16 * 60;
 const MIN_BREAK_IF_WORK_OVER = 6 * 60;
 const FRAUD_MIN_INTERVAL_MS = 60 * 1000;
 const HOLIDAY_CACHE = new Map<string, Set<string>>();
+
+type CalcMetrics = {
+  schedule_missing_count: number;
+  fk_avoided_count: number;
+  calc_errors: number;
+};
+
+let calcMetrics: CalcMetrics = {
+  schedule_missing_count: 0,
+  fk_avoided_count: 0,
+  calc_errors: 0,
+};
+
+function resetCalcMetrics(): void {
+  calcMetrics = {
+    schedule_missing_count: 0,
+    fk_avoided_count: 0,
+    calc_errors: 0,
+  };
+}
+
+function logCalcSummaryFinal(context: Record<string, unknown>): void {
+  console.log('[CALC SUMMARY FINAL]', {
+    ...context,
+    ...calcMetrics,
+  });
+}
 
 function easterSunday(year: number): Date {
   const a = year % 19;
@@ -881,26 +897,38 @@ async function resolveExpectedMinutesForCalculateDay(
   const base = computeScheduledExpectedMinutes(dayType, resolved.schedule);
   if (dayType !== 'WEEKDAY' && dayType !== 'SATURDAY') {
     if (!Number.isFinite(base) || base < 0) {
-      throw new Error(`ENGINE_INCONSISTENT_STATE: expected não numérico (${dateStr})`);
+      console.info('[CALC INFO] schedule_fallback_applied', {
+        date: dateStr,
+        employee_id: employeeId,
+        company_id: companyId,
+        reason: 'non_weekday_invalid_expected',
+      });
+      return { expected: 0, contingencyFallback: true };
     }
     return { expected: base, contingencyFallback: false };
   }
-  const invalid = !resolved.schedule || !Number.isFinite(base) || base <= 0;
-  if (!invalid) return { expected: base, contingencyFallback: false };
-  if (STRICT_SCHEDULE_MODE) {
-    throw new ScheduleInvalidError({
+
+  if (!resolved.schedule) {
+    calcMetrics.schedule_missing_count += 1;
+    console.info('[CALC INFO] schedule_fallback_applied', {
       date: dateStr,
-      employeeId,
-      companyId,
-      dayType,
-      reason: !resolved.schedule ? 'no_schedule' : 'invalid_expected',
+      employee_id: employeeId,
+      company_id: companyId,
+      reason: 'no_schedule',
     });
+    return { expected: 0, contingencyFallback: true };
   }
-  console.warn('[CALC] contingência temporal de escala — corrigir cadastro ESS/schedules/work_shifts', {
+
+  const invalid = !Number.isFinite(base) || base <= 0;
+  if (!invalid) return { expected: base, contingencyFallback: false };
+
+  calcMetrics.schedule_missing_count += 1;
+  console.info('[CALC INFO] schedule_fallback_applied', {
     date: dateStr,
-    employeeId,
-    companyId,
-    dayType,
+    employee_id: employeeId,
+    company_id: companyId,
+    reason: 'invalid_expected',
+    strict_schedule_env: STRICT_SCHEDULE_MODE,
   });
   return { expected: contingencyFallbackExpectedMinutes(dayType), contingencyFallback: true };
 }
@@ -1271,10 +1299,23 @@ async function persistRecalculatedDay(params: {
   bank_hours_delta?: number;
   /** Agrupa todas as linhas geradas pela mesma execução de `recalculate_period`. */
   recalcRunId?: string;
+  dayRecords: RawTimeRecord[];
+  scheduleForAudit: { schedule: WorkScheduleInfo | null; jsDayOfWeek: number };
 }): Promise<void> {
   const { employeeId, companyId, date, daily, nightMinutes, nightNormalReduced, nightExtraReduced, bank_hours_delta } =
     params;
   const recalc_run_id = params.recalcRunId ?? generateRecalcRunId();
+  const sch = params.scheduleForAudit;
+  const schedule_used =
+    sch.schedule != null
+      ? { ...sch.schedule }
+      : { no_schedule: true, js_day_of_week: sch.jsDayOfWeek };
+  const calculation_audit = {
+    punches: snapshotPunchesFromRecords(params.dayRecords),
+    schedule_used,
+    correlation_id: recalc_run_id,
+    calculation_type: (daily.contingency_schedule_fallback ? 'fallback' : 'normal') as const,
+  };
   const payload = {
     employee_id: employeeId,
     company_id: companyId,
@@ -1305,45 +1346,33 @@ async function persistRecalculatedDay(params: {
       extra_folha_100_minutes: daily.extra_folha_100_minutes ?? null,
       negativo_banco_minutes: daily.negativo_banco_minutes ?? null,
       negativo_folha_minutes: daily.negativo_folha_minutes ?? null,
+      has_schedule_issue: daily.contingency_schedule_fallback === true,
     },
     updated_at: new Date().toISOString(),
+    calculation_audit,
   };
-  try {
-    await db.insert('timesheets_daily_snapshots', {
-      employee_id: employeeId,
-      company_id: companyId,
-      date,
-      recalc_run_id,
-      snapshot: {
-        ...payload,
-        snapshot_recorded_at: new Date().toISOString(),
-        engine: 'timeEngine.persistRecalculatedDay',
-      },
-    });
-  } catch {
-    // Tabela opcional até migração aplicada ou RLS.
+  const writeResult = await writeTimesheetsDailyCalculatedRow(payload);
+  if (writeResult.outcome === 'skipped_integrity') {
+    calcMetrics.fk_avoided_count += 1;
+    return;
   }
-  try {
-    const existing = (await db.select(
-      'timesheets_daily',
-      [
-        { column: 'employee_id', operator: 'eq', value: employeeId },
-        { column: 'company_id', operator: 'eq', value: companyId },
-        { column: 'date', operator: 'eq', value: date },
-      ],
-      undefined,
-      1
-    )) as Array<{ id?: string }>;
-    if (existing?.[0]?.id) {
-      await db.update('timesheets_daily', existing[0].id, payload);
-      return;
+
+  if (writeResult.outcome === 'written') {
+    try {
+      await db.insert('timesheets_daily_snapshots', {
+        employee_id: employeeId,
+        company_id: companyId,
+        date,
+        recalc_run_id,
+        snapshot: {
+          ...payload,
+          snapshot_recorded_at: new Date().toISOString(),
+          engine: 'timeEngine.persistRecalculatedDay',
+        },
+      });
+    } catch {
+      // Tabela opcional até migração aplicada ou RLS.
     }
-    await db.insert('timesheets_daily', {
-      ...payload,
-      created_at: new Date().toISOString(),
-    });
-  } catch {
-    // Em ambientes sem tabela de pré-folha, não interrompe o recálculo.
   }
 }
 
@@ -1358,9 +1387,8 @@ export async function recalculate_period(
   violations: Array<{ date: string; reason: string }>;
   case_checks: Array<{ date: string; worked: number; expected: number; extra: number; negative: number }>;
   monthly_summary: MonthlySummary;
-  halted?: true;
-  schedule_error?: ScheduleInvalidError['payload'];
 }> {
+  resetCalcMetrics();
   const days: string[] = [];
   const d = new Date(`${startDate}T12:00:00`);
   const end = new Date(`${endDate}T12:00:00`);
@@ -1376,42 +1404,34 @@ export async function recalculate_period(
 
   const violations: Array<{ date: string; reason: string }> = [];
   const case_checks: Array<{ date: string; worked: number; expected: number; extra: number; negative: number }> = [];
-  let schedule_error: ScheduleInvalidError['payload'] | undefined;
-
-  outer: for (const date of days) {
-    let dailyBase: DaySummary['daily'];
+  for (const date of days) {
     try {
-      dailyBase = await calculate_day(employeeId, companyId, date);
-    } catch (e) {
-      if (e instanceof ScheduleInvalidError) {
-        schedule_error = e.payload;
-        violations.push({ date: e.payload.date, reason: 'SCHEDULE_INVALID' });
-        break outer;
-      }
-      throw e;
-    }
-    const dayRecords = await getDayRecords(employeeId, date);
-    const nightRaw = calculateNightHoursForDate(dayRecords, date);
-    const core = await applyBankNightAndExtras(
-      employeeId,
-      companyId,
-      date,
-      companyRules,
-      dayRecords,
-      dailyBase
-    );
-    const daily = core.daily;
-    await persistRecalculatedDay({
-      employeeId,
-      companyId,
-      date,
-      daily,
-      nightMinutes: core.nightPayableTotal,
-      nightNormalReduced: core.nightNormalReduced,
-      nightExtraReduced: core.nightExtraReduced,
-      bank_hours_delta: core.bank_hours_delta,
-      recalcRunId,
-    });
+      const dailyBase = await calculate_day(employeeId, companyId, date);
+      const dayRecords = await getDayRecords(employeeId, date);
+      const scheduleForAudit = await resolveEmployeeScheduleForDate(employeeId, companyId, date);
+      const nightRaw = calculateNightHoursForDate(dayRecords, date);
+      const core = await applyBankNightAndExtras(
+        employeeId,
+        companyId,
+        date,
+        companyRules,
+        dayRecords,
+        dailyBase,
+      );
+      const daily = core.daily;
+      await persistRecalculatedDay({
+        employeeId,
+        companyId,
+        date,
+        daily,
+        nightMinutes: core.nightPayableTotal,
+        nightNormalReduced: core.nightNormalReduced,
+        nightExtraReduced: core.nightExtraReduced,
+        bank_hours_delta: core.bank_hours_delta,
+        recalcRunId,
+        dayRecords,
+        scheduleForAudit,
+      });
     await appendEngineCalcAudit({
       employeeId,
       companyId,
@@ -1484,6 +1504,13 @@ export async function recalculate_period(
       extra: daily.extra_minutes,
       negative: daily.negative_minutes,
     });
+    } catch (e) {
+      calcMetrics.calc_errors += 1;
+      const message = e instanceof Error ? e.message : String(e);
+      console.info('[CALC INFO] day_processing_failed', { date, employee_id: employeeId, message });
+      violations.push({ date, reason: 'CALC_ERROR' });
+      continue;
+    }
   }
 
   await appendAfdTimeEngineAudit({
@@ -1499,8 +1526,8 @@ export async function recalculate_period(
       total_days_processed: case_checks.length,
       violations_count: violations.length,
       timesheets_daily_snapshot_run_id: recalcRunId,
-      halted_schedule: Boolean(schedule_error),
-      schedule_error: schedule_error ?? null,
+      halted_schedule: false,
+      schedule_error: null,
     },
   });
 
@@ -1512,17 +1539,13 @@ export async function recalculate_period(
   monthly_summary.bank_balance_approx = Math.round(bankSim.residualMinutes);
   monthly_summary.bank_expired_to_extra50_minutes = bankSim.payrollExtra50FromExpiredMinutes;
 
-  if (schedule_error) {
-    return {
-      total_days: days.length,
-      inconsistent_days: violations.length,
-      violations,
-      case_checks,
-      monthly_summary,
-      halted: true,
-      schedule_error,
-    };
-  }
+  logCalcSummaryFinal({
+    employee_id: employeeId,
+    company_id: companyId,
+    start_date: startDate,
+    end_date: endDate,
+  });
+
   return {
     total_days: days.length,
     inconsistent_days: violations.length,
@@ -1542,8 +1565,6 @@ export async function closeTimesheet(employeeId: string, companyId: string, year
   saldo_banco_final: number;
   total_faltas: number;
   total_atrasos: number;
-  halted?: true;
-  schedule_error?: ScheduleInvalidError['payload'];
   engine: Awaited<ReturnType<typeof recalculate_period>>;
 }> {
   const engine = await recalculate_month(employeeId, companyId, year, month);
@@ -1561,7 +1582,6 @@ export async function closeTimesheet(employeeId: string, companyId: string, year
     saldo_banco_final: Math.round(bankSim.residualMinutes),
     total_faltas: m.falta_total,
     total_atrasos: m.total_atrasos_minutes,
-    ...(engine.halted ? { halted: true, schedule_error: engine.schedule_error } : {}),
   };
 }
 

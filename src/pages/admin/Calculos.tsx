@@ -289,6 +289,7 @@ const AdminCalculos: React.FC = () => {
 
       const enqueueRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/calc-period`, {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           employee_id: filterUserId,
@@ -308,7 +309,12 @@ const AdminCalculos: React.FC = () => {
 
       void fetch(`${base.replace(/\/$/, '')}/api/jobs/process`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
       });
 
       const deadline = Date.now() + 15 * 60 * 1000;
@@ -316,6 +322,7 @@ const AdminCalculos: React.FC = () => {
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 1500));
         const stRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/${jobId}`, {
+          cache: 'no-store',
           headers: { Authorization: `Bearer ${token}` },
         });
         const job = (await stRes.json().catch(() => ({}))) as {
