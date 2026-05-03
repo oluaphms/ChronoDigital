@@ -176,33 +176,37 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     .single();
 
   if (insErr || !inserted?.id) {
-    const message = insErr?.message || 'Falha ao enfileirar job.';
-    const fallbackEligible =
-      /does not exist|permission|schema|relation|not found/i.test(message) || message.includes('PGRST');
-
-    if (fallbackEligible) {
-      const direct = await executeCalcPeriodFallback(
-        serviceClient,
-        employee_id,
-        caller.companyId,
-        start_date,
-        end_date,
-      );
-      if (direct.ok) {
-        return Response.json(
-          { success: true, mode: 'direct_fallback', fallback: 'calculatePeriodTimesheets' },
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
-      }
+    const enqueueMessage = insErr?.message || 'Falha ao enfileirar job.';
+    const direct = await executeCalcPeriodFallback(
+      serviceClient,
+      employee_id,
+      caller.companyId,
+      start_date,
+      end_date,
+    );
+    if (direct.ok) {
       return Response.json(
-        { error: direct.error || 'Falha no cálculo direto.', code: 'DIRECT_CALC_FAILED' },
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        {
+          success: true,
+          mode: 'direct_fallback',
+          fallback: 'calculatePeriodTimesheets',
+          enqueue_error: enqueueMessage,
+        },
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
-
+    const errMsg = direct.error || 'Falha no cálculo direto.';
+    const employeeInvalid = /^TIMESHEET_EMPLOYEE_INVALID:/i.test(errMsg);
     return Response.json(
-      { error: message, code: 'INSERT_FAILED' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      {
+        error: errMsg,
+        code: employeeInvalid ? 'EMPLOYEE_INVALID' : 'DIRECT_CALC_FAILED',
+        enqueue_error: enqueueMessage,
+      },
+      {
+        status: employeeInvalid ? 400 : 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
     );
   }
 

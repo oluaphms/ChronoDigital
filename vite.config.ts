@@ -101,6 +101,45 @@ export default defineConfig(({ mode }) => {
       },
 
       {
+        name: 'jobs-api-dev',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const pathname = req.url?.split('?')[0] ?? '';
+            if (!pathname.startsWith('/api/jobs')) {
+              next();
+              return;
+            }
+            try {
+              const { default: handler } = await import('./api/jobs/devEntry.ts');
+              const host = (req.headers.host as string) || 'localhost:3010';
+              const fullUrl = `http://${host}${req.url ?? ''}`;
+              const jobsRequestBody = await readConnectRequestBody(req as IncomingMessage);
+              const response = await handler(
+                new Request(fullUrl, {
+                  method: req.method || 'GET',
+                  headers: req.headers as HeadersInit,
+                  ...(jobsRequestBody ? { body: jobsRequestBody } : {}),
+                }),
+              );
+              res.statusCode = response.status;
+              response.headers.forEach((value, key) => {
+                if (key.toLowerCase() === 'transfer-encoding') return;
+                res.setHeader(key, value);
+              });
+              const jobsBuf = Buffer.from(await response.arrayBuffer());
+              res.end(jobsBuf);
+            } catch (e) {
+              console.error('[jobs-api-dev]', e);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              const detail = e instanceof Error ? e.message : String(e);
+              res.end(JSON.stringify({ error: 'Falha ao executar /api/jobs', details: detail }));
+            }
+          });
+        },
+      },
+
+      {
         name: 'rep-bridge-api-dev',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {

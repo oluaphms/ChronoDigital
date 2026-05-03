@@ -143,7 +143,8 @@ const DEFAULT_COMPANY_RULES: CompanyRules = {
 };
 
 /** Produção HARD LOCK — `false` apenas via env explícito. */
-export const STRICT_SCHEDULE_MODE = import.meta.env.VITE_STRICT_SCHEDULE_MODE !== 'false';
+export const STRICT_SCHEDULE_MODE =
+  import.meta.env?.VITE_STRICT_SCHEDULE_MODE !== 'false';
 
 function contingencyFallbackExpectedMinutes(dayType: DayType): number {
   return dayType === 'SATURDAY' ? 240 : 480;

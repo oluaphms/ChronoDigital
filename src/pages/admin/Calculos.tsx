@@ -299,50 +299,63 @@ const AdminCalculos: React.FC = () => {
       });
       const enqueueJson = (await enqueueRes.json().catch(() => ({}))) as {
         error?: string;
+        details?: string;
         job_id?: string;
+        success?: boolean;
+        mode?: string;
+        fallback?: string;
+        code?: string;
       };
       if (!enqueueRes.ok) {
-        throw new Error(enqueueJson?.error || 'Falha ao enfileirar cálculo.');
+        const hint = enqueueJson?.details ? ` (${enqueueJson.details})` : '';
+        throw new Error((enqueueJson?.error || 'Falha ao enfileirar cálculo.') + hint);
       }
-      const jobId = enqueueJson.job_id;
-      if (!jobId) throw new Error('Resposta sem job_id.');
 
-      void fetch(`${base.replace(/\/$/, '')}/api/jobs/process`, {
-        method: 'POST',
-        cache: 'no-store',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({}),
-      });
+      const directFallbackDone =
+        enqueueJson.mode === 'direct_fallback' ||
+        (enqueueJson.success === true && enqueueJson.fallback === 'calculatePeriodTimesheets');
 
-      const deadline = Date.now() + 15 * 60 * 1000;
-      let lastStatus = 'pending';
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const stRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/${jobId}`, {
+      if (!directFallbackDone) {
+        const jobId = enqueueJson.job_id;
+        if (!jobId) throw new Error('Resposta sem job_id.');
+
+        void fetch(`${base.replace(/\/$/, '')}/api/jobs/process`, {
+          method: 'POST',
           cache: 'no-store',
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({}),
         });
-        const job = (await stRes.json().catch(() => ({}))) as {
-          status?: string;
-          result?: { error?: string };
-        };
-        lastStatus = String(job?.status ?? '');
-        if (lastStatus === 'done') break;
-        if (lastStatus === 'failed') {
-          const msg = job?.result?.error || 'Job falhou.';
-          throw new Error(msg);
-        }
-      }
 
-      if (lastStatus !== 'done') {
-        toast.addToast(
-          'error',
-          'O cálculo ainda está na fila ou o worker não respondeu. Configure POST /api/jobs/process (cron) ou tente Atualizar novamente em instantes.',
-        );
-        return;
+        const deadline = Date.now() + 15 * 60 * 1000;
+        let lastStatus = 'pending';
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const stRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/${jobId}`, {
+            cache: 'no-store',
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const job = (await stRes.json().catch(() => ({}))) as {
+            status?: string;
+            result?: { error?: string };
+          };
+          lastStatus = String(job?.status ?? '');
+          if (lastStatus === 'done') break;
+          if (lastStatus === 'failed') {
+            const msg = job?.result?.error || 'Job falhou.';
+            throw new Error(msg);
+          }
+        }
+
+        if (lastStatus !== 'done') {
+          toast.addToast(
+            'error',
+            'O cálculo ainda está na fila ou o worker não respondeu. Configure POST /api/jobs/process (cron) ou tente Atualizar novamente em instantes.',
+          );
+          return;
+        }
       }
 
       const persisted = (await db.select(
