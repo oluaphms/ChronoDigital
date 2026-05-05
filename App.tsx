@@ -133,6 +133,17 @@ import {
   AdminArquivosFiscais,
 } from './src/routes/portalLazyPages';
 
+const isAdminRole = (role: User['role'] | undefined): boolean => role === 'admin' || role === 'hr';
+const isRoleAllowedForSelectedLogin = (
+  selectedRole: LoginRole,
+  userRole: User['role'] | undefined,
+): boolean => {
+  if (selectedRole === 'admin') return isAdminRole(userRole);
+  if (selectedRole === 'employee') return !isAdminRole(userRole);
+  return true;
+};
+const getRoleMismatchMessageForLogin = (_selectedRole: LoginRole): string => 'Acesso negado';
+
 function ConfigSupabaseScreen() {
   const isVercel = typeof window !== 'undefined' && /vercel\.app/i.test(window.location.hostname);
   return (
@@ -226,6 +237,8 @@ const AppMain: React.FC = () => {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isResettingSession, setIsResettingSession] = useState(false);
   const [accountSwitchLogoutBusy, setAccountSwitchLogoutBusy] = useState(false);
+  const pendingLoginRoleRef = useRef<LoginRole>(null);
+  const roleMismatchHandlingRef = useRef(false);
 
   // Theme State (para tela de login) — alinhado a ThemeService (chave `theme` + legado)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -368,6 +381,31 @@ const AppMain: React.FC = () => {
           if (!isMounted) return;
 
           if (authUser) {
+            const selectedRole = pendingLoginRoleRef.current;
+            if (selectedRole && !isRoleAllowedForSelectedLogin(selectedRole, authUser.role)) {
+              if (roleMismatchHandlingRef.current) return;
+              roleMismatchHandlingRef.current = true;
+              setLoginError(getRoleMismatchMessageForLogin(selectedRole));
+              setIsLoggingIn(false);
+              pendingLoginRoleRef.current = null;
+              void (async () => {
+                try {
+                  await authService.signOut();
+                } catch {
+                  // ignora
+                }
+                try {
+                  await clearLocalAuthSession();
+                } catch {
+                  // ignora
+                }
+                setUser(null);
+                setCompany(null);
+                window.dispatchEvent(new Event('current_user_changed'));
+                roleMismatchHandlingRef.current = false;
+              })();
+              return;
+            }
             // Sincroniza sempre com a sessão do Supabase (TOKEN_REFRESHED, SIGNED_IN, etc.).
             // A flag de logout em authService evita corrida com signOut; não bloquear aqui —
             // bloquear quando `current === null` impedia recuperar sessão válida após eventos tardios.
@@ -637,6 +675,34 @@ const AppMain: React.FC = () => {
   }, [records, historyTypeFilter, historyMethodFilter, historyDateFilter]);
 
   const handleLogin = async (identifier: string, password: string, role: LoginRole) => {
+    pendingLoginRoleRef.current = role;
+    const isAdminAccess = (userRole: User['role'] | undefined): boolean =>
+      userRole === 'admin' || userRole === 'hr';
+
+    const isRoleAllowedForSelection = (selectedRole: LoginRole, userRole: User['role'] | undefined): boolean => {
+      if (selectedRole === 'admin') return isAdminAccess(userRole);
+      if (selectedRole === 'employee') return !isAdminAccess(userRole);
+      return true;
+    };
+
+    const getRoleMismatchMessage = (_selectedRole: LoginRole): string => 'Acesso negado';
+
+    const forceLogoutAfterRoleMismatch = async (): Promise<void> => {
+      try {
+        await authService.signOut();
+      } catch {
+        // ignora
+      }
+      try {
+        await clearLocalAuthSession();
+      } catch {
+        // ignora
+      }
+      setUser(null);
+      setCompany(null);
+      window.dispatchEvent(new Event('current_user_changed'));
+    };
+
     const hydrateUserFromSessionIfExists = async (): Promise<boolean> => {
       try {
         const client = getSupabaseClient();
@@ -645,6 +711,12 @@ const AppMain: React.FC = () => {
         if (!data?.session?.user) return false;
         const hydratedUser = await authService.getCurrentUser();
         if (!hydratedUser) return false;
+        if (!isRoleAllowedForSelection(role, hydratedUser.role)) {
+          await forceLogoutAfterRoleMismatch();
+          setLoginError(getRoleMismatchMessage(role));
+          pendingLoginRoleRef.current = null;
+          return false;
+        }
         setUser(hydratedUser);
         setIsInitialLoading(false);
         window.dispatchEvent(new Event('current_user_changed'));
@@ -655,6 +727,7 @@ const AppMain: React.FC = () => {
           setActiveTab('dashboard');
           navigate('/employee/dashboard', { replace: true });
         }
+        pendingLoginRoleRef.current = null;
         return true;
       } catch {
         return false;
@@ -683,6 +756,7 @@ const AppMain: React.FC = () => {
     }
     const parsed = validateLogin({ identifier, password });
     if (!parsed.success) {
+      pendingLoginRoleRef.current = null;
       if (typeof console !== 'undefined' && import.meta.env?.DEV) {
         console.warn('[LOGIN] validação Zod falhou:', parsed.error.flatten());
       }
@@ -768,6 +842,7 @@ const AppMain: React.FC = () => {
         } catch {
           // ignora
         }
+        pendingLoginRoleRef.current = null;
         return;
       }
 
@@ -797,10 +872,17 @@ const AppMain: React.FC = () => {
           setConnectionUnavailable(true);
         }
         setLoginError(result.error);
+        pendingLoginRoleRef.current = null;
         return;
       }
 
       if (result.user) {
+        if (!isRoleAllowedForSelection(role, result.user.role)) {
+          await forceLogoutAfterRoleMismatch();
+          setLoginError(getRoleMismatchMessage(role));
+          pendingLoginRoleRef.current = null;
+          return;
+        }
         let redirectSessionExists = false;
 
         flushSync(() => {
@@ -841,23 +923,21 @@ const AppMain: React.FC = () => {
           // segue sem empresa
         }
 
-        // Navegar após garantir que estado foi atualizado
-        setTimeout(() => {
-          if (typeof console !== 'undefined') {
-            console.log('[REDIRECT CHECK]', {
-              sessionExists: redirectSessionExists,
-              userInState: !!result.user,
-              targetRoute: result.user.role === 'admin' || result.user.role === 'hr' ? '/admin/dashboard' : '/employee/dashboard',
-            });
-          }
-          if (result.user.role === 'admin' || result.user.role === 'hr') {
-            setActiveTab('admin');
-            navigate('/admin/dashboard', { replace: true });
-          } else {
-            setActiveTab('dashboard');
-            navigate('/employee/dashboard', { replace: true });
-          }
-        }, 100);
+        if (typeof console !== 'undefined') {
+          console.log('[REDIRECT CHECK]', {
+            sessionExists: redirectSessionExists,
+            userInState: !!result.user,
+            targetRoute: result.user.role === 'admin' || result.user.role === 'hr' ? '/admin/dashboard' : '/employee/dashboard',
+          });
+        }
+        if (result.user.role === 'admin' || result.user.role === 'hr') {
+          setActiveTab('admin');
+          navigate('/admin/dashboard', { replace: true });
+        } else {
+          setActiveTab('dashboard');
+          navigate('/employee/dashboard', { replace: true });
+        }
+        pendingLoginRoleRef.current = null;
       }
     } catch (error: any) {
       console.error('Erro no handleLogin:', error);
@@ -891,12 +971,17 @@ const AppMain: React.FC = () => {
             ? 'Falha de DNS ao acessar o Supabase. Confira a URL do projeto e o DNS da rede.'
             : 'Falha de rede ao acessar o Supabase. Tente novamente em instantes.'
         );
+        pendingLoginRoleRef.current = null;
         return;
       }
 
       setLoginError(error?.message || 'Erro ao fazer login');
+      pendingLoginRoleRef.current = null;
     } finally {
       setIsLoggingIn(false);
+      if (!roleMismatchHandlingRef.current && pendingLoginRoleRef.current !== null) {
+        pendingLoginRoleRef.current = null;
+      }
     }
   };
 
@@ -925,6 +1010,12 @@ const AppMain: React.FC = () => {
     setInsights(null);
     insightsAutoFetchDoneRef.current = false;
     setLoginError(null);
+    setConnectionUnavailable(false);
+    setConnectionIssueMessage(null);
+    setIsReconnecting(false);
+    setIsInitialLoading(false);
+    pendingLoginRoleRef.current = null;
+    roleMismatchHandlingRef.current = false;
 
     // Limpa caches para não vazar dados entre sessões (memória + React Query)
     queryCache.clear();
@@ -953,11 +1044,9 @@ const AppMain: React.FC = () => {
       console.error('Erro ao fazer logout:', error);
     }
 
-    // Recarga completa: garante cliente Supabase e UI sem sessão antiga em memória
-    if (typeof window !== 'undefined') {
-      window.location.replace(`${window.location.origin}/`);
-    }
-  }, []);
+    // Logout SPA: evita “flash” cinza causado por recarga completa.
+    navigate('/', { replace: true });
+  }, [navigate]);
 
   useSessionTimeout(
     globalSettings?.session_timeout_minutes ?? 60,
