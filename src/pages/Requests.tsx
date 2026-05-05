@@ -494,7 +494,7 @@ const RequestsPage: React.FC = () => {
               header: '',
               render: (row: RequestRow) => (
                 <div className="flex justify-end flex-wrap gap-2">
-                  {isAdminView && row.status === 'pending' && (
+                  {isAdminView && (row.status === 'pending' || row.status === 'pendente') && (
                     <>
                       <Button
                         size="sm"
@@ -538,18 +538,20 @@ const RequestsPage: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleSubmit}
         footer={
-          <div className="flex justify-end gap-3">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => setIsModalOpen(false)}
+              className="w-full sm:w-auto"
             >
               Cancelar
             </Button>
             <Button
               type="submit"
               size="sm"
+              className="w-full sm:w-auto"
               disabled={
                 submitting ||
                 !form.reason.trim() ||

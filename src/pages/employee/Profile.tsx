@@ -123,7 +123,7 @@ const EmployeeProfile: React.FC = () => {
           </div>
           <div className="flex items-start gap-2 sm:gap-3 text-sm sm:text-base text-slate-700 dark:text-slate-300">
             <Briefcase className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0 mt-0.5" />
-            <span><strong>Cargo:</strong> {user.cargo}</span>
+            <span><strong>Cargo:</strong> {String(user.cargo || '').trim() || 'Colaborador'}</span>
           </div>
           <div className="flex items-start gap-2 sm:gap-3 text-sm sm:text-base text-slate-700 dark:text-slate-300">
             <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-slate-400 shrink-0 mt-0.5" />

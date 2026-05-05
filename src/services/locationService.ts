@@ -421,9 +421,9 @@ export async function getCurrentLocationRobustResult(
   const second = await getCurrentLocationResult({
     enableHighAccuracy: false,
     timeout: 15000,
-    maximumAge: options.forceFresh ? 10000 : 120000,
+    maximumAge: options.forceFresh ? 0 : 120000,
   });
-  if (second.ok) {
+  if (second.ok && second.position.accuracy <= 120) {
     // Salva no cache se for boa
     if (second.position.accuracy <= 200) {
       saveLocationToCache(second.position);
@@ -445,7 +445,7 @@ export async function getCurrentLocationRobustResult(
   }
 
   // ETAPA 4: Fallback para cache se tudo falhou
-  if (!third.ok) {
+  if (!third.ok && !options.forceFresh) {
     const cached = getLocationFromCache();
     if (cached) {
       devLog('Usando cache como fallback após falhas');

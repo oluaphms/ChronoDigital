@@ -51,6 +51,21 @@ const EmployeeDashboard: React.FC = () => {
           // Não interrompe o dashboard por timeout transitório do Supabase.
           console.warn('[EmployeeDashboard] time_records indisponível no momento:', error);
           rows = [];
+          // Fallback local direto para evitar cards vazios quando a primeira consulta expira.
+          try {
+            rows =
+              (await db.select(
+                'time_records',
+                [{ column: 'user_id', operator: 'eq', value: user.id }],
+                {
+                  columns: 'id, user_id, company_id, type, method, created_at, timestamp, source, origin',
+                  orderBy: { column: 'created_at', ascending: false },
+                  limit: 180,
+                },
+              )) ?? [];
+          } catch (fallbackErr) {
+            console.warn('[EmployeeDashboard] fallback time_records falhou:', fallbackErr);
+          }
         }
         const sortedAll = [...(rows ?? [])].sort((a, b) => recordPunchInstantMs(b) - recordPunchInstantMs(a));
         const todayYmd = localTodayYmd();

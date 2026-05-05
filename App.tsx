@@ -637,6 +637,29 @@ const AppMain: React.FC = () => {
   }, [records, historyTypeFilter, historyMethodFilter, historyDateFilter]);
 
   const handleLogin = async (identifier: string, password: string, role: LoginRole) => {
+    const hydrateUserFromSessionIfExists = async (): Promise<boolean> => {
+      try {
+        const client = getSupabaseClient();
+        if (!client) return false;
+        const { data } = await client.auth.getSession();
+        if (!data?.session?.user) return false;
+        const hydratedUser = await authService.getCurrentUser();
+        if (!hydratedUser) return false;
+        setUser(hydratedUser);
+        setIsInitialLoading(false);
+        window.dispatchEvent(new Event('current_user_changed'));
+        if (hydratedUser.role === 'admin' || hydratedUser.role === 'hr') {
+          setActiveTab('admin');
+          navigate('/admin/dashboard', { replace: true });
+        } else {
+          setActiveTab('dashboard');
+          navigate('/employee/dashboard', { replace: true });
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    };
     try {
       if (typeof window !== 'undefined') {
         const q = new URLSearchParams(window.location.search);
@@ -749,6 +772,10 @@ const AppMain: React.FC = () => {
       }
 
       if (result.error) {
+        const recovered = await hydrateUserFromSessionIfExists();
+        if (recovered) {
+          return;
+        }
         const normalizedError = String(result.error || '').toLowerCase();
         const isDnsErrorResult =
           normalizedError.includes('err_name_not_resolved') ||
@@ -834,6 +861,10 @@ const AppMain: React.FC = () => {
       }
     } catch (error: any) {
       console.error('Erro no handleLogin:', error);
+      const recovered = await hydrateUserFromSessionIfExists();
+      if (recovered) {
+        return;
+      }
       const errorText = String(
         error?.message || error?.details || error?.hint || error?.error?.message || ''
       ).toLowerCase();

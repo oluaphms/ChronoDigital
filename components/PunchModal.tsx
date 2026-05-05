@@ -609,8 +609,13 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
   }, [photo]);
 
   const photoRequired = useMemo(() => {
-    return (company?.settings.requirePhoto ?? false) || method === PunchMethod.PHOTO;
+    const companyRequiresPhoto = company?.settings.requirePhoto ?? false;
+    // Biometria (digital/FaceID do dispositivo) já é fator forte; evita sobreposição de telas em mobile.
+    if (method === PunchMethod.BIOMETRIC) return false;
+    return companyRequiresPhoto || method === PunchMethod.PHOTO;
   }, [method, company]);
+
+  const locationRequired = useMemo(() => method !== PunchMethod.MANUAL, [method]);
 
   const isFormValid = useMemo(() => {
     if (!company) return false;
@@ -624,11 +629,10 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
     // Biometric check
     if (method === PunchMethod.BIOMETRIC && !biometricVerified) return false;
 
-    // Location check - OBRIGATÓRIA para TODOS os métodos (foto, GPS, biométrico, manual)
-    if (!location || location.lat == null || location.lng == null) return false;
+    if (locationRequired && (!location || location.lat == null || location.lng == null)) return false;
 
     return true;
-  }, [company, photoRequired, isPhotoValid, method, justification, location, biometricVerified]);
+  }, [company, photoRequired, isPhotoValid, method, justification, location, biometricVerified, locationRequired]);
 
   const handleConfirm = () => {
     if (photoRequired && !isPhotoValid) {
@@ -647,9 +651,8 @@ const PunchModal: React.FC<PunchModalProps> = ({ user, type, onClose, onConfirm,
       return;
     }
 
-    // Localização OBRIGATÓRIA para TODOS os métodos (foto, GPS, biométrico, manual)
-    if (!location || location.lat == null || location.lng == null) {
-      setError("Localização não identificada. Verifique seu GPS. Todos os registros de ponto requerem localização.");
+    if (locationRequired && (!location || location.lat == null || location.lng == null)) {
+      setError("Localização não identificada. Verifique seu GPS e tente novamente.");
       return;
     }
 

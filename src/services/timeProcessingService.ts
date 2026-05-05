@@ -264,6 +264,11 @@ export interface EmployeeShiftScheduleRow {
   tolerance_minutes?: number | null;
 }
 
+/** Evita N chamadas paralelas para a mesma escala legacy (reduz timeout em `db.select(users)`). */
+const legacyScheduleInflight = new Map<string, Promise<WorkScheduleInfo | null>>();
+const legacyScheduleCache = new Map<string, { value: WorkScheduleInfo | null; expiresAt: number }>();
+const LEGACY_SCHEDULE_CACHE_TTL_MS = 30_000;
+
 function essRowIsActiveWorkday(r: EmployeeShiftScheduleRow): boolean {
   if (r.is_workday === false) return false;
   if (r.is_day_off === true) return false;
@@ -472,54 +477,82 @@ async function getLegacyScheduleFromUser(
   companyId: string
 ): Promise<WorkScheduleInfo | null> {
   if (!isSupabaseConfigured() || !employeeId) return null;
-
-  try {
-    const users = (await db.select(
-      'users',
-      [{ column: 'id', operator: 'eq', value: employeeId }],
-      undefined,
-      1
-    )) as { schedule_id?: string | null }[];
-
-    const scheduleId = users?.[0]?.schedule_id;
-    if (!scheduleId) return null;
-
-    const schedules = (await db.select(
-      'schedules',
-      [{ column: 'id', operator: 'eq', value: scheduleId }],
-      undefined,
-      1
-    )) as { shift_id?: string | null; work_days?: number[] | null; days?: number[] | null }[];
-
-    const shiftId = schedules?.[0]?.shift_id;
-    if (!shiftId) return null;
-
-    const shifts = (await db.select(
-      'work_shifts',
-      [
-        { column: 'id', operator: 'eq', value: shiftId },
-        { column: 'company_id', operator: 'eq', value: companyId },
-      ],
-      undefined,
-      1
-    )) as Record<string, unknown>[];
-
-    const sh = shifts?.[0];
-    if (!sh) return null;
-
-    const base = shiftRecordToWorkScheduleInfo(sh);
-    const sched = schedules[0];
-    const work_days = Array.isArray(sched?.days)
-      ? (sched.days as number[])
-      : Array.isArray(sched?.work_days)
-        ? (sched.work_days as number[])
-        : [1, 2, 3, 4, 5];
-
-    return { ...base, work_days };
-  } catch (e) {
-    console.warn('[timeProcessingService] getLegacyScheduleFromUser:', e);
-    return null;
+  const cacheKey = `${employeeId}::${companyId}`;
+  const now = Date.now();
+  const cached = legacyScheduleCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
   }
+  const existingInflight = legacyScheduleInflight.get(cacheKey);
+  if (existingInflight) {
+    return existingInflight;
+  }
+
+  const inflight = (async (): Promise<WorkScheduleInfo | null> => {
+    try {
+      const users = (await db.select(
+        'users',
+        [{ column: 'id', operator: 'eq', value: employeeId }],
+        undefined,
+        1
+      )) as { schedule_id?: string | null }[];
+
+      const scheduleId = users?.[0]?.schedule_id;
+      if (!scheduleId) return null;
+
+      const schedules = (await db.select(
+        'schedules',
+        [{ column: 'id', operator: 'eq', value: scheduleId }],
+        undefined,
+        1
+      )) as { shift_id?: string | null; work_days?: number[] | null; days?: number[] | null }[];
+
+      const shiftId = schedules?.[0]?.shift_id;
+      if (!shiftId) return null;
+
+      const shifts = (await db.select(
+        'work_shifts',
+        [
+          { column: 'id', operator: 'eq', value: shiftId },
+          { column: 'company_id', operator: 'eq', value: companyId },
+        ],
+        undefined,
+        1
+      )) as Record<string, unknown>[];
+
+      const sh = shifts?.[0];
+      if (!sh) return null;
+
+      const base = shiftRecordToWorkScheduleInfo(sh);
+      const sched = schedules[0];
+      const work_days = Array.isArray(sched?.days)
+        ? (sched.days as number[])
+        : Array.isArray(sched?.work_days)
+          ? (sched.work_days as number[])
+          : [1, 2, 3, 4, 5];
+
+      return { ...base, work_days };
+    } catch (e) {
+      const msg = String((e as { message?: string })?.message ?? e ?? '');
+      if (msg.includes('Tempo esgotado') || /timeout/i.test(msg)) {
+        console.warn('[timeProcessingService] getLegacyScheduleFromUser: timeout transitório em users/schedules');
+      } else {
+        console.warn('[timeProcessingService] getLegacyScheduleFromUser:', e);
+      }
+      return null;
+    }
+  })();
+  legacyScheduleInflight.set(cacheKey, inflight);
+  inflight
+    .then((value) => {
+      legacyScheduleCache.set(cacheKey, { value, expiresAt: Date.now() + LEGACY_SCHEDULE_CACHE_TTL_MS });
+    })
+    .finally(() => {
+      if (legacyScheduleInflight.get(cacheKey) === inflight) {
+        legacyScheduleInflight.delete(cacheKey);
+      }
+    });
+  return inflight;
 }
 
 /**

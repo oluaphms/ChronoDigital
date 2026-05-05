@@ -350,11 +350,9 @@ const AdminCalculos: React.FC = () => {
         }
 
         if (lastStatus !== 'done') {
-          toast.addToast(
-            'error',
-            'O cálculo ainda está na fila ou o worker não respondeu. Configure POST /api/jobs/process (cron) ou tente Atualizar novamente em instantes.',
+          throw new Error(
+            'Worker indisponível para cálculo em fila. Aplicando cálculo local neste dispositivo.',
           );
-          return;
         }
       }
 
@@ -412,8 +410,18 @@ const AdminCalculos: React.FC = () => {
       });
       setCalcRows(rows);
     } catch (e: any) {
-      console.error(e);
-      toast.addToast('error', e?.message || 'Falha ao calcular.');
+      console.warn('[Calculos] fallback local ativado:', e);
+      // Fallback importante para mobile/offline parcial: cálculo local por dia.
+      try {
+        const rows = await Promise.all(
+          dias.map((d) => computeDayRow(filterUserId, user.companyId!, d)),
+        );
+        setCalcRows(rows);
+        toast.addToast('warning', 'Cálculo executado em modo local neste dispositivo.');
+      } catch (localErr: any) {
+        console.error(localErr);
+        toast.addToast('error', localErr?.message || e?.message || 'Falha ao calcular.');
+      }
     } finally {
       setLoadingCalc(false);
     }

@@ -98,24 +98,25 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
   };
 
   return (
-    <div className="glass-card rounded-2xl p-4 sm:p-6 max-w-[min(100%,42rem)] w-full max-h-[min(80vh,32rem)] sm:max-h-[80vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg min-w-0 mx-auto" role="dialog" aria-label="Centro de notificações">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
+    <div className="glass-card rounded-2xl p-3 sm:p-6 max-w-[min(100%,42rem)] w-full max-h-[min(84vh,34rem)] sm:max-h-[80vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg min-w-0 mx-auto" role="dialog" aria-label="Centro de notificações">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Bell className="w-6 h-6 text-indigo-600" />
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white">Notificações</h2>
+          <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white truncate">Notificações</h2>
           {unreadCount > 0 && (
-            <span className="px-2 py-1 bg-indigo-600 text-white text-xs font-bold rounded-full">
+            <span className="px-2 py-1 bg-indigo-600 text-white text-xs font-bold rounded-full shrink-0">
               {unreadCount}
             </span>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap sm:flex-nowrap gap-2">
           {unreadCount > 0 && (
             <Button
               variant="outline"
               size="sm"
               onClick={handleMarkAllAsRead}
               aria-label="Marcar todas como lidas"
+              className="text-xs"
             >
               <Check className="w-4 h-4" /> Marcar todas
             </Button>
@@ -132,7 +133,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-1">
         {isLoading ? (
           <div className="text-center py-8 text-slate-400">Carregando...</div>
         ) : notifications.length === 0 ? (
@@ -144,7 +145,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
           notifications.map((notif) => (
             <div
               key={notif.id}
-              className={`p-4 rounded-xl border transition-all ${
+              className={`p-3 sm:p-4 rounded-xl border transition-all ${
                 notif.status === 'pending'
                   ? 'bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-900 shadow-sm'
                   : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 opacity-75'
@@ -170,7 +171,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId, onClose
                         {new Date(notif.createdAt).toLocaleString('pt-BR')}
                       </p>
                     </div>
-                    <div className="flex gap-1 shrink-0">
+                    <div className="flex gap-1 shrink-0 ml-1">
                       {notif.status === 'pending' && (
                         <button
                           onClick={() => handleMarkAsRead(notif.id)}

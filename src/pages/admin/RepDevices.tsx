@@ -1548,14 +1548,13 @@ const AdminRepDevices: React.FC = () => {
         canon11.length === 11 &&
         validatePisPasep11(canon11) &&
         empPisCandidates.includes(canon11);
-      const needsPis = !byPis
-        ? empPreferredPis.length === 11 &&
-          validatePisPasep11(empPreferredPis) &&
-          (normalizePisTo11Digits(row.pis) !== empPreferredPis ||
-            normalizePisTo11Digits(row.cpf) !== empPreferredPis)
-        : matchViaValidPis &&
-          (normalizePisTo11Digits(row.pis) !== canon11 || normalizePisTo11Digits(row.cpf) !== canon11);
-      const patchPisTarget = !byPis ? empPreferredPis : canon11;
+      // Blindagem: só corrige PIS/CPF quando o match por PIS válido for forte (byPis).
+      // Evita "corrigir" identificador em cenários de fallback/baixa confiança.
+      const needsPis =
+        Boolean(byPis) &&
+        matchViaValidPis &&
+        (normalizePisTo11Digits(row.pis) !== canon11 || normalizePisTo11Digits(row.cpf) !== canon11);
+      const patchPisTarget = canon11;
 
       const targetMatricula =
         (emp.numero_identificador || '').trim() ||
