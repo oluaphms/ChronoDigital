@@ -184,8 +184,8 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
       start_date,
       end_date,
     );
-    if (!direct.ok) {
-      const errMsg = direct.error || 'Falha no cálculo direto.';
+    if (direct.ok === false) {
+      const errMsg = direct.error;
       const employeeInvalid = /^TIMESHEET_EMPLOYEE_INVALID:/i.test(errMsg);
       return Response.json(
         {
