@@ -91,11 +91,20 @@ export function getSupabaseClient(): SupabaseClient | null {
       },
       global: {
         fetch: async (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
+          const headers = new Headers(init?.headers || {});
+          if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+          const requestInit: RequestInit = {
+            ...init,
+            cache: 'no-store',
+            headers,
+          };
+          console.log('[UI FETCH]', url, new Date().toISOString());
           if (typeof navigator !== 'undefined' && navigator.onLine === false) {
             console.warn('[SUPABASE] modo degradado ativo — navigator.onLine=false; tentando mesmo assim...');
           }
           try {
-            return await fetch(input, init);
+            return await fetch(input, requestInit);
           } catch (error) {
             if (isDnsError(error)) {
               console.warn('[SUPABASE] modo degradado ativo — falha de DNS:', (error as Error).message);

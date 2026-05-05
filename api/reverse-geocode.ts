@@ -11,8 +11,9 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Accept',
-  /** Mesmas coordenadas → cache na CDN (menos 504 por rajada de chamadas). */
-  'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
 };
 
 async function fetchWithTimeout(url: string, ms: number, init?: RequestInit): Promise<Response> {

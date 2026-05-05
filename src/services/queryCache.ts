@@ -12,6 +12,12 @@ interface CacheEntry<T> {
 }
 
 const store = new Map<string, CacheEntry<unknown>>();
+const HARD_LOCK_NO_CACHE_KEYS = ['timesheet', 'payroll', 'rep_punch_logs', 'jobs'];
+
+function isHardLockNoCacheKey(key: string): boolean {
+  const normalized = String(key || '').toLowerCase();
+  return HARD_LOCK_NO_CACHE_KEYS.some((token) => normalized.includes(token));
+}
 
 /** TTLs padrão por tipo de dado (ms) */
 export const TTL = {
@@ -27,6 +33,7 @@ export const TTL = {
 
 export const queryCache = {
   get<T>(key: string): T | null {
+    if (isHardLockNoCacheKey(key)) return null;
     const entry = store.get(key) as CacheEntry<T> | undefined;
     if (!entry) return null;
     if (Date.now() > entry.expiresAt) {
@@ -37,6 +44,7 @@ export const queryCache = {
   },
 
   set<T>(key: string, data: T, ttl: number): void {
+    if (isHardLockNoCacheKey(key)) return;
     store.set(key, { data, expiresAt: Date.now() + ttl });
   },
 
@@ -45,6 +53,9 @@ export const queryCache = {
    * Deduplicação: chamadas simultâneas com a mesma key compartilham a mesma promise.
    */
   async getOrFetch<T>(key: string, fetcher: () => Promise<T>, ttl: number): Promise<T> {
+    if (isHardLockNoCacheKey(key)) {
+      return fetcher();
+    }
     const cached = queryCache.get<T>(key);
     if (cached !== null) return cached;
 

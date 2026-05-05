@@ -13,5 +13,10 @@ export default async function handler(request: Request): Promise<Response> {
     const parts = url.pathname.split('/').filter(Boolean);
     slug = parts[2] ?? '';
   }
-  return handleRepSlug(request, slug);
+  const response = await handleRepSlug(request, slug);
+  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  response.headers.set('Pragma', 'no-cache');
+  response.headers.set('Expires', '0');
+  console.log('[API RESPONSE]', `/api/rep/${slug || 'unknown'}`, Date.now());
+  return response;
 }

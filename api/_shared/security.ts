@@ -111,6 +111,9 @@ export function getSecureCorsHeaders(
     'Access-Control-Allow-Origin': finalOrigin,
     'Access-Control-Allow-Methods': options?.allowMethods || 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': options?.allowHeaders || 'Content-Type, Authorization',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
   };
 
   if (options?.maxAge) {

@@ -17,10 +17,18 @@ const corsAll: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Cron-Secret',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
 };
 
 const MAX_DAYS = 120;
 const RESERVED = new Set(['calc-period', 'process']);
+
+function jsonWithLog(body: unknown, status: number, route: string, headers: Record<string, string>): Response {
+  console.log('[API RESPONSE]', route, Date.now());
+  return Response.json(body, { status, headers });
+}
 
 function isYmd(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -59,9 +67,11 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
   if (request.method !== 'POST') {
-    return Response.json(
+    return jsonWithLog(
       { error: 'METHOD_NOT_ALLOWED', allowed: ['POST'] },
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      405,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -73,17 +83,21 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
   const anonKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
   if (!serviceKey || !supabaseUrl) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Supabase não configurado.', code: 'CONFIG_MISSING' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      500,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
   const jwt = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
   if (!jwt) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Token obrigatório.', code: 'UNAUTHORIZED' },
-      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      401,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -93,15 +107,19 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
 
   const caller = await getCallerContext(supabaseUrl, anonKey, serviceClient, jwt);
   if (!caller) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Sessão inválida.', code: 'UNAUTHORIZED' },
-      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      401,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
   if (!isAdminOrHr(caller.role)) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Apenas administrador ou RH.', code: 'FORBIDDEN' },
-      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      403,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -110,9 +128,11 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     const raw = await request.json();
     body = (raw && typeof raw === 'object' ? raw : {}) as typeof body;
   } catch {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Body inválido.', code: 'BAD_REQUEST' },
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      400,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -121,15 +141,19 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
   const end_date = typeof body.end_date === 'string' ? body.end_date.trim() : '';
 
   if (!employee_id || !isYmd(start_date) || !isYmd(end_date)) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Informe employee_id e datas YYYY-MM-DD.', code: 'BAD_REQUEST' },
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      400,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
   if (start_date > end_date) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'start_date não pode ser maior que end_date.', code: 'BAD_REQUEST' },
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      400,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -137,9 +161,11 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
   const d1 = new Date(`${end_date}T12:00:00`);
   const diffDays = Math.floor((d1.getTime() - d0.getTime()) / (86400000)) + 1;
   if (diffDays > MAX_DAYS || diffDays < 1) {
-    return Response.json(
+    return jsonWithLog(
       { error: `Período inválido (máximo ${MAX_DAYS} dias).`, code: 'BAD_REQUEST' },
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      400,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -150,9 +176,11 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     .maybeSingle();
 
   if (!emp || String(emp.company_id) !== caller.companyId) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Colaborador não encontrado nesta empresa.', code: 'FORBIDDEN' },
-      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      403,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -187,32 +215,35 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
     if (direct.ok === false) {
       const errMsg = direct.error;
       const employeeInvalid = /^TIMESHEET_EMPLOYEE_INVALID:/i.test(errMsg);
-      return Response.json(
+      return jsonWithLog(
         {
           error: errMsg,
           code: employeeInvalid ? 'EMPLOYEE_INVALID' : 'DIRECT_CALC_FAILED',
           enqueue_error: enqueueMessage,
         },
-        {
-          status: employeeInvalid ? 400 : 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
+        employeeInvalid ? 400 : 500,
+        '/api/jobs/calc-period',
+        { ...corsHeaders, 'Content-Type': 'application/json' },
       );
     }
-    return Response.json(
+    return jsonWithLog(
       {
         success: true,
         mode: 'direct_fallback',
         fallback: 'calculatePeriodTimesheets',
         enqueue_error: enqueueMessage,
       },
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      200,
+      '/api/jobs/calc-period',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
-  return Response.json(
+  return jsonWithLog(
     { job_id: inserted.id },
-    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    200,
+    '/api/jobs/calc-period',
+    { ...corsHeaders, 'Content-Type': 'application/json' },
   );
 }
 
@@ -222,9 +253,11 @@ async function handleProcess(request: Request): Promise<Response> {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
   if (request.method !== 'POST') {
-    return Response.json(
+    return jsonWithLog(
       { error: 'METHOD_NOT_ALLOWED', allowed: ['POST'] },
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      405,
+      '/api/jobs/process',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -242,9 +275,11 @@ async function handleProcess(request: Request): Promise<Response> {
 
   if (!cronOk) {
     if (!jwt || !anonKey) {
-      return Response.json(
+      return jsonWithLog(
         { error: 'Unauthorized', code: 'UNAUTHORIZED' },
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        401,
+        '/api/jobs/process',
+        { ...corsHeaders, 'Content-Type': 'application/json' },
       );
     }
     const preClient = createClient(supabaseUrlForAuth, (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(), {
@@ -252,9 +287,11 @@ async function handleProcess(request: Request): Promise<Response> {
     });
     const caller = await getCallerContext(supabaseUrlForAuth, anonKey, preClient, jwt);
     if (!caller || !isAdminOrHr(caller.role)) {
-      return Response.json(
+      return jsonWithLog(
         { error: 'Unauthorized', code: 'UNAUTHORIZED' },
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        401,
+        '/api/jobs/process',
+        { ...corsHeaders, 'Content-Type': 'application/json' },
       );
     }
   }
@@ -265,9 +302,11 @@ async function handleProcess(request: Request): Promise<Response> {
     .replace(/\/$/, '');
   const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   if (!serviceKey || !supabaseUrl) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Supabase não configurado.', code: 'CONFIG_MISSING' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      500,
+      '/api/jobs/process',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -277,15 +316,19 @@ async function handleProcess(request: Request): Promise<Response> {
 
   try {
     const out = await processJobs(supabase, 3);
-    return Response.json(
+    return jsonWithLog(
       { ok: true, processed: out.ran, last_job_id: out.lastJobId, errors: out.errors },
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      200,
+      '/api/jobs/process',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
-    return Response.json(
+    return jsonWithLog(
       { error: message, code: 'PROCESS_ERROR' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      500,
+      '/api/jobs/process',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 }
@@ -296,9 +339,11 @@ async function handleJobGet(request: Request, jobId: string): Promise<Response> 
     return new Response(null, { status: 204, headers: corsHeaders });
   }
   if (request.method !== 'GET') {
-    return Response.json(
+    return jsonWithLog(
       { error: 'METHOD_NOT_ALLOWED', allowed: ['GET'] },
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      405,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -310,17 +355,21 @@ async function handleJobGet(request: Request, jobId: string): Promise<Response> 
   const anonKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
   if (!serviceKey || !supabaseUrl) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Supabase não configurado.', code: 'CONFIG_MISSING' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      500,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
   const jwt = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
   if (!jwt) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Token obrigatório.', code: 'UNAUTHORIZED' },
-      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      401,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -330,15 +379,19 @@ async function handleJobGet(request: Request, jobId: string): Promise<Response> 
 
   const caller = await getCallerContext(supabaseUrl, anonKey, serviceClient, jwt);
   if (!caller) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Sessão inválida.', code: 'UNAUTHORIZED' },
-      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      401,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
   if (!isAdminOrHr(caller.role)) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Apenas administrador ou RH.', code: 'FORBIDDEN' },
-      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      403,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
@@ -349,25 +402,31 @@ async function handleJobGet(request: Request, jobId: string): Promise<Response> 
     .maybeSingle();
 
   if (error) {
-    return Response.json(
+    return jsonWithLog(
       { error: error.message, code: 'QUERY_FAILED' },
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      500,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
   if (!job) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Job não encontrado.', code: 'NOT_FOUND' },
-      { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      404,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
   if (String(job.company_id) !== caller.companyId) {
-    return Response.json(
+    return jsonWithLog(
       { error: 'Acesso negado.', code: 'FORBIDDEN' },
-      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      403,
+      '/api/jobs/status',
+      { ...corsHeaders, 'Content-Type': 'application/json' },
     );
   }
 
-  return Response.json(job, { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  return jsonWithLog(job, 200, '/api/jobs/status', { ...corsHeaders, 'Content-Type': 'application/json' });
 }
 
 export default async function handler(request: Request): Promise<Response> {
@@ -390,8 +449,10 @@ export default async function handler(request: Request): Promise<Response> {
     return new Response(null, { status: 204, headers: corsAll });
   }
 
-  return Response.json(
+  return jsonWithLog(
     { error: 'Rota não encontrada.', code: 'NOT_FOUND' },
-    { status: 404, headers: { ...corsAll, 'Content-Type': 'application/json' } },
+    404,
+    '/api/jobs',
+    { ...corsAll, 'Content-Type': 'application/json' },
   );
 }

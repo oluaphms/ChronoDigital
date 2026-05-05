@@ -9,9 +9,13 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Cron-Secret',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
 };
 
 export default async function handler(request: Request): Promise<Response> {
+  const route = '/api/process-daily-time';
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -120,11 +124,13 @@ export default async function handler(request: Request): Promise<Response> {
       }
     }
 
+    console.log('[API RESPONSE]', route, Date.now());
     return Response.json(
       { ok: true, processed, date: dateStr, errors: errors.slice(0, 10) },
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (e: any) {
+    console.log('[API RESPONSE]', route, Date.now());
     return Response.json(
       { error: e?.message || 'Erro ao processar', code: 'PROCESS_ERROR' },
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

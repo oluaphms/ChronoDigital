@@ -31,6 +31,9 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
 };
 
 function authOk(request: Request): boolean {
@@ -43,6 +46,7 @@ function authOk(request: Request): boolean {
 }
 
 function json(body: unknown, status = 200): Response {
+  console.log('[API RESPONSE]', '/api/admin', Date.now());
   return Response.json(body, { status, headers: CORS });
 }
 

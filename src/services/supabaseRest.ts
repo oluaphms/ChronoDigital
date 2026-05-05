@@ -18,13 +18,27 @@ function headers(cfg: SupabaseRestConfig, extra?: Record<string, string>): Recor
   };
 }
 
+function buildNoStoreRequestInit(init: RequestInit): RequestInit {
+  const mergedHeaders = new Headers(init.headers || {});
+  if (!mergedHeaders.has('Content-Type')) {
+    mergedHeaders.set('Content-Type', 'application/json');
+  }
+  return {
+    ...init,
+    cache: 'no-store',
+    headers: mergedHeaders,
+  };
+}
+
 export async function restGet<T>(cfg: SupabaseRestConfig, path: string): Promise<T> {
   const base = cfg.url.replace(/\/$/, '');
   const res = await withRetry(async () => {
-    const r = await fetch(`${base}/rest/v1/${path}`, {
+    const url = `${base}/rest/v1/${path}`;
+    console.log('[UI FETCH]', url, new Date().toISOString());
+    const r = await fetch(url, buildNoStoreRequestInit({
       method: 'GET',
       headers: headers(cfg),
-    });
+    }));
     if (!r.ok) {
       const t = await r.text();
       const err = new Error(`GET ${path}: HTTP ${r.status} ${t.slice(0, 400)}`);
@@ -39,11 +53,13 @@ export async function restGet<T>(cfg: SupabaseRestConfig, path: string): Promise
 export async function restPatch(cfg: SupabaseRestConfig, path: string, body: unknown): Promise<void> {
   const base = cfg.url.replace(/\/$/, '');
   await withRetry(async () => {
-    const r = await fetch(`${base}/rest/v1/${path}`, {
+    const url = `${base}/rest/v1/${path}`;
+    console.log('[UI FETCH]', url, new Date().toISOString());
+    const r = await fetch(url, buildNoStoreRequestInit({
       method: 'PATCH',
       headers: headers(cfg, { Prefer: 'return=minimal' }),
       body: JSON.stringify(body),
-    });
+    }));
     if (!r.ok) {
       const t = await r.text();
       const err = new Error(`PATCH ${path}: HTTP ${r.status} ${t.slice(0, 400)}`);
@@ -62,11 +78,13 @@ export async function restRpc<T = unknown>(
   const base = cfg.url.replace(/\/$/, '');
   const path = `rpc/${rpcName}`;
   const res = await withRetry(async () => {
-    const r = await fetch(`${base}/rest/v1/${path}`, {
+    const url = `${base}/rest/v1/${path}`;
+    console.log('[UI FETCH]', url, new Date().toISOString());
+    const r = await fetch(url, buildNoStoreRequestInit({
       method: 'POST',
       headers: headers(cfg, { Prefer: 'return=representation' }),
       body: JSON.stringify(body),
-    });
+    }));
     if (!r.ok) {
       const t = await r.text();
       const err = new Error(`RPC ${rpcName}: HTTP ${r.status} ${t.slice(0, 500)}`);
@@ -92,13 +110,15 @@ export async function restPostBulk(
   if (rows.length === 0) return;
   const base = cfg.url.replace(/\/$/, '');
   await withRetry(async () => {
-    const r = await fetch(`${base}/rest/v1/${table}`, {
+    const url = `${base}/rest/v1/${table}`;
+    console.log('[UI FETCH]', url, new Date().toISOString());
+    const r = await fetch(url, buildNoStoreRequestInit({
       method: 'POST',
       headers: headers(cfg, {
         Prefer: 'return=minimal,resolution=ignore-duplicates',
       }),
       body: JSON.stringify(rows),
-    });
+    }));
     if (!r.ok) {
       const t = await r.text();
       const err = new Error(`POST ${table}: HTTP ${r.status} ${t.slice(0, 400)}`);

@@ -287,7 +287,9 @@ const AdminCalculos: React.FC = () => {
         return;
       }
 
-      const enqueueRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/calc-period`, {
+      const enqueueUrl = `${base.replace(/\/$/, '')}/api/jobs/calc-period`;
+      console.log('[UI FETCH]', enqueueUrl, new Date().toISOString());
+      const enqueueRes = await fetch(enqueueUrl, {
         method: 'POST',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -319,7 +321,9 @@ const AdminCalculos: React.FC = () => {
         const jobId = enqueueJson.job_id;
         if (!jobId) throw new Error('Resposta sem job_id.');
 
-        void fetch(`${base.replace(/\/$/, '')}/api/jobs/process`, {
+        const processUrl = `${base.replace(/\/$/, '')}/api/jobs/process`;
+        console.log('[UI FETCH]', processUrl, new Date().toISOString());
+        void fetch(processUrl, {
           method: 'POST',
           cache: 'no-store',
           headers: {
@@ -333,9 +337,11 @@ const AdminCalculos: React.FC = () => {
         let lastStatus = 'pending';
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 1500));
-          const stRes = await fetch(`${base.replace(/\/$/, '')}/api/jobs/${jobId}`, {
+          const statusUrl = `${base.replace(/\/$/, '')}/api/jobs/${jobId}`;
+          console.log('[UI FETCH]', statusUrl, new Date().toISOString());
+          const stRes = await fetch(statusUrl, {
             cache: 'no-store',
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           });
           const job = (await stRes.json().catch(() => ({}))) as {
             status?: string;
