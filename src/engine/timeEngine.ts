@@ -1374,11 +1374,12 @@ async function persistRecalculatedDay(params: {
     sch.schedule != null
       ? { ...sch.schedule }
       : { no_schedule: true, js_day_of_week: sch.jsDayOfWeek };
+  const calculation_type: 'fallback' | 'normal' = daily.contingency_schedule_fallback ? 'fallback' : 'normal';
   const calculation_audit = {
     punches: snapshotPunchesFromRecords(params.dayRecords),
     schedule_used,
     correlation_id: recalc_run_id,
-    calculation_type: (daily.contingency_schedule_fallback ? 'fallback' : 'normal') as const,
+    calculation_type,
   };
   const payload = {
     employee_id: employeeId,

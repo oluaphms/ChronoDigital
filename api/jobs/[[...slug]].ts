@@ -184,29 +184,29 @@ async function handleCalcPeriod(request: Request): Promise<Response> {
       start_date,
       end_date,
     );
-    if (direct.ok) {
+    if (!direct.ok) {
+      const errMsg = direct.error || 'Falha no cálculo direto.';
+      const employeeInvalid = /^TIMESHEET_EMPLOYEE_INVALID:/i.test(errMsg);
       return Response.json(
         {
-          success: true,
-          mode: 'direct_fallback',
-          fallback: 'calculatePeriodTimesheets',
+          error: errMsg,
+          code: employeeInvalid ? 'EMPLOYEE_INVALID' : 'DIRECT_CALC_FAILED',
           enqueue_error: enqueueMessage,
         },
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        {
+          status: employeeInvalid ? 400 : 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
       );
     }
-    const errMsg = direct.error || 'Falha no cálculo direto.';
-    const employeeInvalid = /^TIMESHEET_EMPLOYEE_INVALID:/i.test(errMsg);
     return Response.json(
       {
-        error: errMsg,
-        code: employeeInvalid ? 'EMPLOYEE_INVALID' : 'DIRECT_CALC_FAILED',
+        success: true,
+        mode: 'direct_fallback',
+        fallback: 'calculatePeriodTimesheets',
         enqueue_error: enqueueMessage,
       },
-      {
-        status: employeeInvalid ? 400 : 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 
