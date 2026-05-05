@@ -4,7 +4,68 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ParsedAfdRecord, RepDevice, PunchFromDevice } from './types';
-import { afdRecordToIsoDateTime, matriculaFromAfdPisField } from './repParser';
+import { mergeRepExtractedIdentifiersIntoRawData } from './repExtractBestIdentifier';
+import { extractCompactAfdLineFromRawData, repPunchLogEffectivePisCanonForDiagnostics } from './repPunchPendingIdentity';
+import { afdRecordToIsoDateTime, matriculaFromAfdPisField, parseAfdLine } from './repParser';
+import { normalizeDigits, normalizeDocument, validatePisPasep11 } from './pisPasep';
+import type { RepWeakPisMatchUser } from './repWeakPisFallbackMatch';
+import {
+  applyResolvedIdentityToRaw,
+  applyUnresolvedIdentityToRaw,
+  resolveCanonicalUser,
+} from './repResolveCanonicalUser';
+import { syncEspelhoAfterRepPromote, type RepPromotedDetailRow } from './repTimesheetMirror';
+
+/**
+ * Linha AFD compacta tipo 3/7: `raw_data.raw` string ou envelope (`raw` object com `.raw` string), p.ex. clock_event_logs.
+ */
+function extractRepAfdLineFromRawData(rd: Record<string, unknown>): string | null {
+  return extractCompactAfdLineFromRawData(rd);
+}
+
+function pisDigits11(s: string | null | undefined): string {
+  return normalizeDocument(s ?? '').padStart(11, '0').slice(0, 11);
+}
+
+/**
+ * Re-parse da linha AFD em `raw_data.raw` só quando melhora o identificador.
+ * Se `pis`/`cpf` já têm PIS com DV válido (ex.: enriquecimento em fetchPunches via load_users),
+ * **não** substituir pelo parse do AFD truncado (caso típico Control iD).
+ */
+function applyControlIdAfdLineIdentityOverride<
+  T extends {
+    pis?: string | null;
+    cpf?: string | null;
+    matricula?: string | null;
+    raw_data?: Record<string, unknown>;
+  },
+>(params: T): T {
+  const rd = params.raw_data;
+  if (!rd || typeof rd !== 'object' || Array.isArray(rd)) return params;
+  const line = extractRepAfdLineFromRawData(rd);
+  if (!line) return params;
+  const rec = parseAfdLine(line);
+  if (!rec) return params;
+
+  const incomingPis = pisDigits11(params.pis ?? params.cpf);
+  if (validatePisPasep11(incomingPis)) {
+    return params;
+  }
+
+  const parsedPis = pisDigits11(rec.cpfOuPis);
+  if (!validatePisPasep11(parsedPis)) {
+    return params;
+  }
+
+  const badge = matriculaFromAfdPisField(rec.cpfOuPis);
+  const matIn = params.matricula != null && String(params.matricula).trim() !== '' ? params.matricula : null;
+  return {
+    ...params,
+    pis: rec.cpfOuPis,
+    cpf: rec.cpfOuPis,
+    matricula: matIn ?? badge ?? null,
+  };
+}
 
 export interface IngestResult {
   success: boolean;
@@ -38,6 +99,8 @@ export async function ingestPunch(
     apply_schedule?: boolean;
     /** Se definido, todas as batidas desta chamada gravam neste utilizador (importação AFD / reatribuição). */
     force_user_id?: string | null;
+    /** Lista de colaboradores (mesma empresa) para match fraco controlado quando não há PIS com DV válido. */
+    weak_match_users?: readonly RepWeakPisMatchUser[] | null;
   }
 ): Promise<{
   success: boolean;
@@ -47,20 +110,79 @@ export async function ingestPunch(
   duplicate?: boolean;
   error?: string;
 }> {
+  const merged = applyControlIdAfdLineIdentityOverride(params);
+  let rawData = mergeRepExtractedIdentifiersIntoRawData(merged.raw_data ?? {});
+  let pisSend = merged.pis ?? null;
+  let cpfSend = merged.cpf ?? null;
+  let forceUserId = merged.force_user_id ?? null;
+
+  if (!forceUserId) {
+    let weakList = params.weak_match_users;
+    if (!weakList?.length) {
+      const { data: wu } = await supabase
+        .from('users')
+        .select('id,pis_pasep,pis,cpf,status,invisivel,demissao,company_id')
+        .eq('company_id', merged.company_id)
+        .limit(5000);
+      weakList = (wu as RepWeakPisMatchUser[] | null) ?? [];
+    }
+
+    const identity = await resolveCanonicalUser(
+      supabase,
+      {
+        company_id: merged.company_id,
+        pis: pisSend,
+        cpf: cpfSend,
+        matricula: merged.matricula ?? null,
+        raw_data: rawData,
+      },
+      { users: weakList ?? [] }
+    );
+
+    if (identity.userId) {
+      forceUserId = identity.userId;
+      rawData = applyResolvedIdentityToRaw(rawData, identity.userId);
+      if (identity.source === 'weak' && identity.canonicalPis) {
+        pisSend = identity.canonicalPis;
+        cpfSend = identity.canonicalPis;
+        rawData = {
+          ...rawData,
+          match_confidence: 'low',
+          corrected_by_system: true,
+          weak_match_applied: true,
+          matched_user_id: identity.userId,
+          match_strategy: 'fallback',
+        };
+        if (typeof globalThis !== 'undefined' && globalThis.console) {
+          globalThis.console.warn('[REP MATCH FALLBACK] weak_match_applied', { userId: identity.userId });
+          globalThis.console.warn('[REP AUTO MATCH] fallback aplicado', {
+            userId: identity.userId,
+            match_strategy: 'fallback',
+          });
+        }
+      }
+    } else {
+      rawData = applyUnresolvedIdentityToRaw(rawData);
+    }
+  } else {
+    rawData = applyResolvedIdentityToRaw(rawData, forceUserId);
+  }
+
   const { data, error } = await supabase.rpc('rep_ingest_punch', {
-    p_company_id: params.company_id,
-    p_rep_device_id: params.rep_device_id ?? null,
-    p_pis: params.pis ?? null,
-    p_cpf: params.cpf ?? null,
-    p_matricula: params.matricula ?? null,
-    p_nome_funcionario: params.nome_funcionario ?? null,
-    p_data_hora: params.data_hora,
-    p_tipo_marcacao: params.tipo_marcacao,
-    p_nsr: params.nsr ?? null,
-    p_raw_data: params.raw_data ?? {},
-    p_only_staging: params.only_staging ?? false,
-    p_apply_schedule: params.apply_schedule ?? false,
-    p_force_user_id: params.force_user_id ?? null,
+    p_company_id: merged.company_id,
+    p_rep_device_id: merged.rep_device_id ?? null,
+    p_pis: pisSend,
+    p_cpf: cpfSend,
+    p_matricula: merged.matricula ?? null,
+    p_nome_funcionario: merged.nome_funcionario ?? null,
+    p_data_hora: merged.data_hora,
+    p_tipo_marcacao: merged.tipo_marcacao,
+    p_nsr: merged.nsr ?? null,
+    p_raw_data: rawData,
+    p_only_staging: merged.only_staging ?? false,
+    p_apply_schedule: merged.apply_schedule ?? false,
+    p_force_user_id: forceUserId,
+    p_trust_client_identity: true,
   });
 
   if (error) {
@@ -75,6 +197,30 @@ export async function ingestPunch(
   };
   if (result.duplicate) {
     return { success: true, duplicate: true, error: 'NSR já importado' };
+  }
+
+  if (typeof globalThis !== 'undefined' && globalThis.console) {
+    const status = forceUserId ? 'resolved' : 'unresolved';
+    globalThis.console.warn('[REP INGEST]', {
+      nsr: merged.nsr ?? null,
+      resolved_user_id: forceUserId ?? null,
+      status,
+    });
+  }
+
+  if (result.user_not_found === true && typeof globalThis !== 'undefined' && globalThis.console) {
+    const eff = repPunchLogEffectivePisCanonForDiagnostics({
+      pis: pisSend,
+      cpf: cpfSend,
+      raw_data: rawData,
+    });
+    globalThis.console.warn('[REP MATCH DEBUG]', {
+      pis_recebido: merged.pis ?? null,
+      pis_normalizado: eff ?? normalizeDigits(merged.pis ?? merged.cpf),
+      cpf: merged.cpf ?? null,
+      matricula: merged.matricula ?? null,
+      candidatos: 'no cliente admin use RPC rep_match_user_id_for_rep_punch_row → campo debug',
+    });
   }
   return {
     success: result.success === true,
@@ -98,6 +244,16 @@ export async function ingestAfdRecords(
 ): Promise<IngestResult> {
   const result: IngestResult = { success: true, imported: 0, duplicated: 0, userNotFound: 0, errors: [] };
 
+  let weakUsers: RepWeakPisMatchUser[] | null = null;
+  if (!forceUserId) {
+    const { data: wu } = await supabase
+      .from('users')
+      .select('id,pis_pasep,pis,cpf,status,invisivel,demissao,company_id')
+      .eq('company_id', companyId)
+      .limit(5000);
+    weakUsers = (wu as RepWeakPisMatchUser[] | null) ?? null;
+  }
+
   for (const rec of records) {
     const dataHora = `${rec.data}T${rec.hora}:00.000Z`;
     const iso = timezone ? afdRecordToIsoDateTime(rec, timezone) : dataHora;
@@ -114,6 +270,7 @@ export async function ingestAfdRecords(
       nsr: rec.nsr,
       raw_data: { raw: rec.raw },
       force_user_id: forceUserId ?? null,
+      weak_match_users: forceUserId ? null : weakUsers,
     });
 
     if (r.duplicate || (r.error && r.error.includes('já importado'))) {
@@ -158,6 +315,8 @@ export type IngestPunchesFromDeviceOptions = {
    * para não gerar milhares de linhas — no máximo ~50 eventos).
    */
   onBatchProgress?: (p: RepIngestBatchProgress) => void;
+  /** Se true, não carrega colaboradores para match fraco (PIS truncado / DV inválido). */
+  skipWeakPisMatch?: boolean;
 };
 
 function foldIngestPunchRow(
@@ -218,6 +377,15 @@ export async function ingestPunchesFromDevice(
   const applySchedule = options?.applySchedule ?? false;
   const concurrency = getRepIngestConcurrency();
   const onBatchProgress = options?.onBatchProgress;
+  let weakUsers: RepWeakPisMatchUser[] | null = null;
+  if (!options?.skipWeakPisMatch) {
+    const { data: wu } = await supabase
+      .from('users')
+      .select('id,pis_pasep,pis,cpf,status,invisivel,demissao,company_id')
+      .eq('company_id', device.company_id)
+      .limit(5000);
+    weakUsers = (wu as RepWeakPisMatchUser[] | null) ?? null;
+  }
   const total = punches.length;
   const totalBatches = total > 0 ? Math.ceil(total / concurrency) : 0;
   /** Máximo de callbacks de progresso (importações enormes). */
@@ -242,6 +410,7 @@ export async function ingestPunchesFromDevice(
           raw_data: p.raw ?? {},
           only_staging: onlyStaging,
           apply_schedule: applySchedule,
+          weak_match_users: weakUsers,
         })
       )
     );
@@ -300,7 +469,7 @@ export async function promotePendingRepPunchLogs(
   const win = options?.localWindow;
   const onlyUid = options?.onlyUserId?.trim();
   const { data, error } = await supabase.rpc('rep_promote_pending_rep_punch_logs', {
-    p_company_id: companyId,
+    p_company_id: companyId.trim(),
     p_rep_device_id: repDeviceId,
     p_local_window_start: win?.startIso ?? null,
     p_local_window_end: win?.endIso ?? null,
@@ -314,7 +483,19 @@ export async function promotePendingRepPunchLogs(
     promoted?: number;
     skipped_no_user?: number;
     skipped_other_user?: number;
+    promoted_detail?: RepPromotedDetailRow[] | null;
   };
+  if (row.success === true && Array.isArray(row.promoted_detail) && row.promoted_detail.length > 0) {
+    try {
+      await syncEspelhoAfterRepPromote(supabase, companyId.trim(), row.promoted_detail);
+    } catch (e) {
+      console.error('[TIMESHEET FAIL]', {
+        motivo: e instanceof Error ? e.message : String(e),
+        contexto: 'syncEspelhoAfterRepPromote',
+        company_id: companyId.trim(),
+      });
+    }
+  }
   return {
     success: row.success === true,
     promoted: row.promoted,

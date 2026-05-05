@@ -228,6 +228,15 @@ const EmployeeTimesheet: React.FC = () => {
     }));
   }, [records]);
 
+  const expectedWindowForYmd = useCallback(
+    (dateStr: string): DayScheduleWindow | null | undefined => {
+      if (!scheduleWindowsByDow) return undefined;
+      const dow = new Date(`${dateStr}T12:00:00`).getDay();
+      return scheduleWindowsByDow[dow];
+    },
+    [scheduleWindowsByDow],
+  );
+
   /** Mesmo cálculo do espelho admin (`AdminTimesheet`). */
   const empMirror = useMemo(() => {
     if (!periodValid) return new Map<string, DayMirror>();
@@ -251,15 +260,6 @@ const EmployeeTimesheet: React.FC = () => {
     if (!periodValid) return [];
     return enumerateLocalCalendarDays(periodStart, periodEnd);
   }, [periodStart, periodEnd, periodValid]);
-
-  const expectedWindowForYmd = useCallback(
-    (dateStr: string): DayScheduleWindow | null | undefined => {
-      if (!scheduleWindowsByDow) return undefined;
-      const dow = new Date(`${dateStr}T12:00:00`).getDay();
-      return scheduleWindowsByDow[dow];
-    },
-    [scheduleWindowsByDow],
-  );
 
   const recordsByDate = useMemo(() => {
     if (!periodValid) return new Map<string, any[]>();

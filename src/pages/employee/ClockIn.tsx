@@ -419,7 +419,7 @@ const EmployeeClockIn: React.FC = () => {
       const today = getLocalDateString();
       const dayRecords = await getDayRecords(user.id, today);
       const typeStr = type === LogType.IN ? 'entrada' : type === LogType.OUT ? 'saída' : 'pausa';
-      const validation = validatePunchSequence(dayRecords, typeStr);
+      const validation = validatePunchSequence(dayRecords, typeStr, { nextEventTime: new Date() });
       if (!validation.valid) {
         setError(validation.error || 'Sequência inválida.');
         toast.addToast('error', validation.error || 'Sequência inválida.');
@@ -690,7 +690,7 @@ const EmployeeClockIn: React.FC = () => {
     const today = getLocalDateString();
     const dayRecords = await getDayRecords(user.id, today);
     const typeStr = type === LogType.IN ? 'entrada' : type === LogType.OUT ? 'saída' : 'pausa';
-    const validation = validatePunchSequence(dayRecords, typeStr);
+    const validation = validatePunchSequence(dayRecords, typeStr, { nextEventTime: new Date() });
     if (!validation.valid) {
       setError(validation.error || 'Sequência inválida.');
       toast.addToast('error', validation.error || 'Sequência inválida.');

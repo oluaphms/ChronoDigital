@@ -201,8 +201,10 @@ export default function SchemaGuardBadge() {
   }
 
   if (IS_PRODUCTION || !state) return null;
+  /** Avisos de dev não ocupam ecrã; só falhas críticas (produção ou simulação via debug). */
+  if (state.mode !== 'production-error') return null;
 
-  const label = isCritical ? 'Erro crítico' : 'Modo automático';
+  const label = 'Erro crítico';
   const origin = state.origin || 'desconhecida';
   const correlationShort = state.correlation_id ? String(state.correlation_id).slice(0, 8) : '----';
   const tooltip = `Modo: ${label} • Origem: ${origin} • Corr: ${correlationShort} • Clique para ver detalhes`;
@@ -218,7 +220,7 @@ export default function SchemaGuardBadge() {
         borderRadius: 8,
         fontSize: 12,
         fontWeight: 600,
-        background: isCritical ? '#ff4d4f' : '#faad14',
+        background: '#ff4d4f',
         color: '#fff',
         boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
         cursor: 'pointer',

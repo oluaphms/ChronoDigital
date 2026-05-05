@@ -6,9 +6,6 @@
 import React, { useState, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useTenantPlan } from '../../hooks/useTenantPlan';
-import { isPlanFeatureEnabled } from '../../../services/tenantPlan.service';
-import { PlanUpgradePanel } from '../../components/plan/PlanUpgradePanel';
 import PageHeader from '../../components/PageHeader';
 import { Button } from '../../../components/UI';
 import { db, auth, isSupabaseConfigured } from '../../services/supabaseClient';
@@ -31,7 +28,6 @@ const getBaseUrl = () => {
 
 export default function AdminFiscalizacao() {
   const { user, loading } = useCurrentUser();
-  const tenantPlan = useTenantPlan(user?.companyId);
   const [integrity, setIntegrity] = useState<IntegrityResult | null>(null);
   const [integrityLoading, setIntegrityLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState<string | null>(null);
@@ -92,7 +88,7 @@ export default function AdminFiscalizacao() {
     []
   );
 
-  if (loading || tenantPlan.loading) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
         <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
@@ -103,8 +99,6 @@ export default function AdminFiscalizacao() {
     return <Navigate to="/" replace />;
   }
 
-  const fiscalOk = isPlanFeatureEnabled(tenantPlan.plan, 'rep_fiscalizacao');
-
   return (
     <div className="space-y-8">
       <PageHeader
@@ -112,16 +106,6 @@ export default function AdminFiscalizacao() {
         subtitle="Exportações e validação de integridade conforme Portaria 671/2021"
       />
 
-      {!fiscalOk ? (
-        <PlanUpgradePanel
-          plan={tenantPlan.plan}
-          title="Recurso disponível no Pro e Enterprise"
-          message="Exportações AFD/AEJ e fiscalização REP-P não estão incluídas no plano Free. Faça upgrade para utilizar esta área."
-        />
-      ) : null}
-
-      {fiscalOk ? (
-        <>
       <div className="grid gap-6 md:grid-cols-2">
         <section className="p-6 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-4 flex items-center gap-2">
@@ -228,8 +212,6 @@ export default function AdminFiscalizacao() {
           </a>
         </div>
       </section>
-        </>
-      ) : null}
     </div>
   );
 }

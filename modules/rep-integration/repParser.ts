@@ -4,14 +4,15 @@
  */
 
 import type { ParsedAfdRecord } from './types';
+import { normalizeDocument, repAfdCanonical11DigitsFromBlob } from './pisPasep';
 
 const AFD_LINE_REGEX = /^(\d{9})[\s\t]*(\d{8})[\s\t]*(\d{6})[\s\t]*(\d{11})[\s\t]*([A-Za-z])?/;
-const AFD_LINE_REGEX_ALT = /^(\d{1,9})[\s\t]+(\d{8})[\s\t]+(\d{6})[\s\t]+(\d{10,14})[\s\t]*([A-Za-z])?/;
+const AFD_LINE_REGEX_ALT = /^(\d{1,9})[\s\t]+(\d{8})[\s\t]+(\d{6})[\s\t]+(\d{10,32})[\s\t]*([A-Za-z])?/;
 /** Portaria 1510/671: NSR(9) + tipo registro(3 ou 7) + DDMMAAAA + HHMMSS + PIS/CPF; E/S opcional no fim. */
 const AFD_LINE_RECORD_37_LOOSE =
-  /^(\d{9})\s*([37])\s*(\d{8})\s*(\d{6})\s*(\d{10,14})(?:\s*([A-Za-z]))?/;
+  /^(\d{9})\s*([37])\s*(\d{8})\s*(\d{6})\s*(\d{10,32})(?:\s*([A-Za-z]))?/;
 const AFD_LINE_RECORD_37_TIGHT =
-  /^(\d{9})([37])(\d{8})(\d{6})(\d{10,14})([A-Za-z])?/;
+  /^(\d{9})([37])(\d{8})(\d{6})(\d{10,32})([A-Za-z])?/;
 
 /**
  * Parse de arquivo AFD (texto) - linhas de marcação tipo 3 ou equivalente
@@ -50,14 +51,9 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
     const data = normalizeDate(dataStr!);
     const hora = normalizeTime(horaStr!);
     if (!data || !hora) return null;
-    const digits = (cpfPis || '').replace(/\D/g, '');
-    /** Campo 10–14 posições: em vários firmwares os 11 últimos dígitos são PIS/CPF/crachá (prefixo é lixo). */
-    const cpfOuPis =
-      digits.length <= 11
-        ? digits.padStart(11, '0')
-        : digits.length <= 14
-          ? digits.slice(-11).padStart(11, '0')
-          : digits.slice(0, 11);
+    const digits = normalizeDocument(cpfPis || '');
+    const cpfOuPis = repAfdCanonical11DigitsFromBlob(digits);
+    if (!cpfOuPis) return null;
     const tipoNorm = normalizeMarcacaoTipo(tipoMarc);
     return { nsr, data, hora, cpfOuPis, tipo: tipoNorm, raw: line };
   }
@@ -74,7 +70,8 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
   const hora = normalizeTime(horaStr!);
   if (!data || !hora) return null;
 
-  const cpfOuPis = (cpfPis || '').replace(/\D/g, '').slice(0, 11).padStart(11, '0');
+  const cpfOuPis = repAfdCanonical11DigitsFromBlob(normalizeDocument(cpfPis || ''));
+  if (!cpfOuPis) return null;
   const tipoNorm = normalizeMarcacaoTipo(tipo);
 
   return {
@@ -88,13 +85,32 @@ export function parseAfdLine(line: string): ParsedAfdRecord | null {
 }
 
 /**
+ * Dígitos crus do campo identificador na linha AFD (antes de `repAfdCanonical11DigitsFromBlob`).
+ * Útil para diagnóstico e re-canonicalização quando o firmware envia blob com mais de 11 dígitos.
+ */
+export function extractAfdLineIdentifierDigitBlob(line: string): string | null {
+  const trimmed = line.trim();
+  let m = trimmed.match(AFD_LINE_RECORD_37_LOOSE);
+  if (!m) m = trimmed.match(AFD_LINE_RECORD_37_TIGHT);
+  if (m) {
+    const blob = normalizeDocument(m[5] || '');
+    return blob.length > 0 ? blob : null;
+  }
+  m = trimmed.match(AFD_LINE_REGEX);
+  if (!m) m = trimmed.match(AFD_LINE_REGEX_ALT);
+  if (!m) return null;
+  const blob = normalizeDocument(m[4] || '');
+  return blob.length > 0 ? blob : null;
+}
+
+/**
  * O campo AFD de 11 posições costuma ser PIS ou CPF, mas muitos relógios gravam **crachá/matrícula**
  * preenchido com zeros à esquerda (ex.: 00000705412). Esse valor não casa com PIS/CPF no cadastro;
  * derivamos a matrícula para `rep_ingest_punch` casar com `numero_identificador` / `numero_folha`.
  * Não usa só `ltrim('0')` para não quebrar PIS que começa por zero válido (ex.: 012…).
  */
 export function matriculaFromAfdPisField(cpfOuPis11: string): string | undefined {
-  const d = (cpfOuPis11 || '').replace(/\D/g, '').padStart(11, '0').slice(0, 11);
+  const d = normalizeDocument(cpfOuPis11 || '').padStart(11, '0').slice(0, 11);
   if (d.length !== 11) return undefined;
   const m = d.match(/^0{3,}([1-9]\d{0,8})$/);
   if (m) return m[1] ?? undefined;
@@ -218,14 +234,15 @@ export function parseTxtOrCsv(content: string, delimiter: string = '\t'): Parsed
   for (let i = hasHeader ? 1 : 0; i < lines.length; i++) {
     const parts = lines[i].split(delimiter).map((p) => p.trim());
     if (parts.length < 4) continue;
-    const nsr = parseInt(parts[0].replace(/\D/g, ''), 10);
+    const nsr = parseInt(normalizeDocument(parts[0]), 10);
     if (Number.isNaN(nsr)) continue;
-    const dataStr = parts[1].replace(/\D/g, '');
-    const horaStr = parts[2].replace(/\D/g, '');
+    const dataStr = normalizeDocument(parts[1]);
+    const horaStr = normalizeDocument(parts[2]);
     const data = dataStr.length === 8 ? normalizeDate(dataStr) : null;
     const hora = horaStr.length >= 4 ? normalizeTime(horaStr.padEnd(6, '0')) : null;
     if (!data || !hora) continue;
-    const cpfOuPis = (parts[3] || '').replace(/\D/g, '').slice(0, 11).padStart(11, '0');
+    const cpfOuPis = repAfdCanonical11DigitsFromBlob(normalizeDocument(parts[3] || ''));
+    if (!cpfOuPis) continue;
     const tipo = (parts[4] || 'E').toUpperCase().slice(0, 1);
     records.push({
       nsr,

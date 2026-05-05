@@ -18,6 +18,7 @@ import {
   type RawTimeRecord,
   type WorkScheduleInfo,
   type DailyProcessResult,
+  normalizePunchType,
 } from '../services/timeProcessingService';
 
 export type ShiftType = 'fixed' | 'flexible' | '6x1' | '5x2' | '12x36' | '24x72' | 'custom';
@@ -525,6 +526,67 @@ function normalizeType(type: string): string {
   return t;
 }
 
+/** Intervalo mínimo (ms) para tratar segunda «entrada» como saída implícita (alinhado ao trigger SQL). */
+export const SEQUENCE_TOLERANCE_MIN_GAP_MS = 5 * 60 * 1000;
+
+/**
+ * Segunda entrada após entrada com > 5 min → interpretada como saída (dados legados ou pré-persistência).
+ * Define raw_data.sequence_adjusted na cópia usada pelo motor.
+ */
+export function applyEntradaDuplicationTolerance(records: RawTimeRecord[]): {
+  records: RawTimeRecord[];
+  hadAdjustment: boolean;
+} {
+  if (records.length < 2) return { records, hadAdjustment: false };
+  const order = records.map((_, i) => i).sort((a, b) => {
+    const ta = new Date(records[a].timestamp || records[a].created_at).getTime();
+    const tb = new Date(records[b].timestamp || records[b].created_at).getTime();
+    return ta - tb || a - b;
+  });
+  const out = records.map((r) => ({ ...r }));
+  let hadAdjustment = false;
+  let prevIdx: number | null = null;
+
+  for (const idx of order) {
+    const sem = normalizePunchType(out[idx].type);
+    if (prevIdx === null) {
+      prevIdx = idx;
+      continue;
+    }
+    const prevSem = normalizePunchType(out[prevIdx].type);
+    const tPrev = new Date(out[prevIdx].timestamp || out[prevIdx].created_at).getTime();
+    const tCur = new Date(out[idx].timestamp || out[idx].created_at).getTime();
+    if (prevSem === 'entrada' && sem === 'entrada' && tCur - tPrev > SEQUENCE_TOLERANCE_MIN_GAP_MS) {
+      const prevRd =
+        typeof out[idx].raw_data === 'object' && out[idx].raw_data && !Array.isArray(out[idx].raw_data)
+          ? (out[idx].raw_data as Record<string, unknown>)
+          : {};
+      out[idx] = {
+        ...out[idx],
+        type: 'saida',
+        raw_data: {
+          ...prevRd,
+          sequence_adjusted: true,
+          sequence_fix: 'entrada_duplicada_para_saida',
+        },
+      };
+      hadAdjustment = true;
+      if (typeof globalThis !== 'undefined' && globalThis.console) {
+        globalThis.console.warn('[CALC FIX] entrada duplicada convertida em saída', {
+          recordId: out[idx].id,
+          gapMin: Math.round((tCur - tPrev) / 60000),
+        });
+      }
+    }
+    prevIdx = idx;
+  }
+
+  if (hadAdjustment && typeof globalThis !== 'undefined' && globalThis.console) {
+    globalThis.console.warn('[CALC WARNING] sequência corrigida automaticamente');
+  }
+  return { records: out, hadAdjustment };
+}
+
 /** Mapeia pausa/entrada para inicio_intervalo e fim_intervalo na sequência do dia */
 function mapToStandardTypes(records: RawTimeRecord[]): ParsedSegment[] {
   const sorted = [...records].sort(
@@ -570,7 +632,8 @@ function mapToStandardTypes(records: RawTimeRecord[]): ParsedSegment[] {
  * Suporta múltiplos turnos: entrada saida entrada saida.
  */
 export function parseTimeRecords(records: RawTimeRecord[]): ParsedDay {
-  const segments = mapToStandardTypes(records);
+  const { records: tolerant } = applyEntradaDuplicationTolerance(records);
+  const segments = mapToStandardTypes(tolerant);
   const date = segments[0]?.at?.toISOString().slice(0, 10) || new Date().toISOString().slice(0, 10);
   const sequences: ParsedDay['sequences'] = [];
   let totalWorkedMinutes = 0;

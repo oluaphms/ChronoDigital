@@ -101,27 +101,9 @@ export function enforceEnvSchemaFlag(envVar: unknown, envName: string): boolean 
   }
 
   if (!isProduction && parsed === undefined && !hasWarned) {
-    const correlationId = crypto.randomUUID();
     const message = `[SCHEMA GUARD] modo automático ativo — ${envName} não definido`;
-
     console.warn(message);
-
-    if (typeof window !== 'undefined') {
-      (window as unknown as { __SCHEMA_GUARD_ERROR__: SchemaGuardErrorState }).__SCHEMA_GUARD_ERROR__ = {
-        env: envName,
-        timestamp: new Date().toISOString(),
-        message,
-        mode: 'dev-warning',
-        origin: 'schemaGuard',
-        correlation_id: correlationId,
-      };
-      window.dispatchEvent(
-        new CustomEvent('schema-guard:update', {
-          detail: (window as any).__SCHEMA_GUARD_ERROR__,
-        }),
-      );
-    }
-
+    /** Não gravar em `window` nem disparar evento: evita badge fixo na UI em dev (detalhe só no console). */
     hasWarned = true;
   }
 

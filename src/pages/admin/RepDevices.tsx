@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useTenantPlan } from '../../hooks/useTenantPlan';
-import { isPlanFeatureEnabled } from '../../../services/tenantPlan.service';
-import { PlanUpgradePanel } from '../../components/plan/PlanUpgradePanel';
 import PageHeader from '../../components/PageHeader';
 import { db, supabase, isSupabaseConfigured, getSupabaseClient } from '../../services/supabaseClient';
 import {
@@ -31,7 +28,25 @@ import { testRepDeviceConnection, syncRepDevice } from '../../../modules/rep-int
 import type { RepIngestBatchProgress } from '../../../modules/rep-integration/repService';
 import { getLocalCalendarDayBoundsIso } from '../../../modules/rep-integration/repLocalDay';
 import { promotePendingRepPunchLogs } from '../../../modules/rep-integration/repService';
-import { matriculaFromAfdPisField } from '../../../modules/rep-integration/repParser';
+import {
+  extractAfdLineIdentifierDigitBlob,
+  matriculaFromAfdPisField,
+} from '../../../modules/rep-integration/repParser';
+import {
+  repAfdCanonical11DigitsFromBlob as repAfdCanonical11,
+  validatePisPasep11,
+} from '../../../modules/rep-integration/pisPasep';
+import { mergeRepExtractedIdentifiersIntoRawData } from '../../../modules/rep-integration/repExtractBestIdentifier';
+import {
+  extractCompactAfdLineFromRawData,
+  formatRepPunchRawDataSummary,
+  repMatriculaFromPunchRowForMatch,
+  repPunchLogEffectivePisCanonForDiagnostics,
+} from '../../../modules/rep-integration/repPunchPendingIdentity';
+import {
+  formatRepIdentificationDiagLine,
+  tryRepUniqueWeakPisMatch,
+} from '../../../modules/rep-integration/repWeakPisFallbackMatch';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { LS_TIMESHEET_SPECIAL_BARS, readSpecialBarsPref, SPECIAL_BARS_CHANGED } from '../../utils/timesheetLayoutPrefs';
 import {
@@ -82,6 +97,7 @@ type EmployeeForRep = {
   status: string;
   invisivel: boolean;
   demissao: string | null;
+  company_id?: string | null;
   pis_pasep?: string | null;
   pis?: string | null;
   cpf?: string | null;
@@ -92,17 +108,93 @@ type EmployeeForRep = {
 type PendingPunchDiag = {
   nsr: number | null;
   dataHora: string;
+  /** ISO completo vindo do PostgREST (RPC rep_ingest_punch). */
+  dataHoraIso: string;
+  tipo_marcacao: string | null;
+  raw_data: Record<string, unknown>;
   pisCanon: string | null;
   cpfCanon: string | null;
   matricula: string | null;
   campoAfd: string;
   ignored?: boolean;
+  matchConfidence?: string | null;
+  matchedUserId?: string | null;
 };
 
 function isEmployeeEligibleForRepPush(e: EmployeeForRep): boolean {
   if (e.invisivel) return false;
   if (e.demissao) return false;
   return (e.status || 'active').toLowerCase() === 'active';
+}
+
+/** Utilizadores da empresa para match REP (evita estado `employees` limitado a 200 linhas / outra company_id). */
+async function fetchRepMatchUsersForBlob(client: SupabaseClient, companyId: string): Promise<EmployeeForRep[]> {
+  const cid = companyId.trim();
+  const { data, error } = await client
+    .from('users')
+    .select(
+      'id, nome, email, status, invisivel, demissao, pis_pasep, pis, cpf, numero_identificador, numero_folha'
+    )
+    .eq('company_id', cid)
+    .limit(5000);
+  if (error || !data?.length) return [];
+  return data.map((row: Record<string, unknown>) => ({
+    id: String(row.id ?? ''),
+    nome: String((row.nome as string) || (row.email as string) || row.id || '').trim(),
+    status: String(row.status || 'active').trim(),
+    invisivel: row.invisivel === true,
+    demissao: (row.demissao as string) || null,
+    company_id: String(row.company_id ?? cid),
+    pis_pasep: (row.pis_pasep as string) ?? null,
+    pis: (row.pis as string) ?? null,
+    cpf: (row.cpf as string) ?? null,
+    numero_identificador: (row.numero_identificador as string) ?? null,
+    numero_folha: (row.numero_folha as string) ?? null,
+  }));
+}
+
+/** Resposta de `rep_match_user_id_for_rep_punch_row` (SECURITY DEFINER no Supabase). */
+type RepRpcUserRow = {
+  user_id: string;
+  nome?: string | null;
+  pis_pasep?: string | null;
+  numero_identificador?: string | null;
+  numero_folha?: string | null;
+};
+
+function parseRepRpcUserRow(data: unknown): RepRpcUserRow | null {
+  if (data == null) return null;
+  const o = typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+  if (!o) return null;
+  const uid = o.user_id;
+  const sid = typeof uid === 'string' ? uid : uid != null ? String(uid) : '';
+  if (!sid) return null;
+  const str = (v: unknown): string | null =>
+    v == null ? null : typeof v === 'string' ? v : typeof v === 'number' ? String(v) : String(v);
+  return {
+    user_id: sid,
+    nome: str(o.nome),
+    pis_pasep: str(o.pis_pasep),
+    numero_identificador: str(o.numero_identificador),
+    numero_folha: str(o.numero_folha),
+  };
+}
+
+function mergeEmployeeFromRepRpcRow(list: EmployeeForRep[], rpc: RepRpcUserRow): EmployeeForRep {
+  const hit = list.find((u) => u.id === rpc.user_id);
+  if (hit) return hit;
+  return {
+    id: rpc.user_id,
+    nome: (rpc.nome || '').trim() || 'Colaborador',
+    status: 'active',
+    invisivel: false,
+    demissao: null,
+    pis_pasep: rpc.pis_pasep ?? null,
+    pis: null,
+    cpf: null,
+    numero_identificador: rpc.numero_identificador ?? null,
+    numero_folha: rpc.numero_folha ?? null,
+  };
 }
 
 function canonicalRepDeviceName(name: string | null | undefined): string {
@@ -127,6 +219,10 @@ const LS_REP_ALLOCATE = 'chrono_rep_receive_allocate';
 const LS_REP_SKIP_BLOCKED = 'chrono_rep_receive_skip_blocked';
 /** Deve ser ≥ ao timeout máx. de «gravação das batidas» no sync (até ~4 h para históricos enormes). */
 const REP_RECEIVE_UI_TIMEOUT_MS = (4 * 60 + 20) * 60 * 1000;
+
+/** Referência para logs «Receber» — normalização PIS AFD e prioridade de match no servidor. */
+const REP_SUPABASE_MIGRATIONS_HINT =
+  'Confirme no Supabase as migrações REP (ex.: 20260420200000+ folha/crachá; 20260502103000 PIS/CPF AFD 11 dígitos; 20260502120000 prioridade PIS no match; 20260502140000 reenvio NSR pendente actualiza PIS na fila; 20260502150000 blobs AFD longos; 20260502160000+ PIS efectivo em raw_data; 20260502162000 matrícula em matricula_derived do JSON; **20260504170000–20260504184000** consolidação REP: índice pendente, timeout, linha AFD nested, blob legado, crachá vs blob, RPC `rep_match_user_id_for_rep_punch_row`, btrim em `company_id`, `rep_normalize_document_digits`, janela única PIS no blob (`rep_unique_valid_pis_sliding_in_blob`)) e build recente da app.';
 
 function readLsBool(key: string, defaultVal: boolean): boolean {
   if (typeof window === 'undefined') return defaultVal;
@@ -178,32 +274,21 @@ function buildLocalClockForRep(mode671: boolean): RepDeviceClockSet {
   return clock;
 }
 
-/** Alinhado a `rep_afd_canonical_11_digits` no Supabase (PIS/CPF campo AFD).
- * CORREÇÃO: Quando tem 12-14 dígitos começando com 0, remove o 0 inicial
- * ao invés de pegar os últimos 11 dígitos (que daria resultado errado).
- */
-function repAfdCanonical11(raw: string | null | undefined): string | null {
-  const d = (raw ?? '').replace(/\D/g, '');
-  if (d.length === 0) return null;
-  if (d.length <= 11) return d.padStart(11, '0');
-  // Se tem 12-14 dígitos e começa com 0, remove o 0 inicial
-  // Ex: 02966742765 (12 dígitos) → 12966742765 (11 dígitos) ✓
-  // Ex: 012966742765 (13 dígitos) → 12966742765 (11 dígitos) ✓
-  // CORREÇÃO PIS COM ZERO À ESQUERDA
-  if (d.length <= 14 && d.charAt(0) === '0') {
-    const semZero = d.substring(1);
-    return semZero.padStart(11, '0').slice(-11);
-  }
-  if (d.length <= 14) return d.slice(-11);
-  return d.slice(0, 11);
-}
-
 function repMaskTailDigits(raw: string | null | undefined, tail: number): string {
   const d = (raw ?? '').replace(/\D/g, '');
   if (d.length === 0) return '—';
   if (d.length <= tail) return `…${d}`;
   return `…${d.slice(-tail)}`;
 }
+
+/** RPC / trigger: folha já fechada para o mês do registo (`time_records_block_after_closure`). */
+function isTimesheetPeriodClosedError(msg: string | null | undefined): boolean {
+  return Boolean(msg && /PERIODO_FECHADO/i.test(msg));
+}
+
+/** O bloqueio só some no servidor após remover/reabrir o fecho daquele mês para o colaborador; a app não pode saltar esta regra. */
+const PERIODO_FECHADO_REP_ACTION =
+  'O mês civil da batida já tem folha/espelho fechado para esse colaborador. No menu «Espelho de Ponto» (/admin/timesheet) verifique o período e siga o fluxo da vossa empresa para reabrir esse mês (ou peça a RH/admin a remover o fecho na base). Enquanto o fecho existir, «Receber» e «Consolidar» continuarão a devolver PERIODO_FECHADO e as linhas podem ficar só em rep_punch_logs.';
 
 /** Lista no log os identificadores das batidas ainda sem funcionário (para cruzar com o cadastro). */
 async function appendRepPendingQueueDiagnostics(
@@ -218,7 +303,7 @@ async function appendRepPendingQueueDiagnostics(
 ): Promise<void> {
   let q = client
     .from('rep_punch_logs')
-    .select('nsr, pis, cpf, matricula, data_hora')
+    .select('nsr, pis, cpf, matricula, data_hora, raw_data')
     .eq('company_id', companyId)
     .eq('rep_device_id', deviceId)
     .is('time_record_id', null);
@@ -246,16 +331,20 @@ async function appendRepPendingQueueDiagnostics(
   const tailsCanon = new Set<string>();
   let sawLikelyPisNotBadge = false;
   for (const row of data) {
-    const pisC = repAfdCanonical11(row.pis as string | null);
-    const cpfC = repAfdCanonical11(row.cpf as string | null);
-    const canon = pisC || cpfC;
+    /** Só PIS com DV válido (colunas, raw ou linha AFD) — evita mostrar `repAfdCanonical11` das colunas quando o DV falha (confunde com o match no servidor). */
+    const canon = repPunchLogEffectivePisCanonForDiagnostics({
+      pis: row.pis as string | null,
+      cpf: row.cpf as string | null,
+      raw_data: row.raw_data,
+    });
     const derived =
       canon != null && canon.length === 11 ? matriculaFromAfdPisField(canon) ?? null : null;
     if (canon && derived == null) sawLikelyPisNotBadge = true;
     if (canon && canon.length >= 4) tailsCanon.add(canon.slice(-4));
-    const matStored = (row.matricula != null && String(row.matricula).trim() !== ''
-      ? String(row.matricula).trim()
-      : null) as string | null;
+    const matStored = repMatriculaFromPunchRowForMatch({
+      matricula: row.matricula as string | null,
+      raw_data: row.raw_data,
+    });
     const t = row.data_hora ? String(row.data_hora).slice(0, 16).replace('T', ' ') : '—';
     const campoAfd =
       derived != null
@@ -263,8 +352,34 @@ async function appendRepPendingQueueDiagnostics(
         : canon
           ? 'NIS/PIS (11 díg.)'
           : '—';
+    const rawDigits = String(row.pis || row.cpf || '').replace(/\D/g, '');
+    const rawSnippet =
+      rawDigits.length === 0 ? '—' : rawDigits.length <= 14 ? rawDigits : `${rawDigits.slice(0, 6)}…${rawDigits.slice(-6)}`;
+    const canonHint =
+      canon == null && rawSnippet !== '—'
+        ? ' (sem NIS DV-válido nas colunas/raw/linha AFD — o servidor também não casa só com estes 11 dígitos truncados)'
+        : '';
     log(
-      `  · NSR ${row.nsr ?? '—'} | ${t} | campo AFD: ${campoAfd} | fim PIS/CPF canón.: ${canon ? repMaskTailDigits(canon, 4) : '—'} | matr. no log: ${matStored ?? '—'} | crachá derivado (zeros): ${derived ?? '—'}`
+      `  · NSR ${row.nsr ?? '—'} | ${t} | campo AFD: ${campoAfd} | dígitos bruto (pis/cpf): ${rawSnippet} | PIS com DV válido (match): ${canon ?? '—'}${canonHint} | matr. no log: ${matStored ?? '—'} | crachá derivado (zeros): ${derived ?? '—'}`
+    );
+    log(`     meta ${formatRepPunchRawDataSummary(row.raw_data)}`);
+    const rd = row.raw_data;
+    const afdLine =
+      rd && typeof rd === 'object' && !Array.isArray(rd)
+        ? extractCompactAfdLineFromRawData(rd as Record<string, unknown>)
+        : null;
+    const idBlob = afdLine ? extractAfdLineIdentifierDigitBlob(afdLine) : null;
+    log(
+      idBlob
+        ? `     blob AFD identificador: ${idBlob.length} dígitos, másc. ${repMaskTailDigits(idBlob, 4)} (prefixo/infixo vs nº identificador no cadastro)`
+        : '     blob AFD identificador: — (linha compacta ausente ou formato não reconhecido; consolidação por crachá no servidor não corre)'
+    );
+    log(
+      `     ${formatRepIdentificationDiagLine(row.nsr as number | null, {
+        pis: row.pis as string | null,
+        cpf: row.cpf as string | null,
+        raw_data: row.raw_data,
+      })}`
     );
   }
   if (sawLikelyPisNotBadge) {
@@ -281,7 +396,6 @@ async function appendRepPendingQueueDiagnostics(
 
 const AdminRepDevices: React.FC = () => {
   const { user, loading } = useCurrentUser();
-  const tenantPlan = useTenantPlan(user?.companyId);
   const [devices, setDevices] = useState<RepDeviceRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -318,14 +432,6 @@ const AdminRepDevices: React.FC = () => {
   const [srManualConsolidateLocalToday, setSrManualConsolidateLocalToday] = useState(true);
   /** Diagnóstico de PIS pendentes na fila */
   const [pendingPisModal, setPendingPisModal] = useState<{ open: boolean; rows: PendingPunchDiag[] }>({ open: false, rows: [] });
-  /** Debug info para Paulo Henrique */
-  const [pauloDebugInfo, setPauloDebugInfo] = useState<{
-    nome?: string;
-    pisOriginal?: string;
-    pis11?: string;
-    totalBatidasDia?: number;
-    batidasPaulo?: Array<{nsr: number; dataHora: string; pis: string; timeRecordId: string | null; ignored: boolean; status: string}>;
-  } | null>(null);
   /** Funcionário selecionado para reatribuir batidas pendentes */
   const [selectedEmployeeForReassign, setSelectedEmployeeForReassign] = useState<string>('');
   /** Batidas selecionadas para reatribuir */
@@ -377,10 +483,8 @@ const AdminRepDevices: React.FC = () => {
 
   useEffect(() => {
     if (!user?.companyId) return;
-    if (tenantPlan.loading) return;
-    if (!isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices')) return;
     void loadDevices();
-  }, [user?.companyId, tenantPlan.loading, tenantPlan.plan]);
+  }, [user?.companyId]);
 
   const loadEmployeesForRep = async () => {
     if (!user?.companyId || !isSupabaseConfigured()) return;
@@ -459,10 +563,8 @@ const AdminRepDevices: React.FC = () => {
 
   useEffect(() => {
     if (!user?.companyId) return;
-    if (tenantPlan.loading) return;
-    if (!isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices')) return;
     void loadEmployeesForRep();
-  }, [user?.companyId, tenantPlan.loading, tenantPlan.plan]);
+  }, [user?.companyId]);
 
   useEffect(() => {
     setRepDeploymentNote(typeof window !== 'undefined' && window.isSecureContext);
@@ -756,6 +858,10 @@ const AdminRepDevices: React.FC = () => {
         appendSrLog(`Bruto do relógio (esta leitura): ${received} marcação(ões).`);
 
         const consolidateCompanyId = d.company_id || user?.companyId;
+        let consolidatePeriodClosed = false;
+        const notePromotePeriodClosed = (res: { success: boolean; error?: string }) => {
+          if (!res.success && isTimesheetPeriodClosedError(res.error)) consolidatePeriodClosed = true;
+        };
         if (consolidateCompanyId && user?.companyId) {
           const localDay = receiveScope === 'today_only' ? getLocalCalendarDayBoundsIso() : undefined;
           const onlyUid = srConsolidateOnlyUserId.trim() || undefined;
@@ -784,12 +890,13 @@ const AdminRepDevices: React.FC = () => {
               const fixedByRepair = await tryAutoRepairPendingMatches(consolidateCompanyId, d.id, localDay);
               if (fixedByRepair > 0) {
                 appendSrLog(
-                  `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/nome normalizados para o cadastro e serão reconsolidadas agora.`
+                  `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/PIS/nome alinhados ao cadastro (quando detectável) e serão reconsolidadas agora.`
                 );
                 const prRetry = await promotePendingRepPunchLogs(supabase, consolidateCompanyId, d.id, {
                   localWindow: localDay,
                   onlyUserId: onlyUid,
                 });
+                notePromotePeriodClosed(prRetry);
                 if (prRetry.success) {
                   const promotedRetry = prRetry.promoted ?? 0;
                   imp += promotedRetry;
@@ -816,6 +923,7 @@ const AdminRepDevices: React.FC = () => {
                   localWindow: localDay,
                   onlyUserId: onlyUid,
                 });
+                notePromotePeriodClosed(prFinal);
                 if (prFinal.success) {
                   stillInQueueOnly = prFinal.skippedNoUser ?? stillInQueueOnly;
                   stillInQueueOtherUser = prFinal.skippedOtherUser ?? stillInQueueOtherUser;
@@ -838,8 +946,13 @@ const AdminRepDevices: React.FC = () => {
                     ? ` Inclui batida(s) de dias/leituras anteriores — agora o relógio só enviou ${received}.`
                     : '';
               appendSrLog(
-                `${stillInQueueOnly} batida(s) deste relógio ainda só em rep_punch_logs (sem PIS/CPF/nº folha/nº identificador (crachá) que bata com o cadastro).${backlogHint} Corrija utilizadores e use «Consolidar» se precisar. Se o cadastro já estiver certo: confirme migrações REP no Supabase (20260420200000–20260420260000) e build recente da app — senão o servidor não normaliza PIS/CPF AFD (11 dígitos), deriva crachá nem casa folha/crachá.`
+                `${stillInQueueOnly} batida(s) deste relógio ainda só em rep_punch_logs (sem PIS/CPF/nº folha/nº identificador (crachá) que bata com o cadastro).${backlogHint} Corrija utilizadores e use «Consolidar» se precisar. Se o cadastro já estiver certo: ${REP_SUPABASE_MIGRATIONS_HINT} Senão o servidor não normaliza PIS/CPF AFD (11 dígitos), deriva crachá nem casa folha/crachá.`
               );
+              if (receiveScope === 'today_only') {
+                appendSrLog(
+                  'Com «só hoje», só entram na consolidação pendências cuja data/hora cai no dia civil atual deste computador. Batidas noutro dia civil ficam na fila até usar «Consolidar» sem esse filtro ou até ser esse o dia local.'
+                );
+              }
             }
             if (stillInQueueOnly > 0 || (onlyUid && stillInQueueOtherUser > 0)) {
               await appendRepPendingQueueDiagnostics(supabase, consolidateCompanyId, d.id, appendSrLog, {
@@ -849,35 +962,86 @@ const AdminRepDevices: React.FC = () => {
               });
             }
           } else {
-            appendSrLog(`Aviso: não foi possível consolidar a fila: ${pr.error ?? 'erro desconhecido'}.`);
+            notePromotePeriodClosed(pr);
+            if (consolidatePeriodClosed) {
+              appendSrLog(`Aviso: consolidação da fila bloqueada — folha fechada (PERIODO_FECHADO). ${PERIODO_FECHADO_REP_ACTION}`);
+            } else {
+              appendSrLog(`Aviso: não foi possível consolidar a fila: ${pr.error ?? 'erro desconhecido'}.`);
+            }
           }
           invalidateCompanyListCaches(user.companyId);
         }
 
+        const ingestPeriodClosed = Boolean(r.ingestErrors?.some((e) => isTimesheetPeriodClosedError(e)));
+        if (ingestPeriodClosed) {
+          appendSrLog(`Aviso: ingestão bloqueada no espelho — PERIODO_FECHADO (folha fechada). ${PERIODO_FECHADO_REP_ACTION}`);
+        }
+        const periodClosedBlocked = consolidatePeriodClosed || ingestPeriodClosed;
+        if (consolidatePeriodClosed && stillInQueueOnly > 0) {
+          appendSrLog(
+            'Nota: há batidas ainda na fila rep_punch_logs; se a consolidação devolveu PERIODO_FECHADO, o bloqueio é folha fechada — a mensagem «sem cadastro» acima pode coexistir com PIS válido até reabrir o período.'
+          );
+        }
+
         const parts: string[] = [];
-        if (imp) parts.push(`${imp} registro(s) no espelho (folha / time_records)`);
-        if (stillInQueueOnly) {
-          const qHint =
-            receiveScope === 'today_only'
-              ? `fila do relógio (nesta consolidação, só o dia de hoje neste computador): ${stillInQueueOnly} sem cadastro`
-              : stillInQueueOnly > received
-                ? `fila do relógio: ${stillInQueueOnly} sem cadastro (o número pode ser maior que as ${received} batida(s) de agora — há pendências antigas)`
-                : `${stillInQueueOnly} ainda só em rep_punch_logs (sem cadastro)`;
-          parts.push(qHint);
-        }
-        if (stillInQueueOtherUser > 0) {
-          parts.push(
-            `${stillInQueueOtherUser} batida(s) na fila com cadastro noutro colaborador (filtro «só este» — não gravadas nesta consolidação)`
-          );
-        }
-        if (unf) {
-          parts.push(
-            `${unf} recebida(s) sem funcionário correspondente no sistema (alinhe PIS/CPF ou número de folha com o cadastro)`
-          );
+        if (periodClosedBlocked) {
+          if (unf > 0 && !imp) {
+            parts.push(
+              `${unf} marcação(ões) não gravadas no espelho — folha fechada (PERIODO_FECHADO). Reabra o mês na folha de ponto e volte a «Receber» ou «Consolidar».`
+            );
+          } else {
+            parts.push(
+              'Espelho bloqueado: folha fechada (PERIODO_FECHADO). Reabra o período na folha de ponto antes de gravar novas batidas.'
+            );
+            if (imp) parts.push(`${imp} registro(s) no espelho (folha / time_records).`);
+            if (unf > 0) {
+              parts.push(
+                `${unf} marcação(ões) sem time_record nesta descarga; após reabrir a folha, use «Consolidar».`
+              );
+            }
+          }
+          if (stillInQueueOnly > 0 && unf === 0) {
+            const qHint =
+              receiveScope === 'today_only'
+                ? `fila: ${stillInQueueOnly} pendência(s) (janela só hoje); consolidação bloqueada por folha fechada`
+                : stillInQueueOnly > received
+                  ? `fila: ${stillInQueueOnly} pendência(s); consolidação bloqueada por folha fechada`
+                  : `fila: ${stillInQueueOnly} pendência(s) em rep_punch_logs; consolidação bloqueada por folha fechada`;
+            parts.push(qHint);
+          }
+          if (stillInQueueOtherUser > 0) {
+            parts.push(
+              `${stillInQueueOtherUser} batida(s) na fila com cadastro noutro colaborador (filtro «só este» — não gravadas nesta consolidação)`
+            );
+          }
+        } else {
+          if (imp) parts.push(`${imp} registro(s) no espelho (folha / time_records)`);
+          if (stillInQueueOnly) {
+            const qHint =
+              receiveScope === 'today_only'
+                ? `fila do relógio (nesta consolidação, só o dia de hoje neste computador): ${stillInQueueOnly} sem cadastro`
+                : stillInQueueOnly > received
+                  ? `fila do relógio: ${stillInQueueOnly} sem cadastro (o número pode ser maior que as ${received} batida(s) de agora — há pendências antigas)`
+                  : `${stillInQueueOnly} ainda só em rep_punch_logs (sem cadastro)`;
+            parts.push(qHint);
+          }
+          if (stillInQueueOtherUser > 0) {
+            parts.push(
+              `${stillInQueueOtherUser} batida(s) na fila com cadastro noutro colaborador (filtro «só este» — não gravadas nesta consolidação)`
+            );
+          }
+          if (unf) {
+            parts.push(
+              `${unf} recebida(s) sem funcionário correspondente no sistema (alinhe PIS/CPF ou número de folha com o cadastro)`
+            );
+          }
         }
         if (dup) {
           parts.push(
             `nesta descarga: ${dup} batida(s) repetem NSR já na base (reenvio do relógio; não há insert duplicado — independente da fila «sem cadastro»)`
+          );
+          appendSrLog(
+            'NSR duplicado: se a batida **já está no espelho** (time_record), não há nova linha. Se está **só na fila** pendente, com a migração 20260502140000 o reenvio do mesmo NSR **actualiza** PIS/CPF/matrícula na linha existente para alinhar ao que o relógio manda agora — depois «Consolidar».'
           );
         }
         let summary: string;
@@ -894,18 +1058,23 @@ const AdminRepDevices: React.FC = () => {
           appendSrLog(`Erros ao gravar: ${r.ingestErrors.slice(0, 3).join(' | ')}`);
         }
         appendSrLog(`Concluído: ${summary}`);
+        const bannerType = periodClosedBlocked ? 'warning' : 'success';
         setMessage({
-          type: 'success',
+          type: bannerType,
           text:
-            stillInQueueOnly && !imp && !stillInQueueOtherUser
-              ? `${stillInQueueOnly} marcação(ões) só na fila (sem cadastro para consolidar). Ajuste PIS/CPF, nº folha ou nº identificador (crachá) e use «Consolidar».`
-              : stillInQueueOtherUser > 0 && !stillInQueueOnly && !imp
-                ? `Nenhuma marcação gravada nesta consolidação: ${stillInQueueOtherUser} batida(s) na fila casa(m) com outro colaborador que não o filtrado. Limpe o filtro em «Fila → folha» ou escolha o colaborador certo.`
-              : imp && stillInQueueOnly
-                ? receiveScope === 'today_only'
-                  ? `Espelho: ${imp} registro(s) — cada um no nome do colaborador cujo PIS/CPF/nº folha bateu com o AFD. Atenção: ${stillInQueueOnly} batida(s) na fila sem cadastro na janela de hoje (outros dias não entram nesta operação «só hoje»).`
-                  : `Espelho: ${imp} registro(s) — cada um no nome do colaborador cujo PIS/CPF/nº folha bateu com o AFD (não é “por quem bateu no relógio” se o aparelho enviar outro NIS). Atenção: ${stillInQueueOnly} batida(s) na fila sem cadastro; não entram no espelho até existir match (podem ser leituras antigas).`
-                : `Sincronizado. ${summary}`,
+            periodClosedBlocked
+              ? unf > 0 && !imp
+                ? `Folha fechada (PERIODO_FECHADO): ${unf} batida(s) não entraram no espelho. Reabra o mês na folha de ponto.`
+                : `Folha fechada (PERIODO_FECHADO): reabra o período na folha de ponto. Ver registo «Concluído» acima.`
+              : stillInQueueOnly && !imp && !stillInQueueOtherUser
+                ? `${stillInQueueOnly} marcação(ões) só na fila (sem cadastro para consolidar). Ajuste PIS/CPF, nº folha ou nº identificador (crachá) e use «Consolidar».`
+                : stillInQueueOtherUser > 0 && !stillInQueueOnly && !imp
+                  ? `Nenhuma marcação gravada nesta consolidação: ${stillInQueueOtherUser} batida(s) na fila casa(m) com outro colaborador que não o filtrado. Limpe o filtro em «Fila → folha» ou escolha o colaborador certo.`
+                  : imp && stillInQueueOnly
+                    ? receiveScope === 'today_only'
+                      ? `Espelho: ${imp} registro(s) — cada um no nome do colaborador cujo PIS/CPF/nº folha bateu com o AFD. Atenção: ${stillInQueueOnly} batida(s) na fila sem cadastro na janela de hoje (outros dias não entram nesta operação «só hoje»).`
+                      : `Espelho: ${imp} registro(s) — cada um no nome do colaborador cujo PIS/CPF/nº folha bateu com o AFD (não é “por quem bateu no relógio” se o aparelho enviar outro NIS). Atenção: ${stillInQueueOnly} batida(s) na fila sem cadastro; não entram no espelho até existir match (podem ser leituras antigas).`
+                    : `Sincronizado. ${summary}`,
         });
       } else {
         const errLine = toUiString(r.error, 'Erro ao sincronizar');
@@ -957,8 +1126,17 @@ const AdminRepDevices: React.FC = () => {
       });
       if (!pr.success) {
         const err = pr.error || 'Falha ao consolidar';
-        appendSrLog(`Falha: ${err}`);
-        setMessage({ type: 'error', text: err });
+        if (isTimesheetPeriodClosedError(err)) {
+          appendSrLog(`Falha: PERIODO_FECHADO (folha fechada). ${PERIODO_FECHADO_REP_ACTION}`);
+        } else {
+          appendSrLog(`Falha: ${err}`);
+        }
+        setMessage({
+          type: isTimesheetPeriodClosedError(err) ? 'warning' : 'error',
+          text: isTimesheetPeriodClosedError(err)
+            ? `Folha fechada (PERIODO_FECHADO): reabra o mês do colaborador em Espelho de Ponto ou via RH/admin, depois volte a consolidar.`
+            : err,
+        });
         return;
       }
       const promoted = pr.promoted ?? 0;
@@ -970,7 +1148,7 @@ const AdminRepDevices: React.FC = () => {
         if (fixedByRepair > 0) {
           shouldRetryPromote = true;
           appendSrLog(
-            `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/nome normalizados para o cadastro; nova consolidação em seguida.`
+            `Autoajuste: ${fixedByRepair} pendência(s) tiveram matrícula/PIS/nome alinhados ao cadastro (quando detectável); nova consolidação em seguida.`
           );
         }
       }
@@ -1012,6 +1190,11 @@ const AdminRepDevices: React.FC = () => {
         partsLog.push(`${skippedOtherFinal} com cadastro noutro colaborador (filtro «só este»)`);
       }
       appendSrLog(`${partsLog.join('; ')}.`);
+      if (onlyUid && skippedFinal > 0 && promotedFinal === 0) {
+        appendSrLog(
+          'Nota: com «só este colaborador», só entram no espelho batidas que **já** casam na base com esse utilizador. «Pendente sem funcionário» aqui significa que o NIS da fila (e raw_data, após migração 202605021600+) **não** resolve para ninguém — limpar o filtro não muda o match; é preciso PIS correcto no relógio/cadastro ou linha AFD com NIS recuperável.'
+        );
+      }
       if (onlyUid && skippedOtherFinal > 0) {
         appendSrLog(
           'Essas batidas não são «sem cadastro»: resolvem para outro utilizador. Limpe o filtro de colaborador para gravá-las no espelho.'
@@ -1052,105 +1235,12 @@ const AdminRepDevices: React.FC = () => {
     const client = getSupabaseClient();
     if (!client) return;
 
-    // PRIMEIRO: Carregar TODAS as batidas do relógio (não só pendentes)
-    // Isso ajuda a ver se as batidas do Paulo estão sendo filtradas por algum motivo
-    const { data: allPunches, error: allError } = await client
-      .from('rep_punch_logs')
-      .select('nsr, pis, cpf, matricula, data_hora, ignored, time_record_id, nome_funcionario')
-      .eq('company_id', user.companyId)
-      .eq('rep_device_id', d.id)
-      .order('data_hora', { ascending: false })
-      .limit(100);
-
-    if (allError) {
-      setMessage({ type: 'error', text: 'Erro ao buscar batidas: ' + allError.message });
-      return;
-    }
-
-    // Log detalhado para debug
-    console.log('=== DIAGNÓSTICO REP ===');
-    console.log('Total de batidas no relógio:', allPunches?.length || 0);
-    console.log('Funcionários cadastrados:', employees.map(e => ({ nome: e.nome, pis: e.pis_pasep })));
-
-    // Mostrar TODAS as batidas com seu status
-    (allPunches || []).forEach((row: any) => {
-      const pisRaw = row.pis || row.cpf || '';
-      const pisCanon = repAfdCanonical11(pisRaw);
-      const emp = findEmployeeByPis(pisCanon, row.matricula);
-      const status = row.time_record_id ? '✅ OK (no espelho)' : 
-                    row.ignored ? '🚫 Ignorada' : 
-                    emp ? '⏳ Pendente (casou)' : '❌ Pendente (NÃO casou)';
-      
-      console.log(`NSR ${row.nsr} | ${row.data_hora?.slice(0,16)} | PIS: ${pisCanon || 'N/A'} | ${status} | ${emp?.nome || 'Sem funcionário'}`);
-    });
-
     const localDay = srManualConsolidateLocalToday ? getLocalCalendarDayBoundsIso() : undefined;
-
-    // PRIMEIRO: Buscar TODAS as batidas do dia (processadas E pendentes) para diagnóstico
-    let qAll = client
-      .from('rep_punch_logs')
-      .select('nsr, pis, cpf, matricula, data_hora, ignored, nome_funcionario, time_record_id')
-      .eq('company_id', user.companyId)
-      .eq('rep_device_id', d.id);
-
-    if (localDay) {
-      qAll = qAll.gte('data_hora', localDay.startIso).lte('data_hora', localDay.endIso);
-    }
-
-    const { data: allDayPunches, error: errorAll } = await qAll.order('data_hora', { ascending: false }).limit(100);
-
-    if (errorAll) {
-      console.error('Erro ao buscar TODAS as batidas do dia:', errorAll);
-    } else {
-      console.log('=== TODAS AS BATIDAS DO DIA (processadas + pendentes) ===');
-      console.log(`Total: ${(allDayPunches || []).length} batidas`);
-
-      // Procurar batidas do Paulo em TODAS as batidas
-      const paulo = employees.find(e => e.nome?.toLowerCase().includes('paulo') && e.nome?.toLowerCase().includes('henrique'));
-      if (paulo) {
-        const pisVariacoes = [paulo.pis_pasep?.replace(/\D/g, ''), normalizePisTo11Digits(paulo.pis_pasep)].filter(Boolean);
-        console.log('Variações do PIS Paulo:', pisVariacoes);
-
-        const batidasPaulo = (allDayPunches || []).filter((row: any) => {
-          const pisRow = (row.pis || row.cpf || '').replace(/\D/g, '');
-          const pisRow11 = repAfdCanonical11(row.pis || row.cpf); // Usar função corrigida!
-          return pisVariacoes.some(v => pisRow === v || pisRow11 === v || pisRow.endsWith(v?.slice(-4)));
-        });
-
-        console.log(`Batidas do Paulo encontradas: ${batidasPaulo.length}`);
-        batidasPaulo.forEach((row: any) => {
-          console.log(`  NSR ${row.nsr} | ${row.data_hora} | PIS: ${row.pis || row.cpf} | time_record_id: ${row.time_record_id || 'NULL'} | ignored: ${row.ignored}`);
-        });
-
-        // SALVAR NO ESTADO PARA EXIBIR NO MODAL
-        setPauloDebugInfo({
-          nome: paulo.nome,
-          pisOriginal: paulo.pis_pasep,
-          pis11: normalizePisTo11Digits(paulo.pis_pasep),
-          totalBatidasDia: (allDayPunches || []).length,
-          batidasPaulo: batidasPaulo.map((r: any) => ({
-            nsr: r.nsr,
-            dataHora: r.data_hora,
-            pis: r.pis || r.cpf,
-            timeRecordId: r.time_record_id,
-            ignored: r.ignored,
-            status: r.time_record_id ? 'processada' : (r.ignored ? 'ignorada' : 'pendente')
-          }))
-        });
-      }
-
-      // Listar todas para referência
-      console.log('\nLista completa:');
-      (allDayPunches || []).forEach((row: any) => {
-        const status = row.time_record_id ? '✅ OK' : (row.ignored ? '🚫 Ignorada' : '⏳ Pendente');
-        console.log(`  NSR ${row.nsr} | ${row.data_hora?.slice(0,16)} | PIS: ${(row.pis || row.cpf || 'N/A').slice(-4).padStart(4,'0')} | ${status}`);
-      });
-    }
 
     // Agora buscar só as pendentes para o modal
     let q = client
       .from('rep_punch_logs')
-      .select('nsr, pis, cpf, matricula, data_hora, ignored, nome_funcionario')
+      .select('nsr, pis, cpf, matricula, data_hora, tipo_marcacao, ignored, nome_funcionario, raw_data')
       .eq('company_id', user.companyId)
       .eq('rep_device_id', d.id)
       .is('time_record_id', null);
@@ -1172,68 +1262,38 @@ const AdminRepDevices: React.FC = () => {
     }
 
     const rows: PendingPunchDiag[] = (data || []).map((row: any) => {
-      const pisC = repAfdCanonical11(row.pis as string | null);
-      const cpfC = repAfdCanonical11(row.cpf as string | null);
-      const canon = pisC || cpfC;
+      const raw =
+        row.raw_data && typeof row.raw_data === 'object' && !Array.isArray(row.raw_data)
+          ? mergeRepExtractedIdentifiersIntoRawData(row.raw_data as Record<string, unknown>)
+          : mergeRepExtractedIdentifiersIntoRawData({});
+      const canon =
+        repPunchLogEffectivePisCanonForDiagnostics({
+          pis: row.pis as string | null,
+          cpf: row.cpf as string | null,
+          raw_data: raw,
+        }) ??
+        repAfdCanonical11(row.pis as string | null) ??
+        repAfdCanonical11(row.cpf as string | null);
       const derived = canon != null && canon.length === 11 ? matriculaFromAfdPisField(canon) ?? null : null;
       const campoAfd = derived != null ? 'crachá (estim.)' : canon ? 'NIS/PIS (11 díg.)' : '—';
-
       return {
         nsr: row.nsr ?? null,
         dataHora: row.data_hora ? String(row.data_hora).slice(0, 16).replace('T', ' ') : '—',
-        pisCanon: pisC,
-        cpfCanon: cpfC,
-        matricula: (row.matricula != null && String(row.matricula).trim() !== '' ? String(row.matricula).trim() : null) as string | null,
+        dataHoraIso: row.data_hora ? String(row.data_hora) : '',
+        tipo_marcacao: (row.tipo_marcacao as string | null) ?? null,
+        raw_data: raw,
+        pisCanon: canon,
+        cpfCanon: canon,
+        matricula: repMatriculaFromPunchRowForMatch({
+          matricula: row.matricula as string | null,
+          raw_data: raw,
+        }),
         campoAfd,
         ignored: row.ignored ?? false,
+        matchConfidence: typeof raw.match_confidence === 'string' ? raw.match_confidence : null,
+        matchedUserId: typeof raw.matched_user_id === 'string' ? raw.matched_user_id : null,
       };
     });
-
-    // DEBUG ESPECIAL: Verificar PIS do Paulo Henrique com múltiplas variações
-    const paulo = employees.find(e => e.nome?.toLowerCase().includes('paulo') && e.nome?.toLowerCase().includes('henrique'));
-    if (paulo && allPunches && allPunches.length > 0) {
-      const pisOriginal = paulo.pis_pasep || '';
-      const pis11 = normalizePisTo11Digits(pisOriginal);
-      const pis12 = pisOriginal.replace(/\D/g, ''); // original sem formatação
-      
-      console.log('=== DEBUG PIS PAULO HENRIQUE ===');
-      console.log('PIS cadastrado (original):', pisOriginal);
-      console.log('PIS 11 dígitos (normalizePisTo11Digits):', pis11);
-      console.log('PIS 12 dígitos (original limpo):', pis12);
-      
-      // Verificar com múltiplas variações
-      const variacoes = [...new Set([pis11, pis12, pis11?.slice(-11), pis12?.slice(-11)].filter(Boolean))];
-      console.log('Variações do PIS Paulo a procurar:', variacoes);
-      
-      const batidasEncontradas = (allPunches || []).filter((row: any) => {
-        const pisRow = (row.pis || row.cpf || '').replace(/\D/g, '');
-        const pisRow11 = repAfdCanonical11(row.pis || row.cpf);
-        const match = variacoes.some(v => pisRow === v || pisRow11 === v);
-        if (match) {
-          console.log('✅ BATIDA DO PAULO ENCONTRADA:', {
-            nsr: row.nsr,
-            data: row.data_hora,
-            pis_original: row.pis || row.cpf,
-            pis_limpo: pisRow,
-            pis_canonico: pisRow11,
-            ignored: row.ignored,
-            time_record_id: row.time_record_id
-          });
-        }
-        return match;
-      });
-      
-      console.log(`Total de batidas do Paulo: ${batidasEncontradas.length}`);
-      
-      if (batidasEncontradas.length === 0) {
-        console.log('⚠️ Nenhuma batida do Paulo encontrada. TODAS as batidas do relógio:');
-        (allPunches || []).forEach((row: any) => {
-          const pisLimpo = (row.pis || row.cpf || '').replace(/\D/g, '');
-          console.log(`  NSR ${row.nsr}: PIS='${row.pis || row.cpf}' | Limpo='${pisLimpo}' | 11dig='${repAfdCanonical11(row.pis || row.cpf)}'`);
-        });
-        console.log('PIS Paulo (para comparar):', variacoes);
-      }
-    }
 
     setPendingPisModal({ open: true, rows });
   };
@@ -1275,25 +1335,8 @@ const AdminRepDevices: React.FC = () => {
     }
   };
 
-  // Normaliza PIS/CPF para 11 dígitos canônicos (igual ao SQL rep_afd_canonical_11_digits)
-  // CORREÇÃO: Quando tem 12-14 dígitos começando com 0, remove o 0 inicial
-  const normalizePisTo11Digits = (raw: string | null | undefined): string => {
-    const d = (raw || '').replace(/\D/g, '');
-    if (!d) return '';
-    if (d.length <= 11) {
-      return d.padStart(11, '0');
-    } else if (d.length <= 14) {
-      // Se começa com 0, remove o 0 inicial ao invés de pegar últimos 11
-      // Ex: 02966742765 → 12966742765 ✓ (correto)
-      // Ex: 012966742765 → 12966742765 ✓ (correto)
-      if (d.startsWith('0')) {
-        return d.slice(1).padStart(11, '0').slice(-11);
-      }
-      return d.slice(-11);
-    } else {
-      return d.slice(0, 11);
-    }
-  };
+  /** Mesma regra que `public.rep_afd_canonical_11_digits` / `repAfdCanonical11` (blobs 12–14 dígitos, etc.). */
+  const normalizePisTo11Digits = (raw: string | null | undefined): string => repAfdCanonical11(raw) ?? '';
 
   const getEmployeePisCandidates = (e: EmployeeForRep): string[] => {
     const values = [e.pis_pasep, e.pis, e.cpf];
@@ -1303,14 +1346,18 @@ const AdminRepDevices: React.FC = () => {
     return Array.from(new Set(normalized));
   };
 
-  const findEmployeeByPis = (pisCanon: string | null, matricula: string | null) => {
+  const findEmployeeByPis = (
+    pisCanon: string | null,
+    matricula: string | null,
+    list: EmployeeForRep[] = employees
+  ) => {
     if (!pisCanon && !matricula) return null;
 
     // Normaliza o PIS do relógio para 11 dígitos
     const cleanPis = normalizePisTo11Digits(pisCanon);
     const cleanMat = (matricula || '').replace(/\D/g, '');
 
-    return employees.find((e) => {
+    return list.find((e) => {
       const empPisCandidates = getEmployeePisCandidates(e);
       const empIdent = (e.numero_identificador || '').replace(/\D/g, '');
       const empFolha = (e.numero_folha || '').replace(/\D/g, '');
@@ -1319,6 +1366,107 @@ const AdminRepDevices: React.FC = () => {
       if (cleanMat && (empPisCandidates.includes(cleanMat) || empIdent === cleanMat || empFolha === cleanMat)) return true;
       return false;
     }) || null;
+  };
+
+  /**
+   * Quando o PIS canónico do AFD está errado mas DV-válido, o blob do campo identificador pode começar
+   * com o mesmo número que `numero_identificador` (crachá) no cadastro — igual ao fallback SQL na consolidação.
+   */
+  const findEmployeeByAfdIdentBlob = (
+    raw_data: unknown,
+    list: EmployeeForRep[] = employees
+  ): EmployeeForRep | null => {
+    if (!raw_data || typeof raw_data !== 'object' || Array.isArray(raw_data)) return null;
+    const line = extractCompactAfdLineFromRawData(raw_data as Record<string, unknown>);
+    if (!line) return null;
+    const blob = extractAfdLineIdentifierDigitBlob(line);
+    if (!blob || blob.length < 8) return null;
+
+    type Scored = { e: EmployeeForRep; len: number; prefix: boolean };
+    const scored: Scored[] = [];
+    for (const e of list) {
+      const ident = (e.numero_identificador || '').replace(/\D/g, '');
+      if (ident.length < 8) continue;
+      if (blob.startsWith(ident)) scored.push({ e, len: ident.length, prefix: true });
+      else if (ident.length >= 10 && blob.includes(ident)) scored.push({ e, len: ident.length, prefix: false });
+    }
+    if (scored.length === 0) return null;
+    scored.sort((a, b) => {
+      if (a.prefix !== b.prefix) return a.prefix ? -1 : 1;
+      return b.len - a.len;
+    });
+    return scored[0]?.e ?? null;
+  };
+
+  /** Match no servidor (RLS off) — mesma lógica que `rep_promote_pending_rep_punch_logs`; depois match fraco controlado (único colaborador). */
+  const tryMatchEmployeeViaRepRpc = async (
+    client: SupabaseClient,
+    companyId: string,
+    usersForMatch: EmployeeForRep[],
+    row: { pis: string | null; cpf: string | null; matricula: string | null; raw_data?: unknown }
+  ): Promise<{ emp: EmployeeForRep | null; lowConfidence?: boolean }> => {
+    try {
+      const rawPayload =
+        row.raw_data && typeof row.raw_data === 'object' && !Array.isArray(row.raw_data)
+          ? mergeRepExtractedIdentifiersIntoRawData(row.raw_data as Record<string, unknown>)
+          : mergeRepExtractedIdentifiersIntoRawData({});
+      const { data, error } = await client.rpc('rep_match_user_id_for_rep_punch_row', {
+        p_company_id: companyId.trim(),
+        p_pis: row.pis ?? null,
+        p_cpf: row.cpf ?? null,
+        p_matricula: row.matricula ?? null,
+        p_raw_data: rawPayload,
+      });
+      if (error) {
+        console.warn('[REP] rep_match_user_id_for_rep_punch_row:', error.message, error);
+        return { emp: null };
+      }
+      if (data && typeof data === 'object' && data !== null && 'debug' in data) {
+        console.warn('[REP MATCH DEBUG]', (data as { debug?: unknown }).debug);
+      }
+      const m = parseRepRpcUserRow(data);
+      if (m) return { emp: mergeEmployeeFromRepRpcRow(usersForMatch, m) };
+
+      const weakUsers = usersForMatch.map((e) => ({
+        id: e.id,
+        company_id: e.company_id ?? companyId.trim(),
+        status: e.status,
+        invisivel: e.invisivel,
+        demissao: e.demissao,
+        pis_pasep: e.pis_pasep,
+        pis: e.pis,
+      }));
+      const weak = tryRepUniqueWeakPisMatch({
+        companyId: companyId.trim(),
+        users: weakUsers,
+        pis: row.pis ?? null,
+        cpf: row.cpf ?? null,
+        raw_data: rawPayload,
+      });
+      if (!weak) return { emp: null };
+      console.warn('[REP MATCH FALLBACK] weak_match_applied', {
+        userId: weak.userId,
+        exampleWindow: weak.exampleWindow,
+      });
+      console.warn('[REP AUTO MATCH] fallback aplicado', {
+        userId: weak.userId,
+        match_strategy: 'fallback',
+      });
+      const hit = usersForMatch.find((u) => u.id === weak.userId);
+      if (hit) return { emp: hit, lowConfidence: true };
+      return {
+        emp: mergeEmployeeFromRepRpcRow(usersForMatch, {
+          user_id: weak.userId,
+          nome: 'Colaborador',
+          pis_pasep: weak.canonicalPis,
+          numero_identificador: null,
+          numero_folha: null,
+        }),
+        lowConfidence: true,
+      };
+    } catch {
+      return { emp: null };
+    }
   };
 
   const tryAutoRepairPendingMatches = async (
@@ -1331,7 +1479,7 @@ const AdminRepDevices: React.FC = () => {
 
     let q = client
       .from('rep_punch_logs')
-      .select('id, pis, cpf, matricula')
+      .select('id, pis, cpf, matricula, raw_data')
       .eq('company_id', companyId)
       .eq('rep_device_id', deviceId)
       .is('time_record_id', null)
@@ -1345,30 +1493,97 @@ const AdminRepDevices: React.FC = () => {
     const { data, error } = await q;
     if (error || !data?.length) return 0;
 
+    const fetchedUsers = await fetchRepMatchUsersForBlob(client, companyId);
+    const usersForMatch = fetchedUsers.length > 0 ? fetchedUsers : employees;
+
     let fixed = 0;
-    for (const row of data as Array<{ id: string; pis: string | null; cpf: string | null; matricula: string | null }>) {
-      const canon = repAfdCanonical11(row.pis || row.cpf);
-      const emp = findEmployeeByPis(canon, row.matricula);
+    for (const row of data as Array<{
+      id: string;
+      pis: string | null;
+      cpf: string | null;
+      matricula: string | null;
+      raw_data?: unknown;
+    }>) {
+      const rawMerged =
+        row.raw_data && typeof row.raw_data === 'object' && !Array.isArray(row.raw_data)
+          ? mergeRepExtractedIdentifiersIntoRawData(row.raw_data as Record<string, unknown>)
+          : mergeRepExtractedIdentifiersIntoRawData({});
+      const canon =
+        repPunchLogEffectivePisCanonForDiagnostics({
+          pis: row.pis,
+          cpf: row.cpf,
+          raw_data: rawMerged,
+        }) ?? repAfdCanonical11(row.pis || row.cpf);
+      const matForRow = repMatriculaFromPunchRowForMatch({
+        matricula: row.matricula,
+        raw_data: rawMerged,
+      });
+      const byPis = findEmployeeByPis(canon, matForRow, usersForMatch);
+      let emp = byPis ?? findEmployeeByAfdIdentBlob(rawMerged, usersForMatch);
+      let lowConfidence = false;
+      if (!emp) {
+        const mr = await tryMatchEmployeeViaRepRpc(client, companyId, usersForMatch, { ...row, raw_data: rawMerged });
+        emp = mr.emp;
+        lowConfidence = mr.lowConfidence === true;
+      }
       if (!emp) continue;
+
+      const rawForSave =
+        lowConfidence && emp
+          ? {
+              ...rawMerged,
+              match_confidence: 'low',
+              corrected_by_system: true,
+              weak_match_applied: true,
+              matched_user_id: emp.id,
+              match_strategy: 'fallback',
+            }
+          : rawMerged;
+
+      const canon11 = normalizePisTo11Digits(canon);
+      const empPisCandidates = getEmployeePisCandidates(emp);
+      const empPreferredPis =
+        empPisCandidates.find((p) => p.length === 11 && validatePisPasep11(p)) ?? empPisCandidates[0] ?? '';
+      const matchViaValidPis =
+        canon11.length === 11 &&
+        validatePisPasep11(canon11) &&
+        empPisCandidates.includes(canon11);
+      const needsPis = !byPis
+        ? empPreferredPis.length === 11 &&
+          validatePisPasep11(empPreferredPis) &&
+          (normalizePisTo11Digits(row.pis) !== empPreferredPis ||
+            normalizePisTo11Digits(row.cpf) !== empPreferredPis)
+        : matchViaValidPis &&
+          (normalizePisTo11Digits(row.pis) !== canon11 || normalizePisTo11Digits(row.cpf) !== canon11);
+      const patchPisTarget = !byPis ? empPreferredPis : canon11;
 
       const targetMatricula =
         (emp.numero_identificador || '').trim() ||
         (emp.numero_folha || '').trim() ||
-        getEmployeePisCandidates(emp)[0] ||
+        empPisCandidates[0] ||
         '';
-      if (!targetMatricula) continue;
+      const currentMatricula = (matForRow || '').trim();
+      const needsMat = Boolean(targetMatricula) && currentMatricula !== targetMatricula;
 
-      const currentMatricula = (row.matricula || '').trim();
-      if (currentMatricula === targetMatricula) continue;
+      if (!needsPis && !needsMat && !lowConfidence) continue;
 
-      const { error: upErr } = await client
-        .from('rep_punch_logs')
-        .update({
-          matricula: targetMatricula,
-          nome_funcionario: emp.nome,
-        })
-        .eq('id', row.id)
-        .is('time_record_id', null);
+      const patch: {
+        pis?: string;
+        cpf?: string;
+        matricula?: string;
+        nome_funcionario: string;
+        raw_data?: Record<string, unknown>;
+      } = {
+        nome_funcionario: emp.nome,
+        raw_data: rawForSave,
+      };
+      if (needsPis) {
+        patch.pis = patchPisTarget;
+        patch.cpf = patchPisTarget;
+      }
+      if (needsMat) patch.matricula = targetMatricula;
+
+      const { error: upErr } = await client.from('rep_punch_logs').update(patch).eq('id', row.id).is('time_record_id', null);
 
       if (!upErr) fixed += 1;
     }
@@ -1386,7 +1601,7 @@ const AdminRepDevices: React.FC = () => {
 
     let q = client
       .from('rep_punch_logs')
-      .select('id, pis, cpf, matricula, data_hora, tipo_marcacao, nsr, time_record_id')
+      .select('id, pis, cpf, matricula, data_hora, tipo_marcacao, nsr, time_record_id, raw_data')
       .eq('company_id', companyId)
       .eq('rep_device_id', deviceId)
       .is('time_record_id', null)
@@ -1401,6 +1616,9 @@ const AdminRepDevices: React.FC = () => {
     const { data, error } = await q;
     if (error || !data?.length) return 0;
 
+    const fetchedUsers = await fetchRepMatchUsersForBlob(client, companyId);
+    const usersForMatch = fetchedUsers.length > 0 ? fetchedUsers : employees;
+
     let promoted = 0;
     for (const row of data as Array<{
       id: string;
@@ -1411,10 +1629,43 @@ const AdminRepDevices: React.FC = () => {
       tipo_marcacao: string | null;
       nsr: number | null;
       time_record_id: string | null;
+      raw_data?: unknown;
     }>) {
-      const canon = repAfdCanonical11(row.pis || row.cpf);
-      const emp = findEmployeeByPis(canon, row.matricula);
+      const rawMerged =
+        row.raw_data && typeof row.raw_data === 'object' && !Array.isArray(row.raw_data)
+          ? mergeRepExtractedIdentifiersIntoRawData(row.raw_data as Record<string, unknown>)
+          : mergeRepExtractedIdentifiersIntoRawData({});
+      const canon =
+        repPunchLogEffectivePisCanonForDiagnostics({
+          pis: row.pis,
+          cpf: row.cpf,
+          raw_data: rawMerged,
+        }) ?? repAfdCanonical11(row.pis || row.cpf);
+      const matForRow = repMatriculaFromPunchRowForMatch({
+        matricula: row.matricula,
+        raw_data: rawMerged,
+      });
+      const byPisFb = findEmployeeByPis(canon, matForRow, usersForMatch);
+      let emp = byPisFb ?? findEmployeeByAfdIdentBlob(rawMerged, usersForMatch);
+      let lowConfidence = false;
+      if (!emp) {
+        const mr = await tryMatchEmployeeViaRepRpc(client, companyId, usersForMatch, { ...row, raw_data: rawMerged });
+        emp = mr.emp;
+        lowConfidence = mr.lowConfidence === true;
+      }
       if (!emp || !row.data_hora) continue;
+
+      const rawForSave =
+        lowConfidence && emp
+          ? {
+              ...rawMerged,
+              match_confidence: 'low',
+              corrected_by_system: true,
+              weak_match_applied: true,
+              matched_user_id: emp.id,
+              match_strategy: 'fallback',
+            }
+          : rawMerged;
 
       const targetMatricula =
         (emp.numero_identificador || '').trim() ||
@@ -1484,8 +1735,9 @@ const AdminRepDevices: React.FC = () => {
         .from('rep_punch_logs')
         .update({
           time_record_id: targetTimeRecordId,
-          matricula: targetMatricula || row.matricula,
+          matricula: targetMatricula || matForRow || row.matricula,
           nome_funcionario: emp.nome,
+          raw_data: rawForSave,
         })
         .eq('id', row.id)
         .is('time_record_id', null);
@@ -1501,10 +1753,32 @@ const AdminRepDevices: React.FC = () => {
    * Usa force_user_id para ignorar o matching automático de PIS/CPF.
    */
   const reassignPendingPunches = async () => {
+    const d = srSelectedDevice;
     if (!selectedEmployeeForReassign || selectedPunches.size === 0) {
       setMessage({ type: 'error', text: 'Selecione um funcionário e pelo menos uma batida.' });
       return;
     }
+    if (!d?.id || !user?.companyId) {
+      setMessage({ type: 'error', text: 'Seleccione o relógio no painel «Enviar e Receber» (dispositivo activo).' });
+      return;
+    }
+
+    const emp = employees.find((e) => e.id === selectedEmployeeForReassign);
+    if (!emp) {
+      setMessage({ type: 'error', text: 'Colaborador não encontrado na lista.' });
+      return;
+    }
+    const pis11 =
+      getEmployeePisCandidates(emp).find((p) => p.length === 11 && validatePisPasep11(p)) ?? null;
+    if (!pis11) {
+      setMessage({
+        type: 'error',
+        text: 'O colaborador seleccionado não tem PIS/PASEP com 11 dígitos e dígito verificador válido. Corrija em Colaboradores antes de reatribuir.',
+      });
+      return;
+    }
+    const matEmp =
+      (emp.numero_identificador || '').trim() || (emp.numero_folha || '').trim() || null;
 
     setReassigningPunches(true);
     const rowsToReassign = pendingPisModal.rows.filter((r) => r.nsr != null && selectedPunches.has(r.nsr));
@@ -1512,22 +1786,33 @@ const AdminRepDevices: React.FC = () => {
     let errorCount = 0;
 
     for (const row of rowsToReassign) {
+      if (!row.dataHoraIso) {
+        errorCount++;
+        continue;
+      }
       try {
-        // Chamar RPC para reingestir a batida com force_user_id
+        const tipoRaw = (row.tipo_marcacao || 'E').toString().trim().toUpperCase().slice(0, 1);
+        const tipoRpc = tipoRaw === 'S' || tipoRaw === 'P' || tipoRaw === 'B' ? tipoRaw : 'E';
+        const rawMerged = {
+          ...row.raw_data,
+          reassign_from_pending: true,
+          reassign_target_user_id: selectedEmployeeForReassign,
+        };
         const { error } = await getSupabaseClient()!.rpc('rep_ingest_punch', {
-          p_company_id: user?.companyId,
-          p_rep_device_id: null,
-          p_pis: row.pisCanon,
-          p_cpf: row.pisCanon,
-          p_matricula: row.matricula,
-          p_nome_funcionario: null,
-          p_data_hora: row.dataHora.replace(' ', 'T') + ':00.000Z',
-          p_tipo_marcacao: 'E', // Tipo padrão entrada (ajustar conforme necessário)
+          p_company_id: user.companyId,
+          p_rep_device_id: d.id,
+          p_pis: pis11,
+          p_cpf: pis11,
+          p_matricula: matEmp ?? row.matricula,
+          p_nome_funcionario: emp.nome,
+          p_data_hora: row.dataHoraIso,
+          p_tipo_marcacao: tipoRpc,
           p_nsr: row.nsr,
-          p_raw_data: { reassign_from_pending: true, original_data: row },
+          p_raw_data: rawMerged,
           p_only_staging: false,
           p_apply_schedule: false,
           p_force_user_id: selectedEmployeeForReassign,
+          p_trust_client_identity: true,
         });
 
         if (error) {
@@ -1966,10 +2251,8 @@ const AdminRepDevices: React.FC = () => {
     return id.length > 12 ? `${id.slice(0, 8)}…` : id;
   };
 
-  if (loading || tenantPlan.loading) return <LoadingState message="Carregando..." />;
+  if (loading) return <LoadingState message="Carregando..." />;
   if (!user) return <Navigate to="/" replace />;
-
-  const repDevicesOk = isPlanFeatureEnabled(tenantPlan.plan, 'rep_devices');
 
   return (
     <div className="p-4 md:p-6 lg:p-10 max-w-7xl mx-auto w-full">
@@ -1978,7 +2261,6 @@ const AdminRepDevices: React.FC = () => {
         subtitle="Cadastro de registradores, comunicação em rede (Control iD iDClass) e importação de marcações."
         icon={<Clock size={24} />}
         actions={
-          repDevicesOk ? (
             <div className="flex flex-wrap gap-2 justify-end">
               <Button type="button" variant="outline" onClick={openSendReceiveModal}>
                 <ArrowLeftRight size={18} className="mr-2" />
@@ -1989,18 +2271,9 @@ const AdminRepDevices: React.FC = () => {
                 Cadastrar relógio
               </Button>
             </div>
-          ) : undefined
         }
       />
 
-      {!repDevicesOk ? (
-        <PlanUpgradePanel
-          plan={tenantPlan.plan}
-          title="Recurso disponível no Pro e Enterprise"
-          message="O cadastro e sincronização de relógios REP em rede não estão incluídos no plano Free. Faça upgrade para conectar registradores e importar marcações automaticamente."
-        />
-      ) : (
-      <>
       {message && (
         <div
           className={`mb-4 px-4 py-3 rounded-xl ${message.type === 'success' ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'}`}
@@ -2968,7 +3241,6 @@ const AdminRepDevices: React.FC = () => {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    setPauloDebugInfo(null);
                     loadPendingPisDiagnostics();
                   }}
                   title="Recarregar dados do servidor"
@@ -2986,45 +3258,28 @@ const AdminRepDevices: React.FC = () => {
               </div>
             </div>
 
-            {/* Alerta específico para Paulo Henrique */}
-            {(() => {
-              const paulo = employees.find(e => e.nome?.toLowerCase().includes('paulo') && e.nome?.toLowerCase().includes('henrique'));
-              if (!paulo) return null;
-              const pisPaulo = normalizePisTo11Digits(paulo.pis_pasep);
-              const batidasPaulo = pendingPisModal.rows.filter(r => r.pisCanon === pisPaulo);
-              const temBatidasOutras = pendingPisModal.rows.some(r => r.pisCanon !== pisPaulo);
-              
-              if (batidasPaulo.length === 0 && temBatidasOutras) {
-                return (
-                  <div className="mt-4 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-                    <p className="text-sm font-bold text-red-700 dark:text-red-300 mb-2">
-                      ⚠️ ATENÇÃO: Batidas de {paulo.nome} não encontradas!
-                    </p>
-                    <p className="text-xs text-red-600 dark:text-red-400 mb-2">
-                      PIS cadastrado no sistema: <strong>{paulo.pis_pasep || 'N/A'}</strong> (normalizado: {pisPaulo || 'N/A'})
-                    </p>
-                    <p className="text-xs text-red-600 dark:text-red-400 mb-2">
-                      O relógio está enviando batidas de outros PIS ({Array.from(new Set(pendingPisModal.rows.map(r => r.pisCanon).filter(Boolean))).join(', ')}),
-                      mas nenhuma do PIS do Paulo.
-                    </p>
-                    <div className="mt-2 p-2 bg-white dark:bg-slate-800 rounded text-xs text-slate-700 dark:text-slate-300">
-                      <p className="font-medium mb-1">Possíveis causas:</p>
-                      <ol className="list-decimal list-inside space-y-1">
-                        <li>O PIS cadastrado no relógio físico é diferente do cadastro do sistema</li>
-                        <li>O Paulo ainda não bateu o ponto hoje no relógio</li>
-                        <li>O cadastro do relógio foi apagado/ficou incompleto após reinicialização</li>
-                        <li>O PIS no relógio tem formatação diferente (zeros à esquerda, etc)</li>
-                      </ol>
-                    </div>
-                    <p className="text-xs text-red-600 dark:text-red-400 mt-2">
-                      💡 <strong>Solução:</strong> Acesse o menu do relógio físico e verifique qual PIS está cadastrado para o Paulo. 
-                      Deve ser exatamente: <strong>{paulo.pis_pasep || pisPaulo || 'o PIS cadastrado no sistema'}</strong>
-                    </p>
-                  </div>
-                );
-              }
-              return null;
-            })()}
+            {pendingPisModal.rows.length > 0 && (
+              <div className="mt-4 p-3 rounded-lg border border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-900/15">
+                <p className="text-xs text-amber-900 dark:text-amber-100">
+                  O NIS/PIS enviado pelo relógio (campo AFD) tem de coincidir com o <strong>PIS/PASEP</strong> de 11 dígitos no cadastro
+                  (ou nº folha / nº identificador com o mesmo valor numérico), após a mesma normalização usada na consolidação. Se o
+                  NIS no aparelho for outro (ex.: dígitos quase iguais ao do cadastro), o espelho não associa — alinhe o relógio ou o
+                  cadastro.
+                </p>
+              </div>
+            )}
+
+            {employees.some((e) => {
+              const p = normalizePisTo11Digits(e.pis_pasep);
+              return p.length === 11 && !validatePisPasep11(p);
+            }) && (
+              <div className="mt-3 p-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+                <p className="text-xs font-medium text-red-800 dark:text-red-200">
+                  Pelo menos um colaborador tem PIS/PASEP com 11 dígitos mas <strong>dígito verificador inválido</strong> (não é um NIS
+                  válido). Corrija em Colaboradores — o match com o relógio usa o NIS correcto.
+                </p>
+              </div>
+            )}
 
             {/* Controles: Mostrar ignoradas + Reatribuir/Ignorar */}
             {pendingPisModal.rows.length > 0 && (
@@ -3059,9 +3314,15 @@ const AdminRepDevices: React.FC = () => {
                           {employees.filter(e => e.pis_pasep).map(e => {
                             const pisNormalizado = normalizePisTo11Digits(e.pis_pasep);
                             const temBatida = pendingPisModal.rows.some(r => r.pisCanon === pisNormalizado);
+                            const dvInvalid =
+                              pisNormalizado.length === 11 && !validatePisPasep11(pisNormalizado);
                             return (
                               <li key={e.id} className={`font-mono ${temBatida ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                                {e.pis_pasep} → {e.nome} {temBatida ? '✅' : '⏳'}
+                                {e.pis_pasep} → {e.nome}
+                                {dvInvalid ? (
+                                  <span className="text-red-600 dark:text-red-400 font-sans"> (DV NIS inválido)</span>
+                                ) : null}{' '}
+                                {temBatida ? '✅' : '⏳'}
                               </li>
                             );
                           })}
@@ -3072,8 +3333,20 @@ const AdminRepDevices: React.FC = () => {
                     </div>
                     <div className="p-2 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-600">
                       <p className="font-medium text-slate-600 dark:text-slate-400 mb-1">PIS chegando do relógio (pendentes):</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-1">
+                        Usa o mesmo critério da consolidação: colunas gravadas, depois <code className="text-[10px]">raw_data</code>{' '}
+                        (ex.: <code className="text-[10px]">cpfOuPis</code> do Control iD) e blob completo da linha AFD quando existir.
+                      </p>
                       <ul className="space-y-1">
-                        {Array.from(new Set(pendingPisModal.rows.map(r => r.pisCanon).filter(Boolean))).map((pis, i) => {
+                        {(
+                          [
+                            ...new Set(
+                              pendingPisModal.rows
+                                .map((r) => r.pisCanon)
+                                .filter((x): x is string => typeof x === 'string' && x.length > 0)
+                            ),
+                          ] as string[]
+                        ).map((pis, i) => {
                           const emp = findEmployeeByPis(pis, null);
                           return (
                             <li key={i} className={`font-mono ${emp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
@@ -3088,60 +3361,6 @@ const AdminRepDevices: React.FC = () => {
                     💡 <strong>Legenda:</strong> ✅ = Batida casou com funcionário | ⏳ = Sem batida do relógio | ❌ = Não cadastrado
                   </p>
                 </div>
-
-                {/* DEBUG ESPECIAL: Paulo Henrique */}
-                {pauloDebugInfo && (
-                  <div className="border-t border-slate-200 dark:border-slate-700 pt-3 mt-3">
-                    <p className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mb-2">
-                      🔍 Debug: {pauloDebugInfo.nome}
-                    </p>
-                    <div className="p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg text-xs space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <span className="text-slate-500 dark:text-slate-400">PIS Original:</span>
-                          <span className="font-mono ml-1 text-slate-700 dark:text-slate-300">{pauloDebugInfo.pisOriginal}</span>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 dark:text-slate-400">PIS (11 díg):</span>
-                          <span className="font-mono ml-1 text-slate-700 dark:text-slate-300">{pauloDebugInfo.pis11}</span>
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 dark:text-slate-400">Total batidas hoje:</span>
-                        <span className="font-mono ml-1 font-bold text-slate-700 dark:text-slate-300">{pauloDebugInfo.totalBatidasDia}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 dark:text-slate-400">Batidas do Paulo encontradas:</span>
-                        <span className={`font-mono ml-1 font-bold ${(pauloDebugInfo.batidasPaulo?.length || 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                          {pauloDebugInfo.batidasPaulo?.length || 0}
-                        </span>
-                      </div>
-                      {pauloDebugInfo.batidasPaulo && pauloDebugInfo.batidasPaulo.length > 0 ? (
-                        <div className="mt-2">
-                          <p className="text-slate-500 dark:text-slate-400 mb-1">Detalhes:</p>
-                          <ul className="space-y-1">
-                            {pauloDebugInfo.batidasPaulo.map((b, i) => (
-                              <li key={i} className="font-mono text-slate-700 dark:text-slate-300">
-                                NSR {b.nsr} | {b.dataHora?.slice(0,16)} | {b.status === 'processada' ? '✅ No espelho' : b.status === 'ignorada' ? '🚫 Ignorada' : '⏳ Pendente'}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : (
-                        <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/20 rounded border border-red-200 dark:border-red-800">
-                          <p className="text-red-700 dark:text-red-300 font-medium">⚠️ Nenhuma batida encontrada!</p>
-                          <p className="text-red-600 dark:text-red-400 mt-1">Possíveis causas:</p>
-                          <ul className="list-disc ml-4 text-red-600 dark:text-red-400">
-                            <li>O relógio não enviou as batidas deste PIS</li>
-                            <li>O PIS no relógio físico é diferente do cadastro</li>
-                            <li>As batidas foram filtradas por data</li>
-                            <li>O cadastro do relógio foi apagado/reinicializado</li>
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 {/* Seleção de funcionário para reatribuir */}
                 <div className="border-t border-slate-200 dark:border-slate-700 pt-3">
@@ -3171,7 +3390,9 @@ const AdminRepDevices: React.FC = () => {
                     </Button>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    Use apenas se o PIS no cadastro estiver correto e igual ao do relógio.
+                    Grava a batida no colaborador escolhido (RPC com <code className="text-[10px]">p_force_user_id</code>) e
+                    actualiza <code className="text-[10px]">pis</code>/<code className="text-[10px]">cpf</code> na fila com o
+                    NIS válido desse cadastro — útil quando o relógio enviou truncado ou sem DV válido.
                   </p>
                 </div>
 
@@ -3232,7 +3453,9 @@ const AdminRepDevices: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                     {pendingPisModal.rows.map((row, i) => {
-                      const emp = findEmployeeByPis(row.pisCanon, row.matricula);
+                      const emp =
+                        (row.matchedUserId ? employees.find((e) => e.id === row.matchedUserId) : null) ??
+                        findEmployeeByPis(row.pisCanon, row.matricula);
                       const isSelected = row.nsr != null && selectedPunches.has(row.nsr);
                       return (
                         <tr key={i} className={`hover:bg-slate-50/80 dark:hover:bg-slate-700/30 ${isSelected ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : ''}`}>
@@ -3261,9 +3484,16 @@ const AdminRepDevices: React.FC = () => {
                           <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{row.matricula ?? '—'}</td>
                           <td className="px-3 py-2">
                             {emp ? (
-                              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                {emp.nome}
+                              <span className="inline-flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                                  {emp.nome}
+                                </span>
+                                {row.matchConfidence === 'low' ? (
+                                  <span className="text-xs text-amber-700 dark:text-amber-300">
+                                    Batida identificada com baixa confiança
+                                  </span>
+                                ) : null}
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
@@ -3523,8 +3753,6 @@ const AdminRepDevices: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
-      </>
       )}
     </div>
   );

@@ -2,11 +2,9 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { UserPlus, Pencil, UserX, Trash2, Eye, EyeOff, UserCheck, Search, Upload, FileDown, X, Camera, User, AlertTriangle, Loader2, Info } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useTenantPlan } from '../../hooks/useTenantPlan';
-import { evaluateEmployeeSeat, fetchCompanyPlan, countActiveEmployeesForCompany } from '../../../services/tenantPlan.service';
-import { PlanUpgradePanel } from '../../components/plan/PlanUpgradePanel';
 import PageHeader from '../../components/PageHeader';
-import { db, auth, isSupabaseConfigured, resetSession } from '../../services/supabaseClient';
+import { db, auth, isSupabaseConfigured, resetSession, getSupabaseClient } from '../../services/supabaseClient';
+import { autoReprocessRepAfterEmployeeIdentityUpdate } from '../../../modules/rep-integration/repResolveCanonicalUser';
 import { resolveTenantId } from '../../services/tenantScope';
 import { invalidateCompanyListCaches } from '../../services/queryCache';
 import { useCatalogStore } from '../../stores/catalogStore';
@@ -295,12 +293,6 @@ const AdminEmployees: React.FC = () => {
     if (fromProfile) return fromProfile;
     return companyIdFromSession;
   }, [user, companyIdFromSession]);
-
-  const tenantPlan = useTenantPlan(effectiveCompanyId);
-  const seatForOne = useMemo(
-    () => evaluateEmployeeSeat(tenantPlan.plan, tenantPlan.employeeCount, 1),
-    [tenantPlan.plan, tenantPlan.employeeCount],
-  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -847,6 +839,22 @@ const AdminEmployees: React.FC = () => {
         if (!updated) {
           throw new Error('Não foi possível salvar as alterações. Verifique permissões da tabela users/employees e tente novamente.');
         }
+        if (editingSnapshot) {
+          const idChanged =
+            String(editingSnapshot.cpf ?? '').trim() !== String(form.cpf ?? '').trim() ||
+            String(editingSnapshot.pis_pasep ?? '').trim() !== String(form.pis_pasep ?? '').trim() ||
+            String(editingSnapshot.numero_folha ?? '').trim() !== String(form.numero_folha ?? '').trim() ||
+            String(editingSnapshot.numero_identificador ?? '').trim() !==
+              String(form.numero_identificador ?? '').trim();
+          if (idChanged && effectiveCompanyId) {
+            const supa = getSupabaseClient();
+            if (supa) {
+              void autoReprocessRepAfterEmployeeIdentityUpdate(supa, effectiveCompanyId).catch(() => {
+                /* reprocesso é best-effort */
+              });
+            }
+          }
+        }
         setSuccess('Funcionário atualizado com sucesso.');
         if (effectiveCompanyId) invalidateCompanyListCaches(effectiveCompanyId);
         setModalOpen(false);
@@ -866,17 +874,6 @@ const AdminEmployees: React.FC = () => {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
-
-        if (effectiveCompanyId) {
-          const plan = await fetchCompanyPlan(effectiveCompanyId);
-          const cnt = await countActiveEmployeesForCompany(effectiveCompanyId);
-          const ev = evaluateEmployeeSeat(plan, cnt, 1);
-          if (!ev.allowed) {
-            setError(ev.reason || 'Limite do plano atingido.');
-            setSaving(false);
-            return;
-          }
-        }
 
         let authUserId: string | null = null;
         const senhaCriacao = (form.password && form.password.trim()) ? form.password.trim() : '123456';
@@ -933,7 +930,6 @@ const AdminEmployees: React.FC = () => {
         setForm({ ...form, password: '' });
         invalidateCompanyListCaches(effectiveCompanyId);
         loadData();
-        void tenantPlan.refetch();
       }
     } catch (e: any) {
       const msg = String(e?.message ?? '');
@@ -1347,13 +1343,6 @@ const AdminEmployees: React.FC = () => {
       setImportError('Empresa do usuário não encontrada. Saia e entre novamente antes de importar funcionários.');
       return;
     }
-    const plan = await fetchCompanyPlan(effectiveCompanyId);
-    const cnt = await countActiveEmployeesForCompany(effectiveCompanyId);
-    const evBulk = evaluateEmployeeSeat(plan, cnt, importPreview.valid.length);
-    if (!evBulk.allowed) {
-      setImportError(evBulk.reason || 'Limite do plano excedido para esta importação.');
-      return;
-    }
     setImporting(true);
     setImportError(null);
     try {
@@ -1364,7 +1353,6 @@ const AdminEmployees: React.FC = () => {
       setImportRawRows(null);
       setImportHeaders([]);
       setImportMapping({});
-      void tenantPlan.refetch();
     } catch (err: any) {
       setImportError(err?.message || 'Erro ao importar. Verifique a conexão e tente novamente.');
     } finally {
@@ -1412,15 +1400,6 @@ const AdminEmployees: React.FC = () => {
             {error}
           </div>
         )}
-        {!tenantPlan.loading && !seatForOne.allowed && (
-          <PlanUpgradePanel
-            plan={tenantPlan.plan}
-            message={
-              seatForOne.reason ||
-              `Limite de colaboradores ativos atingido para o plano ${tenantPlan.plan.toUpperCase()}.`
-            }
-          />
-        )}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <PageHeader
             title="Colaborador"
@@ -1430,8 +1409,6 @@ const AdminEmployees: React.FC = () => {
             <button
               type="button"
               onClick={openImportModal}
-              disabled={tenantPlan.loading || !seatForOne.allowed}
-              title={!seatForOne.allowed ? seatForOne.reason : undefined}
               className="inline-flex items-center gap-2 px-4 py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               <Upload className="w-5 h-5" /> Importar colaborador
@@ -1439,8 +1416,6 @@ const AdminEmployees: React.FC = () => {
             <button
               type="button"
               onClick={openCreate}
-              disabled={tenantPlan.loading || !seatForOne.allowed}
-              title={!seatForOne.allowed ? seatForOne.reason : undefined}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               <UserPlus className="w-5 h-5" /> Cadastrar colaborador

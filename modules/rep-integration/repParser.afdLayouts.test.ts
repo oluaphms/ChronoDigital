@@ -11,6 +11,16 @@ describe('matriculaFromAfdPisField', () => {
   });
 });
 
+describe('parseAfdLine tipo 3/7 — campo identificação longo (prefixo + PIS)', () => {
+  it('canoniza PIS válido no sufixo quando o firmware envia >14 dígitos no campo', () => {
+    const line =
+      '000016494304052026105700000674276570512966742765';
+    const r = parseAfdLine(line);
+    expect(r).not.toBeNull();
+    expect(r!.cpfOuPis).toBe('12966742765');
+  });
+});
+
 describe('parseAfdLine tipo 3/7 — campo identificação 12–14 dígitos', () => {
   it('usa os últimos 11 dígitos como PIS/crachá (prefixo de 3 dígitos + crachá)', () => {
     const line = '00001644032404202410070012300000705412';

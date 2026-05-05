@@ -71,7 +71,6 @@ import {
   AcceptInviteRoute,
   AdminAjuda,
   AdminMetricasProduto,
-  AdminPlanUpgrade,
   AdminArquivarCalculos,
   AdminAusencias,
   AdminBankHours,
@@ -1294,7 +1293,6 @@ const AppMain: React.FC = () => {
               <Route path="reports/security" element={<ReportSecurity />} />
               <Route path="bank-hours" element={<AdminBankHours />} />
               <Route path="ajuda" element={<AdminAjuda />} />
-              <Route path="plan" element={<AdminPlanUpgrade />} />
               <Route path="metricas-produto" element={<AdminMetricasProduto />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>

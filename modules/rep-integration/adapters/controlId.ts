@@ -19,12 +19,15 @@ import {
   afdRecordWallTimeToUtcIso,
   wallTimeInZoneToUtcMs,
   matriculaFromAfdPisField,
+  extractAfdLineIdentifierDigitBlob,
 } from '../repParser';
 import {
+  normalizeDocument,
   sanitizeDigits,
   tryNormalizeBrazilianPisTo11Digits,
   elevenPisDigitsToControlIdApiInteger,
   validatePisPasep11,
+  repAfdCanonical11DigitsFromBlob,
 } from '../pisPasep';
 
 function extra(device: RepDevice): Record<string, unknown> {
@@ -358,6 +361,426 @@ function normalizeTipo(t: string): string {
   if (u.startsWith('S') || u === 'OUT' || u === '2') return 'S';
   if (u.startsWith('P') || u === 'BREAK' || u === '3') return 'P';
   return u.slice(0, 1);
+}
+
+function readControlIdFcgiOnlyFlag(ex: Record<string, unknown>): boolean {
+  const v = ex.controlid_use_fcgi_only;
+  if (v === true) return true;
+  if (typeof v === 'string') {
+    const n = v.trim().toLowerCase();
+    return n === 'true' || n === '1' || n === 'yes' || n === 'on';
+  }
+  if (typeof v === 'number') return v === 1;
+  return false;
+}
+
+/** Mesma heurística do agente `controlid` — respostas heterogéneas a `load_objects`. */
+function extractEventLikeRowsFromLoadObjects(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    return data.filter((x): x is Record<string, unknown> => x != null && typeof x === 'object' && !Array.isArray(x));
+  }
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    const keys = [
+      'objects',
+      'records',
+      'logs',
+      'events',
+      'data',
+      'transactions',
+      'access_logs',
+      'marcacoes',
+      'access_logs_list',
+      'list',
+    ];
+    for (const k of keys) {
+      const v = o[k];
+      if (Array.isArray(v)) {
+        return v.filter((x): x is Record<string, unknown> => x != null && typeof x === 'object' && !Array.isArray(x));
+      }
+    }
+    /** Wrappers comuns: `{ result: { … } }`, `{ body: { access_logs: … } }`. */
+    const wrapKeys = ['result', 'body', 'response', 'payload', 'content', 'data'];
+    for (const w of wrapKeys) {
+      const inner = o[w];
+      if (inner && typeof inner === 'object') {
+        const hit = extractEventLikeRowsFromLoadObjects(inner);
+        if (hit.length > 0) return hit;
+      }
+    }
+  }
+  return [];
+}
+
+function pickIsoTimestampFromAccessRow(row: Record<string, unknown>): string | null {
+  const numericKeys = ['timestamp', 'time', 'datetime', 'date_time', 'event_time', 'unix_time', 'unixtime', 't'];
+  for (const k of numericKeys) {
+    const v = row[k];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      const ms = v > 10_000_000_000 ? v : v * 1000;
+      const d = new Date(ms);
+      if (!Number.isNaN(d.getTime())) return d.toISOString();
+    }
+  }
+  const candidates = [
+    row.timestamp,
+    row.time,
+    row.datetime,
+    row.data_hora,
+    row.date_time,
+    row.event_time,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.length > 8) {
+      const d = new Date(c);
+      if (!Number.isNaN(d.getTime())) return d.toISOString();
+    }
+  }
+  return null;
+}
+
+function pickNsrFromAccessRow(row: Record<string, unknown>): number | null {
+  const keys = [
+    'nsr',
+    'NSR',
+    'event_nsr',
+    'afd_nsr',
+    'sequencia',
+    'seq',
+    'seq_nsr',
+    'register',
+    'registry',
+    'log_id',
+    'event_id',
+    'sequencial',
+    'sequential',
+  ];
+  for (const k of keys) {
+    const v = row[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.floor(v);
+    if (typeof v === 'string' && /^\d+$/.test(v.trim())) {
+      const n = parseInt(v.trim(), 10);
+      if (Number.isFinite(n) && n > 0 && n < 1_000_000_000) return n;
+    }
+  }
+  return null;
+}
+
+function tryPis11FromDigitBlob(d: string): string | null {
+  if (!d || d.length < 10) return null;
+  const canon =
+    tryNormalizeBrazilianPisTo11Digits(d) ?? repAfdCanonical11DigitsFromBlob(d) ?? null;
+  if (canon && validatePisPasep11(canon)) return canon;
+  return null;
+}
+
+/** PIS em campos conhecidos ou aninhados (objeto `user`, etc.). */
+function pickValidPis11FromAccessRow(row: Record<string, unknown>, depth = 0): string | null {
+  if (depth > 5) return null;
+  const keys = [
+    'pis',
+    'nis',
+    'user_pis',
+    'pispasep',
+    'pis_pasep',
+    'cpf',
+    'user_cpf',
+    'document',
+    'user_document',
+    'enrollment',
+    'codigo',
+    'code',
+  ];
+  for (const k of keys) {
+    const v = row[k];
+    if (v == null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      const inner = pickValidPis11FromAccessRow(v as Record<string, unknown>, depth + 1);
+      if (inner) return inner;
+      continue;
+    }
+    const d = sanitizeDigits(String(v));
+    const hit = tryPis11FromDigitBlob(d);
+    if (hit) return hit;
+  }
+  for (const v of Object.values(row)) {
+    if (v == null || typeof v === 'function') continue;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      const inner = pickValidPis11FromAccessRow(v as Record<string, unknown>, depth + 1);
+      if (inner) return inner;
+    } else if (typeof v === 'string' || typeof v === 'number') {
+      const d = sanitizeDigits(String(v));
+      if (d.length >= 11) {
+        const hit = tryPis11FromDigitBlob(d);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
+}
+
+function lookupPisBySecondWithSkew(bySecond: Map<string, string>, unixSec: number, skewSec: number): string | null {
+  for (let d = -skewSec; d <= skewSec; d++) {
+    const p = bySecond.get(String(unixSec + d));
+    if (p && validatePisPasep11(p)) return p;
+  }
+  return null;
+}
+
+function lookupRegBySecondWithSkew(bySecond: Map<string, string>, unixSec: number, skewSec: number): string | null {
+  for (let d = -skewSec; d <= skewSec; d++) {
+    const r = bySecond.get(String(unixSec + d));
+    if (r) return r;
+  }
+  return null;
+}
+
+/** Matrícula / registo numérico vindo do access_log (para cruzar com load_users do relógio). */
+function pickRegistrationFromAccessRow(row: Record<string, unknown>): string | null {
+  const keys = [
+    'registration',
+    'Registration',
+    'matricula',
+    'user_matricula',
+    'badge',
+    'enrollment',
+    'user_enrollment',
+    'employee_code',
+    'codigo',
+    'code',
+    'matriculation',
+    'user_registration',
+    'registration_number',
+    'cracha',
+    'crachá',
+  ];
+  const fromObj = (o: Record<string, unknown>): string | null => {
+    for (const k of keys) {
+      const v = o[k];
+      if (v == null) continue;
+      const d = sanitizeDigits(String(v));
+      if (!d) continue;
+      if (d.length >= 1 && d.length <= 12) {
+        const stripped = d.replace(/^0+/, '') || '0';
+        if (stripped.length <= 9) return stripped;
+      }
+    }
+    return null;
+  };
+  const direct = fromObj(row);
+  if (direct) return direct;
+  const u = row.user;
+  if (u && typeof u === 'object' && !Array.isArray(u)) {
+    return fromObj(u as Record<string, unknown>);
+  }
+  return null;
+}
+
+function normRegistrationKey(raw: string | null | undefined): string | null {
+  if (raw == null || !String(raw).trim()) return null;
+  const d = sanitizeDigits(String(raw));
+  if (!d) return null;
+  const stripped = d.replace(/^0+/, '') || '0';
+  return stripped.length <= 9 ? stripped : null;
+}
+
+/** Mapa matrícula (relógio) → PIS 11 válido a partir de load_users. */
+function buildRegToPisMapFromDeviceUsers(users: RepUserFromDevice[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const u of users) {
+    const regRaw = (u.matricula || '').trim();
+    if (!regRaw) continue;
+    const rk = normRegistrationKey(regRaw);
+    if (!rk) continue;
+    const pisRaw = u.pis != null ? String(u.pis) : '';
+    const cpfRaw = u.cpf != null ? String(u.cpf) : '';
+    const d = sanitizeDigits(pisRaw || cpfRaw);
+    if (!d) continue;
+    const pis11 =
+      tryNormalizeBrazilianPisTo11Digits(d) ?? repAfdCanonical11DigitsFromBlob(d) ?? null;
+    if (pis11 && validatePisPasep11(pis11)) {
+      m.set(rk, pis11);
+    }
+  }
+  return m;
+}
+
+/**
+ * PIS a partir do blob identificador da linha AFD (janelas deslizantes de 11 com DV válido).
+ * 1) Se houver exactamente um PIS comum ao blob e a `load_users` do relógio, usa-o.
+ * 2) Senão, se o blob tiver **uma única** substring de 11 dígitos com DV PIS válido, usa-a
+ *    (firmware que concatena prefixo + NIS; `load_users` vazio ou sem PIS ainda assim recupera).
+ */
+function tryResolvePisFromIdentifierBlobAgainstDeviceUsers(
+  rec: { raw?: string },
+  devUsers: RepUserFromDevice[],
+): string | null {
+  const line = rec.raw;
+  if (!line?.trim()) return null;
+  const blob = extractAfdLineIdentifierDigitBlob(line);
+  if (!blob || blob.length < 11) return null;
+
+  const allValid = new Set<string>();
+  for (let i = 0; i <= blob.length - 11; i++) {
+    const w = blob.slice(i, i + 11);
+    if (validatePisPasep11(w)) allValid.add(w);
+  }
+  if (allValid.size === 0) return null;
+
+  const userPis = new Set<string>();
+  for (const u of devUsers) {
+    const d = sanitizeDigits(String(u.pis || u.cpf || ''));
+    const p =
+      tryNormalizeBrazilianPisTo11Digits(d) ??
+      (d.length >= 11 ? repAfdCanonical11DigitsFromBlob(d) : null);
+    if (p && validatePisPasep11(p)) userPis.add(p);
+  }
+
+  const intersect = [...allValid].filter((w) => userPis.has(w));
+  if (intersect.length === 1) return intersect[0]!;
+
+  if (allValid.size === 1) return [...allValid][0]!;
+
+  return null;
+}
+
+async function fetchAllDeviceUsersCore(
+  device: RepDevice,
+  session: string,
+  mode671: boolean
+): Promise<{ users: RepUserFromDevice[]; loadError?: string }> {
+  const collected: RepUserFromDevice[] = [];
+  const limit = 100;
+  let offset = 0;
+  let first = true;
+  for (;;) {
+    let path = `/load_users.fcgi?session=${encodeURIComponent(session)}`;
+    if (mode671) path += '&mode=671';
+    const res = await deviceFetch(device, path, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit, offset }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      if (first) {
+        return {
+          users: [],
+          loadError: `load_users: HTTP ${res.status} — ${text.slice(0, 240)}`,
+        };
+      }
+      break;
+    }
+    first = false;
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { users: [], loadError: 'load_users: resposta não é JSON.' };
+    }
+    const batch = Array.isArray(data.users) ? (data.users as Record<string, unknown>[]) : [];
+    for (const row of batch) {
+      collected.push(normalizeLoadUser(row, mode671));
+    }
+    if (batch.length < limit) break;
+    offset += limit;
+  }
+  return { users: collected };
+}
+
+/**
+ * Quando o AFD trunca o campo PIS (DV inválido), o JSON de `access_logs` costuma trazer o NIS completo.
+ * Índices: NSR (preferencial) e instante Unix (segundo) para casar com a marcação AFD.
+ * iDClass: muitos firmwares exigem `?session=` (como no get_afd); Basic sozinho devolve vazio ou 401.
+ */
+async function fetchAccessLogPisLookup(device: RepDevice, session: string): Promise<{
+  byNsr: Map<number, string>;
+  bySecond: Map<string, string>;
+  regByNsr: Map<number, string>;
+  regBySecond: Map<string, string>;
+}> {
+  const byNsr = new Map<number, string>();
+  const bySecond = new Map<string, string>();
+  const regByNsr = new Map<number, string>();
+  const regBySecond = new Map<string, string>();
+  const ex = extra(device);
+  const { login, password } = credentials(device);
+  const pair = `${login}:${password}`;
+  const token =
+    typeof Buffer !== 'undefined'
+      ? Buffer.from(pair, 'utf8').toString('base64')
+      : btoa(pair);
+  const bodyTemplate =
+    typeof ex.load_objects_body === 'object' && ex.load_objects_body !== null && !Array.isArray(ex.load_objects_body)
+      ? (ex.load_objects_body as Record<string, unknown>)
+      : { object: 'access_logs' };
+
+  const bodyVariants: Record<string, unknown>[] = [{ ...bodyTemplate }];
+  if (session.trim()) {
+    const withSession = { ...bodyTemplate, session: session.trim() };
+    if (JSON.stringify(withSession) !== JSON.stringify(bodyVariants[0])) {
+      bodyVariants.push(withSession);
+    }
+  }
+
+  const paths = ['/load_objects.fcgi', '/load_objects', '/api/load_objects'];
+  const sessionQs = session.trim() ? `?session=${encodeURIComponent(session.trim())}` : '';
+
+  const mergeRowsIntoMaps = (rows: Record<string, unknown>[]) => {
+    for (const row of rows) {
+      const nsr = pickNsrFromAccessRow(row);
+      const tsIso = pickIsoTimestampFromAccessRow(row);
+      const sec = tsIso ? String(Math.floor(new Date(tsIso).getTime() / 1000)) : null;
+
+      const pis = pickValidPis11FromAccessRow(row);
+      if (pis) {
+        if (nsr != null) byNsr.set(nsr, pis);
+        if (sec) bySecond.set(sec, pis);
+      }
+      const reg = pickRegistrationFromAccessRow(row);
+      if (reg) {
+        if (nsr != null) regByNsr.set(nsr, reg);
+        if (sec) regBySecond.set(sec, reg);
+      }
+    }
+  };
+
+  for (const path of paths) {
+    for (const authMode of ['session', 'basic'] as const) {
+      if (authMode === 'session' && !sessionQs) continue;
+      const pathWithQs = authMode === 'session' ? `${path}${sessionQs}` : path;
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
+      };
+      if (authMode === 'basic') headers.Authorization = `Basic ${token}`;
+      for (const bodyObj of bodyVariants) {
+        try {
+          const res = await deviceFetch(device, pathWithQs, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(bodyObj),
+          });
+          if (!res.ok) continue;
+          const text = await res.text();
+          let data: unknown;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            continue;
+          }
+          const rows = extractEventLikeRowsFromLoadObjects(data);
+          mergeRowsIntoMaps(rows);
+          if (byNsr.size > 0 || bySecond.size > 0 || regByNsr.size > 0 || regBySecond.size > 0) {
+            return { byNsr, bySecond, regByNsr, regBySecond };
+          }
+        } catch {
+          /* próximo corpo / modo / path */
+        }
+      }
+    }
+  }
+  return { byNsr, bySecond, regByNsr, regBySecond };
 }
 
 const ControlIdAdapter: RepVendorAdapter = {
@@ -750,43 +1173,13 @@ const ControlIdAdapter: RepVendorAdapter = {
   },
 
   async pullUsersFromDevice(device: RepDevice): Promise<{ ok: boolean; message?: string; users: RepUserFromDevice[] }> {
-    const collected: RepUserFromDevice[] = [];
     if (!device.ip) return { ok: false, message: 'IP não configurado', users: [] };
     const logged = await controlIdLogin(device);
     if ('error' in logged) return { ok: false, message: logged.error, users: [] };
     const mode671 = readMode671Flag(extra(device));
-    const limit = 100;
-    let offset = 0;
-    for (;;) {
-      let path = `/load_users.fcgi?session=${encodeURIComponent(logged.session)}`;
-      if (mode671) path += '&mode=671';
-      const res = await deviceFetch(device, path, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit, offset }),
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        return {
-          ok: false,
-          message: `load_users: HTTP ${res.status} — ${text.slice(0, 240)}`,
-          users: collected,
-        };
-      }
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        return { ok: false, message: 'load_users: resposta não é JSON.', users: collected };
-      }
-      const batch = Array.isArray(data.users) ? (data.users as Record<string, unknown>[]) : [];
-      for (const row of batch) {
-        collected.push(normalizeLoadUser(row, mode671));
-      }
-      if (batch.length < limit) break;
-      offset += limit;
-    }
-    return { ok: true, users: collected };
+    const { users, loadError } = await fetchAllDeviceUsersCore(device, logged.session, mode671);
+    if (loadError) return { ok: false, message: loadError, users: [] };
+    return { ok: true, users };
   },
 
   async fetchPunches(device: RepDevice, since?: Date): Promise<PunchFromDevice[]> {
@@ -855,6 +1248,34 @@ const ControlIdAdapter: RepVendorAdapter = {
       /** Se o filtro eliminou tudo, mantém o lote: duplicatas são descartadas na ingestão por NSR. */
       if (filtered.length > 0) records = filtered;
     }
+
+    let accessPisByNsr = new Map<number, string>();
+    let accessPisBySecond = new Map<string, string>();
+    let accessRegByNsr = new Map<number, string>();
+    let accessRegBySecond = new Map<string, string>();
+    if (!readControlIdFcgiOnlyFlag(ex)) {
+      try {
+        const lo = await fetchAccessLogPisLookup(device, logged.session);
+        accessPisByNsr = lo.byNsr;
+        accessPisBySecond = lo.bySecond;
+        accessRegByNsr = lo.regByNsr;
+        accessRegBySecond = lo.regBySecond;
+      } catch {
+        /* load_objects indisponível — segue só AFD */
+      }
+    }
+
+    let regToPisFromDevice = new Map<string, string>();
+    let devUsersSnapshot: RepUserFromDevice[] = [];
+    /** Sempre que há AFD: precisamos de `load_users` para cruzar matrícula e heurística de blob (PIS “válido” no AFD pode estar errado). */
+    if (records.length > 0) {
+      const { users: devUsers, loadError } = await fetchAllDeviceUsersCore(device, logged.session, mode671);
+      if (!loadError && devUsers.length > 0) {
+        devUsersSnapshot = devUsers;
+        regToPisFromDevice = buildRegToPisMapFromDeviceUsers(devUsers);
+      }
+    }
+
     if (records.length === 0) {
       console.warn('[Control iD][fetchPunches] AFD sem registros parseados após get_afd.', {
         deviceId: device.id,
@@ -864,15 +1285,54 @@ const ControlIdAdapter: RepVendorAdapter = {
       });
     }
     return records.map((rec) => {
-      const badgeMat = matriculaFromAfdPisField(rec.cpfOuPis);
+      let id11 = normalizeDocument(rec.cpfOuPis).padStart(11, '0').slice(0, 11);
+      const tms = wallTimeInZoneToUtcMs(rec.data, rec.hora, afdTz);
+      const unixSec = !Number.isNaN(tms) ? Math.floor(tms / 1000) : NaN;
+      const regHint =
+        accessRegByNsr.get(rec.nsr) ??
+        (Number.isFinite(unixSec) ? lookupRegBySecondWithSkew(accessRegBySecond, unixSec, 420) : null);
+      const regKey = normRegistrationKey(regHint);
+
+      /**
+       * Ordem de confiança (Control iD):
+       * 1) Matrícula/registo no access_log + PIS em load_users (cruzamento) — vence AFD e campos PIS espúrios no JSON.
+       * 2) PIS explícito no access_log (NSR, depois instante ± skew).
+       * 3) Blob identificador AFD: uma única janela PIS que coincide com utilizadores do relógio.
+       * 4) PIS canónico do AFD.
+       */
+      let resolvedByReg = false;
+      if (regKey && regToPisFromDevice.has(regKey)) {
+        id11 = regToPisFromDevice.get(regKey)!;
+        resolvedByReg = true;
+      } else {
+        const fromNsr = accessPisByNsr.get(rec.nsr);
+        const fromSec =
+          Number.isFinite(unixSec) ? lookupPisBySecondWithSkew(accessPisBySecond, unixSec, 420) : null;
+        const accessAlt =
+          fromNsr && validatePisPasep11(fromNsr)
+            ? fromNsr
+            : fromSec && validatePisPasep11(fromSec)
+              ? fromSec
+              : null;
+        if (accessAlt) id11 = accessAlt;
+      }
+      if (!resolvedByReg) {
+        const fromBlob = tryResolvePisFromIdentifierBlobAgainstDeviceUsers(rec, devUsersSnapshot);
+        if (fromBlob) id11 = fromBlob;
+      }
+
+      const recMerged = { ...rec, cpfOuPis: id11 };
+      const badgeFromPis = matriculaFromAfdPisField(id11);
+      /** Com PIS truncado/inválido no AFD, a matrícula do access_log / load_users ainda casa no espelho — não exigir DV válido no id11. */
+      const badgeMat: string | null = badgeFromPis ?? (regKey && String(regKey).trim() !== '' ? regKey : null);
       return {
-        pis: rec.cpfOuPis,
-        cpf: rec.cpfOuPis,
+        pis: id11,
+        cpf: id11,
         matricula: badgeMat,
         data_hora: afdRecordWallTimeToUtcIso(rec, afdTz),
         tipo: normalizeTipo(rec.tipo),
         nsr: rec.nsr,
-        raw: { ...rec, source: 'controlid_afd', matricula_derived: badgeMat ?? null },
+        raw: { ...recMerged, source: 'controlid_afd', matricula_derived: badgeMat ?? null },
       };
     });
   },

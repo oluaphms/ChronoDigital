@@ -44,6 +44,11 @@ function mapTipoToEventType(t: string): Punch['event_type'] {
 
 function punchToNormalized(device: DeviceConfig, p: PunchFromDevice): Punch {
   const employee_id = String(p.pis || p.cpf || p.matricula || 'unknown');
+  const base = p.raw && typeof p.raw === 'object' ? { ...(p.raw as Record<string, unknown>) } : {};
+  /** Preserva `controlid_afd` vindo do módulo REP (linha AFD em `raw`); só define legado se faltar. */
+  if (typeof base.source !== 'string' || !String(base.source).trim()) {
+    base.source = 'controlid_fcgi';
+  }
   return {
     employee_id,
     timestamp: p.data_hora,
@@ -51,10 +56,9 @@ function punchToNormalized(device: DeviceConfig, p: PunchFromDevice): Punch {
     device_id: device.id,
     company_id: device.company_id,
     raw: {
-      ...(p.raw && typeof p.raw === 'object' ? p.raw : {}),
+      ...base,
       nsr: p.nsr,
       tipo_origem: p.tipo,
-      source: 'controlid_fcgi',
     },
     nsr: p.nsr,
   };
@@ -182,16 +186,34 @@ export const controlidAdapter: ClockAdapter = {
   async getPunches(device: DeviceConfig, lastSync?: string): Promise<Punch[]> {
     const rep = toRepDevice(device);
     const preferFcgiOnly = device.extra?.controlid_use_fcgi_only === true;
+    const since = lastSync ? new Date(lastSync) : undefined;
+
+    /**
+     * Sempre tentar primeiro `get_afd` + parser REP (módulo `fetchPunches`):
+     * re-canonicalização do blob PIS/CPF, cruzamento access_log↔load_users e `matricula_derived`.
+     * Priorizar `/load_objects` antes fazia o agente gravar PIS truncado (ex. 11 dígitos sem DV válido)
+     * e **nunca** chamava o fluxo AFD — batidas ficavam na fila sem match no espelho.
+     */
+    let punches: PunchFromDevice[] = [];
+    try {
+      punches = await ControlIdVendorAdapter.fetchPunches(rep, since);
+    } catch {
+      punches = [];
+    }
+    const fromAfd = filterSince(
+      punches.map((p) => punchToNormalized(device, p)),
+      lastSync
+    );
 
     if (!preferFcgiOnly) {
+      if (fromAfd.length > 0) {
+        return fromAfd;
+      }
       const fromLoad = await fetchViaLoadObjects(device, rep);
       const filteredLoad = filterSince(fromLoad, lastSync);
       if (filteredLoad.length > 0) return filteredLoad;
     }
 
-    const since = lastSync ? new Date(lastSync) : undefined;
-    const punches = await ControlIdVendorAdapter.fetchPunches(rep, since);
-    const normalized = punches.map((p) => punchToNormalized(device, p));
-    return filterSince(normalized, lastSync);
+    return fromAfd;
   },
 };

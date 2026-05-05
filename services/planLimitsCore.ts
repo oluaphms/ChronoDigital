@@ -1,9 +1,11 @@
 /**
  * Regras de plano sem dependência de cliente Supabase (uso no browser, API e triggers correlatos).
+ * Modelo atual: assinatura com funcionalidades completas — sem bloqueio por tier na aplicação.
  */
 
 import type { TenantPlan } from '../types';
 
+/** Mantidos para compatibilidade com código que ainda referencia constantes antigas. */
 export const TENANT_PLAN_FREE_EMPLOYEE_MAX = 5;
 export const TENANT_PLAN_PRO_EMPLOYEE_MAX = 50;
 
@@ -14,10 +16,9 @@ export function normalizeTenantPlan(value: unknown): TenantPlan {
   return 'free';
 }
 
-export function getMaxEmployeesForPlan(plan: TenantPlan): number | null {
-  if (plan === 'enterprise') return null;
-  if (plan === 'pro') return TENANT_PLAN_PRO_EMPLOYEE_MAX;
-  return TENANT_PLAN_FREE_EMPLOYEE_MAX;
+export function getMaxEmployeesForPlan(_plan: TenantPlan): number | null {
+  void _plan;
+  return null;
 }
 
 export type EmployeeSeatEvaluation = {
@@ -58,7 +59,8 @@ export function evaluateEmployeeSeat(
 
 export type PlanFeatureKey = 'rep_afd_import' | 'rep_fiscalizacao' | 'rep_devices';
 
-export function isPlanFeatureEnabled(plan: TenantPlan, _feature: PlanFeatureKey): boolean {
+export function isPlanFeatureEnabled(_plan: TenantPlan, _feature: PlanFeatureKey): boolean {
+  void _plan;
   void _feature;
-  return plan !== 'free';
+  return true;
 }

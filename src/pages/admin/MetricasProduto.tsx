@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Navigate, Link } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState } from '../../../components/UI';
@@ -143,12 +143,6 @@ export default function AdminMetricasProduto() {
           </p>
         </div>
 
-        <Link
-          to="/admin/plan"
-          className="inline-flex text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
-        >
-          Ver plano e limites →
-        </Link>
       </div>
     </RoleGuard>
   );

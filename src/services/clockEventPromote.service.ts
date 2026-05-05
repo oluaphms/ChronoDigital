@@ -5,6 +5,19 @@
 
 import type { SupabaseRestConfig } from './supabaseRest';
 import { restGet, restPatch, restRpc } from './supabaseRest';
+import { mergeRepExtractedIdentifiersIntoRawData } from '../../modules/rep-integration/repExtractBestIdentifier';
+import {
+  normalizeDocument,
+  repAfdCanonical11DigitsFromBlob,
+  validatePisPasep11,
+} from '../../modules/rep-integration/pisPasep';
+import { repPunchLogEffectivePisCanonForDiagnostics } from '../../modules/rep-integration/repPunchPendingIdentity';
+import type { RepWeakPisMatchUser } from '../../modules/rep-integration/repWeakPisFallbackMatch';
+import {
+  applyResolvedIdentityToRaw,
+  applyUnresolvedIdentityToRaw,
+  resolveCanonicalUserWithMatcher,
+} from '../../modules/rep-integration/repResolveCanonicalUser';
 
 export interface ClockEventLogRow {
   id: string;
@@ -40,26 +53,15 @@ function eventTypeToRepTipo(eventType: string): string {
 
 /**
  * Converte employee_id (PIS/CPF/crachá) para os campos da RPC rep_ingest_punch.
- * Segue a mesma lógica do SQL rep_afd_canonical_11_digits:
- * - 11 dígitos exatos → PIS/CPF
- * - 12-14 dígitos → pega os últimos 11 (AFD com zeros à esquerda ou dígitos extras)
- * - <= 10 dígitos → matrícula/crachá
- * - > 14 dígitos → pega os primeiros 11
+ * Usa `repAfdCanonical11DigitsFromBlob` (alinhado a `public.rep_afd_canonical_11_digits` no Supabase).
  */
 function employeeFields(employeeId: string): { pis: string | null; cpf: string | null; matricula: string | null } {
-  const digits = String(employeeId || '').replace(/\D/g, '');
   const trimmed = String(employeeId || '').trim();
+  const digits = normalizeDocument(trimmed);
 
-  // Calcula PIS canônico (11 dígitos) seguindo a lógica do SQL
   let pisCanonical: string | null = null;
   if (digits.length > 0) {
-    if (digits.length <= 11) {
-      pisCanonical = digits.padStart(11, '0');
-    } else if (digits.length <= 14) {
-      pisCanonical = digits.slice(-11);
-    } else {
-      pisCanonical = digits.slice(0, 11);
-    }
+    pisCanonical = repAfdCanonical11DigitsFromBlob(digits);
   }
 
   // Se temos um PIS canônico de 11 dígitos, usa como PIS/CPF
@@ -137,6 +139,22 @@ export async function promoteClockEventsToEspelho(
     errors: 0,
   };
 
+  let weakUsersCache: RepWeakPisMatchUser[] | null = null;
+  const loadWeakUsers = async (): Promise<RepWeakPisMatchUser[]> => {
+    if (weakUsersCache) return weakUsersCache;
+    const path = [
+      `users?company_id=eq.${encodeURIComponent(opts.companyId)}`,
+      'select=id,pis_pasep,pis,cpf,status,invisivel,demissao,company_id',
+      'limit=5000',
+    ].join('&');
+    try {
+      weakUsersCache = (await restGet<RepWeakPisMatchUser[]>(cfg, path)) ?? [];
+    } catch {
+      weakUsersCache = [];
+    }
+    return weakUsersCache;
+  };
+
   for (let round = 0; round < maxBatches; round++) {
     const q = [
       `${table}?company_id=eq.${encodeURIComponent(opts.companyId)}`,
@@ -155,24 +173,81 @@ export async function promoteClockEventsToEspelho(
     }
     if (rows.length === 0) break;
 
+    const weakUsers = await loadWeakUsers();
+
     for (const ev of rows) {
-      const { pis, cpf, matricula } = employeeFields(ev.employee_id);
+      const empFields = employeeFields(ev.employee_id);
+      const rawObj = ev.raw && typeof ev.raw === 'object' ? (ev.raw as Record<string, unknown>) : {};
+      const effPis = repPunchLogEffectivePisCanonForDiagnostics({
+        pis: empFields.pis,
+        cpf: empFields.cpf,
+        raw_data: rawObj,
+      });
+      const usePis =
+        effPis != null && validatePisPasep11(effPis) ? effPis : empFields.pis;
+      const useCpf =
+        effPis != null && validatePisPasep11(effPis) ? effPis : empFields.cpf;
+      const pis = usePis;
+      const cpf = useCpf;
+      const matricula = empFields.matricula;
       const tipo = eventTypeToRepTipo(ev.event_type);
       const nsr = nsrFromRaw(ev.raw);
-      const rawData = {
-        ...(ev.raw && typeof ev.raw === 'object' ? ev.raw : {}),
+      let rawData: Record<string, unknown> = mergeRepExtractedIdentifiersIntoRawData({
+        ...rawObj,
         clock_event_log_id: ev.id,
         clock_device_id: ev.device_id,
-      };
+      });
       const repDeviceId = asUuidOrNull(ev.device_id);
+
+      let pisRpc = pis;
+      let cpfRpc = cpf;
+      let forceUserId: string | null = null;
+
+      const identity = await resolveCanonicalUserWithMatcher(
+        {
+          company_id: ev.company_id,
+          pis: pisRpc,
+          cpf: cpfRpc,
+          matricula,
+          raw_data: rawData,
+        },
+        {
+          users: weakUsers,
+          matchRpc: async (args) =>
+            restRpc<unknown>(cfg, 'rep_match_user_id_for_rep_punch_row', args as Record<string, unknown>),
+        }
+      );
+
+      if (identity.userId) {
+        forceUserId = identity.userId;
+        rawData = applyResolvedIdentityToRaw(rawData, identity.userId);
+        if (identity.source === 'weak' && identity.canonicalPis) {
+          pisRpc = identity.canonicalPis;
+          cpfRpc = identity.canonicalPis;
+          rawData = {
+            ...rawData,
+            match_confidence: 'low',
+            corrected_by_system: true,
+            weak_match_applied: true,
+            matched_user_id: identity.userId,
+            match_strategy: 'fallback',
+          };
+          if (typeof globalThis !== 'undefined' && globalThis.console) {
+            globalThis.console.warn('[REP MATCH FALLBACK] weak_match_applied', { userId: identity.userId });
+            globalThis.console.warn('[REP AUTO FIX] pis corrigido via fallback', { userId: identity.userId });
+          }
+        }
+      } else {
+        rawData = applyUnresolvedIdentityToRaw(rawData);
+      }
 
       let rpcResult: Record<string, unknown> = {};
       try {
         const rawRpc = await restRpc<unknown>(cfg, 'rep_ingest_punch', {
           p_company_id: ev.company_id,
           p_rep_device_id: repDeviceId,
-          p_pis: pis,
-          p_cpf: cpf,
+          p_pis: pisRpc,
+          p_cpf: cpfRpc,
           p_matricula: matricula,
           p_nome_funcionario: null,
           p_data_hora: ev.occurred_at,
@@ -181,7 +256,8 @@ export async function promoteClockEventsToEspelho(
           p_raw_data: rawData,
           p_only_staging: false,
           p_apply_schedule: false,
-          p_force_user_id: null,
+          p_force_user_id: forceUserId,
+          p_trust_client_identity: true,
         });
         rpcResult = unwrapRpcResult(rawRpc);
       } catch {
@@ -197,6 +273,15 @@ export async function promoteClockEventsToEspelho(
       const userNotFound = rpcResult.user_not_found === true;
       const success = rpcResult.success === true;
       const timeRecordId = typeof rpcResult.time_record_id === 'string' ? rpcResult.time_record_id : null;
+
+      if (!duplicate && typeof globalThis !== 'undefined' && globalThis.console) {
+        const status = forceUserId ? 'resolved' : 'unresolved';
+        globalThis.console.warn('[REP INGEST]', {
+          nsr,
+          resolved_user_id: forceUserId,
+          status,
+        });
+      }
 
       if (duplicate) {
         out.duplicate += 1;

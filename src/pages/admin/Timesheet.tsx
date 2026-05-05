@@ -7,7 +7,7 @@ import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useToast } from '../../components/ToastProvider';
 import PageHeader from '../../components/PageHeader';
 import { LoadingState, Button } from '../../../components/UI';
-import { FileDown, FileSpreadsheet, Lock, Plus, RefreshCw, Upload } from 'lucide-react';
+import { FileDown, FileSpreadsheet, Lock, Plus, RefreshCw, Unlock, Upload } from 'lucide-react';
 import { AddTimeRecordModal } from '../../components/AddTimeRecordModal';
 import { EditTimeRecordModal } from '../../components/EditTimeRecordModal';
 import { SkeletonFiltro, TimesheetTableSkeleton } from '../../components/TimesheetTableSkeleton';
@@ -25,7 +25,7 @@ import {
 } from '../../utils/timesheetMirror';
 import { getEmployeeSchedule, getEmployeeTimesheetScheduleContext } from '../../services/timeProcessingService';
 import type { DayScheduleWindow } from '../../utils/timesheetMirror';
-import { closeTimesheet, isTimesheetClosed } from '../../services/timeProcessingService';
+import { closeTimesheet, isTimesheetClosed, reopenTimesheet } from '../../services/timeProcessingService';
 import {
   invalidateAfterPunch,
   invalidateAfterTimesheetMonthClose,
@@ -71,6 +71,40 @@ function localDateKey(d = new Date()): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/** Meses civis de `startYmd` a `endYmd` (YYYY-MM-DD), inclusive, em ordem cronológica. */
+function civilMonthsInclusive(startYmd: string, endYmd: string): { year: number; month: number }[] {
+  const a = String(startYmd).slice(0, 10);
+  const b = String(endYmd).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b) || a > b) return [];
+  const sy = Number(a.slice(0, 4));
+  const sm = Number(a.slice(5, 7));
+  const ey = Number(b.slice(0, 4));
+  const em = Number(b.slice(5, 7));
+  if (!sy || !sm || !ey || !em || sm < 1 || sm > 12 || em < 1 || em > 12) return [];
+  const out: { year: number; month: number }[] = [];
+  let y = sy;
+  let mo = sm;
+  while (y < ey || (y === ey && mo <= em)) {
+    out.push({ year: y, month: mo });
+    if (y === ey && mo === em) break;
+    mo += 1;
+    if (mo > 12) {
+      mo = 1;
+      y += 1;
+    }
+  }
+  return out;
+}
+
+function mergeClosedMonth(
+  prev: { year: number; month: number }[],
+  year: number,
+  month: number,
+): { year: number; month: number }[] {
+  if (prev.some((x) => x.year === year && x.month === month)) return prev;
+  return [...prev, { year, month }].sort((x, y) => x.year - y.year || x.month - y.month);
 }
 
 type AdminEmployee = { id: string; nome: string; department_id?: string; role?: string };
@@ -131,8 +165,10 @@ const AdminTimesheet: React.FC = () => {
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
   });
   const [closingLoading, setClosingLoading] = useState(false);
-  /** Mês do período do espelho já fechado oficialmente — bloqueia edição e novo fecho na UI. */
-  const [periodClosedLock, setPeriodClosedLock] = useState(false);
+  const [reopenLoading, setReopenLoading] = useState(false);
+  /** Meses civis no intervalo do espelho que têm fecho oficial (pode ser >1; ex. abr–mai com só mai fechado). */
+  const [closedMonthsInView, setClosedMonthsInView] = useState<{ year: number; month: number }[]>([]);
+  const periodClosedLock = closedMonthsInView.length > 0;
 
   /** Linhas `timesheets_daily` do período (UX auditoria / badges). */
   const [dailyCalcUiByDate, setDailyCalcUiByDate] = useState<Map<string, TimesheetUIRow>>(() => new Map());
@@ -235,23 +271,40 @@ const AdminTimesheet: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!companyId || !filterUserId || !periodValid || !periodStart || periodStart.length < 10) {
-        if (!cancelled) setPeriodClosedLock(false);
+      if (
+        !companyId ||
+        !filterUserId ||
+        !periodValid ||
+        !periodStart ||
+        periodStart.length < 10 ||
+        !periodEnd ||
+        periodEnd.length < 10
+      ) {
+        if (!cancelled) setClosedMonthsInView([]);
         return;
       }
-      const y = Number(periodStart.slice(0, 4));
-      const mo = Number(periodStart.slice(5, 7));
+      const start = periodStart.slice(0, 10);
+      const end = periodEnd.slice(0, 10);
+      const months = civilMonthsInclusive(start, end);
+      if (months.length === 0) {
+        if (!cancelled) setClosedMonthsInView([]);
+        return;
+      }
       try {
-        const closed = await isTimesheetClosed(companyId, mo, y, filterUserId);
-        if (!cancelled) setPeriodClosedLock(closed);
+        const flags = await Promise.all(
+          months.map(({ year, month }) => isTimesheetClosed(companyId, month, year, filterUserId)),
+        );
+        if (cancelled) return;
+        const closed = months.filter((_, i) => flags[i]);
+        setClosedMonthsInView(closed);
       } catch {
-        if (!cancelled) setPeriodClosedLock(false);
+        if (!cancelled) setClosedMonthsInView([]);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [companyId, filterUserId, periodStart, periodValid]);
+  }, [companyId, filterUserId, periodStart, periodEnd, periodValid]);
 
   /** Persiste filtros para o próximo acesso. */
   useEffect(() => {
@@ -428,6 +481,15 @@ const AdminTimesheet: React.FC = () => {
   const closeBlockedByOperational = Boolean(
     periodOperationalBlocked && !(user?.role === 'admin' && adminCloseOverride),
   );
+
+  /** Só o mês em «Mês a fechar» — pode haver outro mês fechado no mesmo intervalo (ex. mai fech., abr aberto). */
+  const closingMonthIsClosed = useMemo(() => {
+    const parts = closingMonth.split('-').map(Number);
+    const yy = parts[0];
+    const mo = parts[1];
+    if (!yy || !mo) return false;
+    return closedMonthsInView.some((x) => x.year === yy && x.month === mo);
+  }, [closingMonth, closedMonthsInView]);
 
   const formatDateBR = (dateStr: string) => {
     const [y, m, day] = dateStr.split('-');
@@ -607,10 +669,6 @@ const AdminTimesheet: React.FC = () => {
       toast.addToast('error', 'Defina o período completo do espelho (início e fim).');
       return;
     }
-    if (periodClosedLock) {
-      toast.addToast('info', 'Este período já está fechado.');
-      return;
-    }
     if (closingMonth !== periodStart.slice(0, 7)) {
       toast.addToast(
         'error',
@@ -625,7 +683,7 @@ const AdminTimesheet: React.FC = () => {
       const already = await isTimesheetClosed(companyId, m, y, filterUserId);
       if (already) {
         toast.addToast('info', 'Este mês já consta como fechado.');
-        setPeriodClosedLock(true);
+        setClosedMonthsInView((prev) => mergeClosedMonth(prev, y, m));
         return;
       }
       console.log('[FECHAMENTO INPUT]', {
@@ -644,7 +702,7 @@ const AdminTimesheet: React.FC = () => {
       if (!result) {
         console.warn('[FECHAMENTO IGNORADO - JÁ EXISTE]');
         toast.addToast('info', 'Este mês já consta como fechado.');
-        setPeriodClosedLock(true);
+        setClosedMonthsInView((prev) => mergeClosedMonth(prev, y, m));
         return;
       }
       invalidateAfterTimesheetMonthClose(companyId);
@@ -672,7 +730,7 @@ const AdminTimesheet: React.FC = () => {
         debited: result.totals?.banco_debito_minutes,
         saldo_final: result.saldo_banco_final,
       });
-      setPeriodClosedLock(true);
+      setClosedMonthsInView((prev) => mergeClosedMonth(prev, y, m));
       toast.addToast('success', 'Folha fechada com sucesso.');
       await loadEspelho();
     } catch (e) {
@@ -681,6 +739,69 @@ const AdminTimesheet: React.FC = () => {
       toast.addToast('error', msg);
     } finally {
       setClosingLoading(false);
+    }
+  };
+
+  const handleReopenMonth = async () => {
+    if (!companyId || !filterUserId) {
+      toast.addToast('error', 'Selecione um colaborador.');
+      return;
+    }
+    if (!periodClosedLock) {
+      toast.addToast('info', 'Este período não está fechado; não há nada a reabrir.');
+      return;
+    }
+    if (!periodValid || !periodStart || !periodEnd) {
+      toast.addToast('error', 'Defina o período completo do espelho.');
+      return;
+    }
+    const target = closedMonthsInView[closedMonthsInView.length - 1];
+    if (!target) {
+      toast.addToast('info', 'Nenhum mês fechado no intervalo visível do espelho.');
+      return;
+    }
+    const { year: y, month: m } = target;
+    const empNome = employees.find((e) => e.id === filterUserId)?.nome || filterUserId;
+    const ok = window.confirm(
+      `Reabrir oficialmente o fechamento de ${String(m).padStart(2, '0')}/${y} para «${empNome}»?\n\n` +
+        '(É o mês civil mais recente no período que ainda está fechado; se houver mais de um, reabra de novo para o anterior.)\n\n' +
+        'Serão removidos o registo de fecho e o snapshot consolidado desse mês. Volta a ser possível editar batidas, importar REP e consolidar a fila sem PERIODO_FECHADO para esse mês.\n\n' +
+        'Confirme apenas se tiver autorização (RH / administrador).'
+    );
+    if (!ok) return;
+    setReopenLoading(true);
+    try {
+      await reopenTimesheet({
+        companyId,
+        employeeId: filterUserId,
+        month: m,
+        year: y,
+        client: supabase,
+      });
+      await LoggingService.log({
+        severity: LogSeverity.SECURITY,
+        action: 'TIMESHEET_REOPEN',
+        userId: user?.id,
+        userName: user?.nome,
+        companyId,
+        details: {
+          employeeId: filterUserId,
+          employeeName: empNome,
+          month: m,
+          year: y,
+          closingMonthYm: `${y}-${String(m).padStart(2, '0')}`,
+        },
+      });
+      invalidateAfterTimesheetMonthClose(companyId);
+      setClosedMonthsInView((prev) => prev.filter((x) => !(x.year === y && x.month === m)));
+      toast.addToast('success', `Mês ${String(m).padStart(2, '0')}/${y} reaberto. Pode editar o espelho e sincronizar o relógio.`);
+      await loadEspelho();
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : 'Não foi possível reabrir o mês.';
+      toast.addToast('error', msg);
+    } finally {
+      setReopenLoading(false);
     }
   };
 
@@ -925,11 +1046,13 @@ const AdminTimesheet: React.FC = () => {
               type="month"
               value={closingMonth}
               title={
-                periodClosedLock ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK : 'Sincronizado com o primeiro dia do período do espelho.'
+                closingMonthIsClosed
+                  ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK
+                  : 'Sincronizado com o primeiro dia do período do espelho.'
               }
               onChange={(e) => setClosingMonth(e.target.value)}
               className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm disabled:opacity-70"
-              disabled={periodClosedLock}
+              disabled={closingMonthIsClosed}
             />
           </div>
           <Button
@@ -941,12 +1064,12 @@ const AdminTimesheet: React.FC = () => {
               closingLoading ||
               !filterUserId ||
               !periodValid ||
-              periodClosedLock ||
+              closingMonthIsClosed ||
               closeBlockedByOperational
             }
             title={
-              periodClosedLock
-                ? TOOLTIP_PERIODO_FECHADO_HARD_LOCK
+              closingMonthIsClosed
+                ? 'Este mês civil já está fechado para o colaborador.'
                 : closeBlockedByOperational
                   ? 'Há dias com divergência ou erro de cálculo (replay). Corrija ou use override de administrador.'
                   : !periodValid
@@ -957,6 +1080,30 @@ const AdminTimesheet: React.FC = () => {
           >
             <Lock className="w-4 h-4" />
             {closingLoading ? 'Fechando…' : 'Fechar folha'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="inline-flex items-center gap-2 border-amber-300 text-amber-900 dark:border-amber-700 dark:text-amber-100 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+            disabled={
+              reopenLoading ||
+              closingLoading ||
+              !filterUserId ||
+              !periodValid ||
+              !periodClosedLock ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(String(periodStart).slice(0, 10)) ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(String(periodEnd).slice(0, 10))
+            }
+            title={
+              !periodClosedLock
+                ? 'Só disponível quando existir pelo menos um mês civil fechado no intervalo do espelho (início a fim).'
+                : 'Remove fecho e snapshot do mês civil mais recente ainda fechado nesse intervalo (auditoria registada).'
+            }
+            onClick={() => void handleReopenMonth()}
+          >
+            <Unlock className="w-4 h-4" aria-hidden />
+            {reopenLoading ? 'Reabrindo…' : 'Reabrir mês'}
           </Button>
           {periodOperationalBlocked && user?.role !== 'admin' && (
             <p className="w-full text-sm text-red-700 dark:text-red-300 mt-2">

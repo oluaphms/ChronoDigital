@@ -3,10 +3,24 @@
  * (ex.: Control iD add_users / update_users: campo `pis` como inteiro JSON).
  */
 
+/**
+ * Normalização forte de documento (CPF, PIS/PASEP, NIS) e identificadores vindos do REP:
+ * remove BOM, trim, Unicode NFKC (ex.: dígitos fullwidth → ASCII), mantém só dígitos ASCII 0–9.
+ * Usar antes de padding / `repAfdCanonical11DigitsFromBlob` / match com cadastro.
+ */
+export function normalizeDocument(value: string): string {
+  return value.replace(/^\uFEFF/, '').trim().normalize('NFKC').replace(/\D/g, '');
+}
+
 /** Remove máscara e qualquer caractere não numérico (aceita string ou número do cadastro). */
 export function sanitizeDigits(value: unknown): string {
   if (value == null) return '';
-  return String(value).replace(/\D/g, '');
+  return normalizeDocument(String(value));
+}
+
+/** Normalização forte: apenas dígitos, sempre string (REP / match). */
+export function normalizeDigits(value: unknown): string {
+  return sanitizeDigits(value);
 }
 
 /** Alias semântico para PIS recebido do cadastro. */
@@ -62,4 +76,51 @@ export function elevenPisDigitsToControlIdApiInteger(digits11: string): number {
     throw new Error('PIS numérico fora do intervalo suportado (JavaScript).');
   }
   return n;
+}
+
+/**
+ * Alinha com `public.rep_afd_canonical_11_digits` (AFD / campo PIS do REP).
+ * - Blobs 12–14 dígitos: após remover zeros à esquerda, se sobrarem 11 dígitos com DV PIS válido, usa-os
+ *   (ex.: `012966742765` → `12966742765`).
+ * - Se após o trim ainda houver 11 dígitos mas **não** forem PIS válido (ex.: CPF com prefixo `00` no AFD),
+ *   usa os últimos 11 do blob original — evita aceitar uma janela “PIS” espúria no prefixo.
+ * - Blobs >14 dígitos: procura janela de 11 com DV PIS válido (campo AFD às vezes concatena prefixo interno + PIS); senão primeiros 11 (legado).
+ */
+export function repAfdCanonical11DigitsFromBlob(raw: string | null | undefined): string | null {
+  const d = sanitizeDigits(raw);
+  if (!d) return null;
+
+  const direct = tryNormalizeBrazilianPisTo11Digits(d);
+  if (direct) return direct;
+
+  if (d.length > 14) {
+    for (let i = 0; i <= d.length - 11; i++) {
+      const wnd = d.slice(i, i + 11);
+      if (validatePisPasep11(wnd)) return wnd;
+    }
+    return d.slice(0, 11);
+  }
+
+  if (d.length > 11 && d.length <= 14) {
+    const dStrip = d.replace(/^0+/, '') || '0';
+    if (dStrip.length === 11) {
+      if (validatePisPasep11(dStrip)) return dStrip;
+      return d.slice(-11);
+    }
+    const ten = tryNormalizeBrazilianPisTo11Digits(dStrip);
+    if (ten) return ten;
+    if (dStrip.length > 11 && dStrip.length <= 14) {
+      for (let i = 0; i <= dStrip.length - 11; i++) {
+        const wnd = dStrip.slice(i, i + 11);
+        if (validatePisPasep11(wnd)) return wnd;
+      }
+    }
+    for (let i = 0; i <= d.length - 11; i++) {
+      const wnd = d.slice(i, i + 11);
+      if (validatePisPasep11(wnd)) return wnd;
+    }
+    return d.slice(-11);
+  }
+
+  return d.padStart(11, '0');
 }

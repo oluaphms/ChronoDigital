@@ -37,6 +37,8 @@ export interface RawTimeRecord {
   type: string;
   user_id?: string;
   company_id?: string;
+  /** Metadados persistidos (ex.: sequence_adjusted no trigger de sequência). */
+  raw_data?: Record<string, unknown> | null;
 }
 
 export interface WorkScheduleInfo {
@@ -126,7 +128,7 @@ export function getLocalDateString(d = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
-function normalizePunchType(t: string | undefined): string {
+export function normalizePunchType(t: string | undefined): string {
   const x = (t || '').toLowerCase().trim();
   if (x === 'saída' || x === 'saida') return 'saida';
   if (x === 'entrada') return 'entrada';
@@ -140,14 +142,18 @@ function normalizePunchType(t: string | undefined): string {
  * Valida a próxima batida em relação às batidas já gravadas no dia.
  * Alinhado ao fluxo do ClockIn: entrada → pausa → entrada (retorno) → saída.
  */
+const SEQUENCE_TOLERANCE_MS = 5 * 60 * 1000;
+
 export function validatePunchSequence(
   dayRecords: RawTimeRecord[],
-  nextTypeRaw: string
-): { valid: boolean; error?: string } {
+  nextTypeRaw: string,
+  opts?: { nextEventTime?: Date | string }
+): { valid: boolean; error?: string; sequenceTolerantExit?: boolean } {
   const next = normalizePunchType(nextTypeRaw);
   const sorted = sortedByTime(dayRecords);
   const lastRec = sorted[sorted.length - 1];
   const last = lastRec ? normalizePunchType(lastRec.type) : null;
+  const nextEventMs = opts?.nextEventTime != null ? new Date(opts.nextEventTime).getTime() : Date.now();
 
   if (!last) {
     if (next === 'entrada') return { valid: true };
@@ -160,6 +166,10 @@ export function validatePunchSequence(
   if (last === 'entrada') {
     if (next === 'pausa' || next === 'saida') return { valid: true };
     if (next === 'entrada') {
+      const lastMs = new Date(lastRec!.timestamp || lastRec!.created_at).getTime();
+      if (nextEventMs - lastMs > SEQUENCE_TOLERANCE_MS) {
+        return { valid: true, sequenceTolerantExit: true };
+      }
       return { valid: false, error: 'Registre intervalo ou saída antes de uma nova entrada.' };
     }
   }

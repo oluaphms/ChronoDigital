@@ -7,6 +7,9 @@ const listeners = new Set<AlertListener>();
 const STORAGE_KEY = 'smartponto_audit_logs';
 const MAX_LOCAL = 1000;
 
+/** SECURITY na auditoria, mas sem alerta em tempo real nem `CRITICAL ALERT` no console (ruído em dev). */
+const SECURITY_AUDIT_WITHOUT_RUNTIME_ALERT = new Set<string>(['TIMESHEET_CLOSE', 'TIMESHEET_REOPEN']);
+
 /** UUID em formato lexical (PostgreSQL uuid); não valida checksum de variant. */
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,7 +75,10 @@ export const LoggingService = {
       );
     }
 
-    if (logEntry.severity === LogSeverity.SECURITY || logEntry.severity === LogSeverity.ERROR) {
+    const securityNeedsAlert =
+      logEntry.severity === LogSeverity.SECURITY &&
+      !SECURITY_AUDIT_WITHOUT_RUNTIME_ALERT.has(String(logEntry.action || ''));
+    if (logEntry.severity === LogSeverity.ERROR || securityNeedsAlert) {
       this.triggerAlert(logEntry);
     }
   },
