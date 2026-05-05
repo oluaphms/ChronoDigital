@@ -396,6 +396,18 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string, schedule?: D
   let saidaFinal: string | null = timeByType.get('saida') || null;
   let batidasExtra: TimeRecord[] = [];
   let inconsistencias: TimeRecord[] = [];
+  const pruneInconsistenciasUsedInGrid = (
+    source: TimeRecord[],
+    slots: Array<string | null | undefined>,
+  ): TimeRecord[] => {
+    const used = new Set<string>(
+      slots
+        .filter((s): s is string => Boolean(s && String(s).trim()))
+        .map((s) => String(s).trim()),
+    );
+    if (used.size === 0) return source;
+    return source.filter((r) => !used.has(extractTime(recordEffectiveMirrorInstant(r, dayDateStr))));
+  };
 
   // Regra principal: com jornada configurada, classificar por proximidade ao horário previsto.
   if (schedule) {
@@ -410,6 +422,40 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string, schedule?: D
     saidaFinal = classified.bySlot.saida_final ?? saidaFinal;
     batidasExtra = sorted.filter((r) => classified.extraRecordIds.has(r.id));
     inconsistencias = sorted.filter((r) => classified.inconsistentRecordIds.has(r.id));
+
+    // Fallback operacional: se a régua da escala não encaixar nenhuma batida,
+    // ainda assim projeta APP/REP na grade por ordem cronológica para não "sumir" do espelho.
+    if (!entradaInicio && !saidaIntervalo && !voltaIntervalo && !saidaFinal && sorted.length > 0) {
+      const times = sorted.map((r) => extractTime(recordEffectiveMirrorInstant(r, dayDateStr)));
+      const uniqueTimes = [...new Set(times)];
+      entradaInicio = uniqueTimes[0] ?? null;
+      if (uniqueTimes.length === 2) {
+        saidaFinal = uniqueTimes[1] ?? null;
+      } else if (uniqueTimes.length === 3) {
+        saidaIntervalo = uniqueTimes[1] ?? null;
+        voltaIntervalo = uniqueTimes[2] ?? null;
+      } else if (uniqueTimes.length >= 4) {
+        saidaIntervalo = uniqueTimes[1] ?? null;
+        voltaIntervalo = uniqueTimes[2] ?? null;
+        saidaFinal = uniqueTimes[3] ?? null;
+      }
+      // Se o fallback foi necessário, trata apenas excedentes como extra e limpa falso positivo de inconsistência.
+      const usedTimes = new Set<string>(
+        [entradaInicio, saidaIntervalo, voltaIntervalo, saidaFinal].filter(Boolean) as string[],
+      );
+      batidasExtra = sorted.filter((r) => {
+        const t = extractTime(recordEffectiveMirrorInstant(r, dayDateStr));
+        return !usedTimes.has(t);
+      });
+      inconsistencias = [];
+    }
+
+    inconsistencias = pruneInconsistenciasUsedInGrid(inconsistencias, [
+      entradaInicio,
+      saidaIntervalo,
+      voltaIntervalo,
+      saidaFinal,
+    ]);
 
     let workedMinutes = 0;
     if (entradaInicio && saidaFinal) {
@@ -559,6 +605,12 @@ function buildDaySummary(records: TimeRecord[], dayDateStr: string, schedule?: D
     const t = extractTime(recordEffectiveMirrorInstant(r, dayDateStr));
     return !usedTimes.has(t);
   });
+  inconsistencias = pruneInconsistenciasUsedInGrid(inconsistencias, [
+    entradaInicio,
+    saidaIntervalo,
+    voltaIntervalo,
+    saidaFinal,
+  ]);
 
   // Calcula minutos trabalhados
   let workedMinutes = 0;
