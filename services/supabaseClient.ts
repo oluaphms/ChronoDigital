@@ -100,6 +100,10 @@ const DEFAULT_SELECT_LIMIT = 200;
 interface DbInterface {
   select: (table: string, filters?: Filter[], orderBy?: OrderBy | SelectOptions, limit?: number) => Promise<any[]>;
   insert: (table: string, data: any) => Promise<any>;
+  rpc: <T = any>(
+    fn: string,
+    args?: Record<string, any>
+  ) => Promise<{ data: T | null; error: any }>;
   // Sobrecargas para update: (table, id, data) ou (table, data, filters)
   update: ((table: string, id: string, data: any) => Promise<any>) & ((table: string, data: any, filters?: Filter[]) => Promise<any>);
   // Sobrecargas para delete: (table, id) ou (table, filters)
@@ -228,6 +232,13 @@ export const db: DbInterface = {
     }
 
     return result;
+  },
+
+  rpc: async <T = any>(fn: string, args?: Record<string, any>): Promise<{ data: T | null; error: any }> => {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Supabase não inicializado');
+    await ensureSupabaseAuthSessionReady(client);
+    return client.rpc(fn, args ?? {});
   },
 
   update: async (table: string, idOrData: string | any, dataOrFilters?: any | Filter[]): Promise<any> => {
