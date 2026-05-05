@@ -110,7 +110,7 @@ export default defineConfig(({ mode }) => {
               return;
             }
             try {
-              const { default: handler } = await import('./api/jobs/devEntry.ts');
+              const { default: handler } = await import('./dev/jobsDevEntry.ts');
               const host = (req.headers.host as string) || 'localhost:3010';
               const fullUrl = `http://${host}${req.url ?? ''}`;
               const jobsRequestBody = await readConnectRequestBody(req as IncomingMessage);
